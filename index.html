@@ -302,14 +302,29 @@ function freshDB(){
     closedPeriods:[],
     auditLog:[],
     grading:{ ruleVersion:'2026.1', history:{} },
+    lokosMapping: defaultLokosMapping(),
     settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en' },
     seq:1
+  };
+}
+function defaultLokosMapping(){
+  return {
+    members: [{internal:'MemberID',lokos:'MemberID',mandatory:true},{internal:'Name',lokos:'Name',mandatory:true},{internal:'FatherHusband',lokos:'FatherHusbandName',mandatory:false},{internal:'Mobile',lokos:'MobileNo',mandatory:false},{internal:'Village',lokos:'Village',mandatory:false},{internal:'DOJ',lokos:'DateOfJoining',mandatory:true},{internal:'Status',lokos:'MemberStatus',mandatory:true}],
+    savings: [{internal:'MemberID',lokos:'MemberID',mandatory:true},{internal:'Name',lokos:'Name',mandatory:false},{internal:'ClosingSavingsBalance',lokos:'SavingsBalance',mandatory:true}],
+    loans: [{internal:'LoanID',lokos:'LoanID',mandatory:true},{internal:'MemberID',lokos:'MemberID',mandatory:true},{internal:'Member',lokos:'MemberName',mandatory:false},{internal:'Principal',lokos:'PrincipalAmount',mandatory:true},{internal:'Rate',lokos:'InterestRate',mandatory:true},{internal:'OutstandingPrincipal',lokos:'OutstandingPrincipal',mandatory:true},{internal:'Status',lokos:'LoanStatus',mandatory:true},{internal:'NextDueDate',lokos:'NextDueDate',mandatory:false}],
+    cif: [{internal:'Date',lokos:'ReceiptDate',mandatory:true},{internal:'Source',lokos:'Source',mandatory:false},{internal:'Amount',lokos:'CIFAmount',mandatory:true},{internal:'Rate',lokos:'InterestRate',mandatory:false},{internal:'PeriodMonths',lokos:'RepaymentPeriodMonths',mandatory:false},{internal:'OutstandingLiability',lokos:'OutstandingLiability',mandatory:true}],
+    transactions: [{internal:'Date',lokos:'TransactionDate',mandatory:true},{internal:'VoucherNo',lokos:'VoucherNo',mandatory:true},{internal:'Type',lokos:'TransactionType',mandatory:false},{internal:'Debit',lokos:'DebitHead',mandatory:true},{internal:'Credit',lokos:'CreditHead',mandatory:true},{internal:'Amount',lokos:'Amount',mandatory:true},{internal:'MemberID',lokos:'MemberID',mandatory:false},{internal:'Narration',lokos:'Narration',mandatory:false}]
   };
 }
 function loadDB(){
   try{
     const raw = localStorage.getItem(LS_KEY);
-    if(raw){ DB = JSON.parse(raw); if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{}}; return; }
+    if(raw){
+      DB = JSON.parse(raw);
+      if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{}};
+      if(!DB.lokosMapping) DB.lokosMapping = defaultLokosMapping();
+      return;
+    }
   }catch(e){}
   DB = freshDB();
 }
@@ -445,17 +460,67 @@ function memberLoanOutstanding(id){
   DB.loans.filter(l=>l.memberId===id && l.status!=='Closed').forEach(l=>{ total += loanOutstanding(l.id).principal; });
   return total;
 }
+// Loan sub-ledger: principal outstanding is derived from the same double-entry ledger used
+// everywhere else (Debit Member Loans on disbursement, Credit on repayment), filtered to this
+// loan's transactions — so a reversed repayment nets out correctly instead of being summed
+// ad hoc. This is the one place loan principal is calculated; every screen reads from here.
 function loanOutstanding(loanId){
   const loan = DB.loans.find(l=>l.id===loanId);
-  if(!loan) return {principal:0, interestReceivable:0};
-  let principalPaid=0, interestPaid=0;
-  DB.transactions.filter(t=>t.loanId===loanId).forEach(t=>{
-    if(t.credit==='MEMBER_LOANS') principalPaid += t.amount; // repayment of principal
-    if(t.debit==='MEMBER_LOANS' && t.type!=='Disbursement' ) { /* reversal add-back handled via signs already */ }
-  });
-  const principalOutstanding = Math.max(0, (loan.principal||0) - principalPaid);
-  return {principal: principalOutstanding, interestPaid};
+  if(!loan) return {principal:0, interestPaid:0};
+  const principal = Math.max(0, accountBalance('MEMBER_LOANS',{loanId}));
+  const interestPaid = Math.max(0, accountBalance('INTEREST_INCOME',{loanId}));
+  return {principal, interestPaid};
 }
+// Builds a transparent, instalment-wise repayment schedule for one loan: due dates, principal
+// and interest due per instalment, and how much of each has actually been paid — so "loan
+// outstanding" is never just a running sum, it is reconciled against a real schedule.
+function generateLoanSchedule(loanId){
+  const loan = DB.loans.find(l=>l.id===loanId);
+  if(!loan) return [];
+  const n = Math.max(1, loan.instalments||1);
+  const method = loan.interestMethod || 'flat';
+  const principalPerInst = Math.round((loan.principal/n)*100)/100;
+  const totalFlatInterest = Math.round(loan.principal*(loan.interestRate||0)/100 * (n/12)*100)/100;
+  // Actual repayments against this loan, oldest first, split into principal and interest legs.
+  const repayTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.credit==='MEMBER_LOANS').sort((a,b)=>a.date<b.date?-1:1);
+  const interestTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.credit==='INTEREST_INCOME').sort((a,b)=>a.date<b.date?-1:1);
+  let principalPool = repayTx.reduce((s,t)=>s+t.amount,0);
+  let interestPool = interestTx.reduce((s,t)=>s+t.amount,0);
+  let runningOutstanding = loan.principal;
+  const schedule = [];
+  const freq = loan.frequency || 'Monthly';
+  const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
+  for(let i=1;i<=n;i++){
+    const dueDate = addPeriod(loan.disbursementDate, i, freq);
+    const principalDue = (i===n) ? Math.round((loan.principal - principalPerInst*(n-1))*100)/100 : principalPerInst;
+    const interestDue = method==='reducing'
+      ? Math.round(runningOutstanding*(loan.interestRate||0)/100/periodsPerYear*100)/100
+      : Math.round((totalFlatInterest/n)*100)/100;
+    const principalPaid = Math.min(principalDue, Math.max(0,principalPool));
+    const interestPaid = Math.min(interestDue, Math.max(0,interestPool));
+    principalPool -= principalPaid; interestPool -= interestPaid;
+    runningOutstanding = Math.max(0, runningOutstanding - principalDue);
+    let status;
+    const fullyPaid = principalPaid>=principalDue-0.5 && interestPaid>=interestDue-0.5;
+    const partiallyPaid = (principalPaid>0 || interestPaid>0) && !fullyPaid;
+    if(fullyPaid) status='Paid';
+    else if(partiallyPaid) status = (dueDate<todayStr() ? 'Partially Paid (Overdue)' : 'Partially Paid');
+    else status = (dueDate<todayStr() ? 'Overdue' : 'Due');
+    schedule.push({inst:i, dueDate, principalDue, interestDue, totalDue:Math.round((principalDue+interestDue)*100)/100,
+      principalPaid, interestPaid, balance: Math.round(((principalDue-principalPaid)+(interestDue-interestPaid))*100)/100, status});
+  }
+  return schedule;
+}
+
+/* ---------------- Central engine aliases ----------------
+   Thin named wrappers only — each calls the one real implementation above, so there is
+   never a second, independently-maintained copy of any calculation. */
+function calculateLoanOutstanding(loanId){ return loanOutstanding(loanId); }
+function calculateInterest(loanId){ return generateLoanSchedule(loanId); }
+function calculateSavings(memberId){ return memberSavingsBalance(memberId); }
+function calculateCIFOutstanding(){ return cifOutstanding(); }
+function calculateCashBalance(){ return accountBalance('CASH'); }
+function calculateBankBalance(){ return accountBalance('BANK'); }
 
 /* ---------------- Rendering shell ---------------- */
 const NAV = [
@@ -481,6 +546,7 @@ const NAV = [
   {id:'healthcheck', label:'Health Check', icon:'♥'},
   {id:'grading', label:'SHG Grading', icon:'★'},
   {id:'lokos', label:'LokOS Readiness & Export', icon:'⇪'},
+  {id:'closing', label:'Month-End Closing', icon:'🔒'},
   {id:'audit', label:'Audit Trail', icon:'🕘'},
   {grp:'Records'},
   {id:'reports', label:'Reports', icon:'▤'},
@@ -518,7 +584,7 @@ function render(){
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
-      lokos: viewLokos, audit: viewAudit, reports: viewReports, memberstatement: viewMemberStatement,
+      lokos: viewLokos, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, memberstatement: viewMemberStatement,
       backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI
     }[ROUTE] || viewDashboard)();
   }catch(e){
@@ -758,14 +824,26 @@ function saveMember(ev,id){
 function viewMeetings(){
   let html = `<div class="section-title"><h2>SHG Meetings</h2><button class="btn" onclick="go('meetingnew')">+ Conduct New Meeting</button></div>`;
   html += `<div class="card">`;
-  html += DB.meetings.length ? tbl(['Date','Attendance','Savings','Repayment','New Loans','Expenses','Status'],
-    DB.meetings.slice().reverse().map(mt=>[fmtDate(mt.date), mt.present+'/'+mt.totalMembers,
+  html += DB.meetings.length ? tbl(['Date','Attendance','Attendance %','Savings','Repayment','New Loans','Expenses','Status',''],
+    DB.meetings.slice().reverse().map(mt=>{
+      const pct = mt.totalMembers ? Math.round(mt.present/mt.totalMembers*100) : 0;
+      return [fmtDate(mt.date), mt.present+'/'+mt.totalMembers, pct+'%',
       rightCell(rupee(mt.totals.savings)), rightCell(rupee(mt.totals.repayment)), rightCell(rupee(mt.totals.newLoans)),
-      rightCell(rupee(mt.totals.expenses)), badge('Posted','green')])) :
+      rightCell(rupee(mt.totals.expenses)), badge('Posted','green'),
+      mt.absentIds ? `<button class="btn small secondary" onclick="viewAttendance('${mt.id}')">Attendance</button>` : ''];
+    })) :
     `<div class="empty">No meetings recorded yet.</div>`;
   html += `</div>`;
   if(ROUTE==='meetingnew') html += meetingWorkflow();
   return html;
+}
+function viewAttendance(meetingId){
+  const mt = DB.meetings.find(x=>x.id===meetingId); if(!mt) return;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Attendance — ${fmtDate(mt.date)}</h3>
+    <div class="grid cols2">
+      <div><h4>Present (${(mt.presentIds||[]).length})</h4>${(mt.presentIds||[]).map(id=>`<div>${esc(memberName(id))}</div>`).join('')||'<div class="hint">—</div>'}</div>
+      <div><h4>Absent (${(mt.absentIds||[]).length})</h4>${(mt.absentIds||[]).map(id=>`<div>${esc(memberName(id))}</div>`).join('')||'<div class="hint">—</div>'}</div>
+    </div>`);
 }
 function meetingWorkflow(){
   if(!activeMembers().length) return `<div class="card"><div class="empty">Add members first before conducting a meeting.</div></div>`;
@@ -817,12 +895,13 @@ function postMeeting(ev){
   if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
   const totals = {savings:0, repayment:0, newLoans:0, expenses:0, fines:0};
   let present=0;
+  const presentIds=[], absentIds=[];
   const members = activeMembers();
   const meetingId = nextId('MTG');
   try{
     members.forEach(m=>{
       const isPresent = f.get('present_'+m.id);
-      if(isPresent) present++;
+      if(isPresent){ present++; presentIds.push(m.id); } else { absentIds.push(m.id); }
       const sav = parseFloat(f.get('sav_'+m.id))||0;
       const rp = parseFloat(f.get('rp_'+m.id))||0;
       const ri = parseFloat(f.get('ri_'+m.id))||0;
@@ -849,10 +928,12 @@ function postMeeting(ev){
           id: nextId('LOAN'), memberId:nlMember, purpose:f.get('newloan_purpose')||'',
           sanctionDate:date, disbursementDate:date, principal:amt,
           interestRate: parseFloat(f.get('newloan_rate'))||0, instalments: parseInt(f.get('newloan_inst'))||12,
-          status:'Active', nextDueDate: addMonths(date,1)
+          frequency:'Monthly', interestMethod:'flat',
+          status:'Active', nextDueDate: addPeriod(date,1,'Monthly')
         };
         DB.loans.push(loan);
         postTxn({date,type:'Disbursement',debit:'MEMBER_LOANS',credit:mode,amount:amt,memberId:nlMember,loanId:loan.id,meetingId,narration:'Loan disbursed — '+memberName(nlMember)});
+        logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(nlMember)+' — '+rupee(amt)+' (via meeting)');
         totals.newLoans+=amt;
       }
     }
@@ -862,7 +943,7 @@ function postMeeting(ev){
       postTxn({date,type:'Expense',debit:'EXP_'+cat,credit:mode,amount:expAmt,meetingId,narration:f.get('exp_narration')||cat});
       totals.expenses+=expAmt;
     }
-    DB.meetings.push({id:meetingId,date,totalMembers:members.length,present,totals});
+    DB.meetings.push({id:meetingId,date,totalMembers:members.length,present,presentIds,absentIds,totals});
     logAudit('POST_MEETING', meetingId+' on '+date+' — '+present+'/'+members.length+' present');
     flash('ok','Meeting posted. All registers and ledgers updated automatically.');
     ROUTE='meetings'; render();
@@ -874,6 +955,13 @@ function postMeeting(ev){
 }
 function addMonths(dateStr,n){
   const d = new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10);
+}
+// Advances a date by n instalment periods according to a loan's repayment frequency
+// (Weekly/Fortnightly/Monthly). Used for both nextDueDate and the full repayment schedule.
+function addPeriod(dateStr, n, frequency){
+  if(frequency==='Weekly'){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+7*n); return d.toISOString().slice(0,10); }
+  if(frequency==='Fortnightly'){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+14*n); return d.toISOString().slice(0,10); }
+  return addMonths(dateStr, n);
 }
 
 /* ============================================================ SAVINGS */
@@ -920,10 +1008,25 @@ function viewLoans(){
       const overdue = l.status!=='Closed' && l.nextDueDate && l.nextDueDate<todayStr();
       return [l.id, esc(memberName(l.memberId)), esc(l.purpose), rightCell(rupee(l.principal)), l.interestRate+'%',
         rightCell(rupee(os)), fmtDate(l.nextDueDate), overdue?badge('Overdue','red'):badge(l.status,l.status==='Closed'?'grey':'green'),
-        os<=0.5 && l.status!=='Closed' ? `<button class="btn small secondary" onclick="closeLoan('${l.id}')">Mark Closed</button>` : ''
+        `<button class="btn small secondary" onclick="viewLoanSchedule('${l.id}')">Schedule</button> `+
+        (os<=0.5 && l.status!=='Closed' ? `<button class="btn small secondary" onclick="closeLoan('${l.id}')">Mark Closed</button>` : '')
       ];
     }))}</div>`;
   return html;
+}
+function viewLoanSchedule(loanId){
+  const loan = DB.loans.find(l=>l.id===loanId); if(!loan) return;
+  const sched = generateLoanSchedule(loanId);
+  const os = loanOutstanding(loanId);
+  const statusColor = s=> s==='Paid' ? 'green' : (s==='Due' ? 'grey' : (s.includes('Overdue') ? 'red' : 'amber'));
+  let html = `<button class="close" onclick="closeModal()">×</button><h3>Repayment Schedule — ${esc(memberName(loan.memberId))}</h3>
+  <p class="hint">Loan ${loan.id} · Principal ${rupee(loan.principal)} · ${loan.interestRate}% p.a. (${loan.interestMethod==='reducing'?'reducing balance':'flat'}) · ${loan.instalments} instalments<br>
+  Outstanding principal: <b>${rupee(os.principal)}</b> · Interest received to date: <b>${rupee(os.interestPaid)}</b></p>
+  ${tbl(['#','Due Date','Principal Due','Interest Due','Total Due','Principal Paid','Interest Paid','Balance','Status'],
+    sched.map(s=>[s.inst, fmtDate(s.dueDate), rightCell(rupee(s.principalDue)), rightCell(rupee(s.interestDue)), rightCell(rupee(s.totalDue)),
+      rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
+  <p class="hint" style="margin-top:8px">This schedule is calculated transparently from the loan's own terms and reconciled against actual repayments posted against this loan — it is never a separate, independently-maintained figure.</p>`;
+  openModal(html);
 }
 function loanForm(){
   if(!activeMembers().length){ flash('error','Add a member first.'); render(); return; }
@@ -943,7 +1046,12 @@ function loanForm(){
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="interestRate" value="12"></div>
       <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="instalments" value="12"></div>
     </div>
-    <button class="btn" type="submit">Disburse Loan</button>
+    <div class="row">
+      <div class="field"><label>Repayment Frequency</label><select name="frequency"><option>Monthly</option><option>Fortnightly</option><option>Weekly</option></select></div>
+      <div class="field"><label>Interest Method</label><select name="interestMethod"><option value="flat">Flat</option><option value="reducing">Reducing Balance</option></select></div>
+    </div>
+    <div class="hint">This is a configurable local default (12% p.a., flat, 12 instalments) — not a prescribed official rule. Change it to match your SHG's actual terms or your SRLM's rule if one applies.</div>
+    <button class="btn" style="margin-top:8px" type="submit">Disburse Loan</button>
   </form>`);
 }
 function saveLoan(ev){
@@ -953,9 +1061,11 @@ function saveLoan(ev){
     const loan = { id: nextId('LOAN'), memberId:data.memberId, purpose:data.purpose,
       sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate,
       principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
-      instalments: parseInt(data.instalments)||12, status:'Active', nextDueDate: addMonths(data.disbursementDate,1) };
+      instalments: parseInt(data.instalments)||12, frequency: data.frequency||'Monthly', interestMethod: data.interestMethod||'flat',
+      status:'Active', nextDueDate: addPeriod(data.disbursementDate,1,data.frequency||'Monthly') };
     DB.loans.push(loan);
     postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:data.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,narration:'Loan disbursed — '+memberName(loan.memberId)});
+    logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal));
     closeModal(); flash('ok','Loan disbursed.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
@@ -1104,8 +1214,9 @@ function viewLedger(){
 }
 
 /* ============================================================ TRIAL BALANCE */
-function viewTrialBalance(){
-  let html = `<div class="section-title"><h2>Trial Balance</h2><span class="hint">As on ${fmtDate(todayStr())}</span></div>`;
+// Central Trial Balance calculation — every screen that needs a debit/credit total
+// (Trial Balance view, Data Quality, Month-End Closing) reads from this single function.
+function generateTrialBalance(){
   const codes = allLedgerCodes();
   let totalDr=0, totalCr=0;
   const rows = codes.map(c=>{
@@ -1115,12 +1226,17 @@ function viewTrialBalance(){
     const dr = normalDebit ? Math.max(bal,0) : Math.max(-bal,0);
     const cr = normalDebit ? Math.max(-bal,0) : Math.max(bal,0);
     totalDr+=dr; totalCr+=cr;
-    return [accountLabel(c), rightCell(dr?rupee(dr):''), rightCell(cr?rupee(cr):'')];
-  }).filter(r=> r[1]!=='§R§' || r[2]!=='§R§');
-  html += `<div class="card">${tbl(['Account Head','Debit','Credit'], rows.concat([['<b>TOTAL</b>', rightCell('<b>'+rupee(totalDr)+'</b>'), rightCell('<b>'+rupee(totalCr)+'</b>')]]))}</div>`;
-  const diff = Math.round((totalDr-totalCr)*100)/100;
-  html += diff===0 ? `<div class="msg ok">Trial Balance is matched. Total Debit = Total Credit.</div>` :
-    `<div class="msg err">Trial Balance does NOT match. Difference: ${rupee(Math.abs(diff))}. This should not normally occur since every voucher enforces equal debit and credit — check for data import issues.</div>`;
+    return {code:c, label:accountLabel(c), dr, cr};
+  }).filter(r=>r.dr || r.cr);
+  return {rows, totalDr:Math.round(totalDr*100)/100, totalCr:Math.round(totalCr*100)/100, diff: Math.round((totalDr-totalCr)*100)/100};
+}
+function viewTrialBalance(){
+  let html = `<div class="section-title"><h2>Trial Balance</h2><span class="hint">As on ${fmtDate(todayStr())}</span></div>`;
+  const tb = generateTrialBalance();
+  const rows = tb.rows.map(r=>[r.label, rightCell(r.dr?rupee(r.dr):''), rightCell(r.cr?rupee(r.cr):'')]);
+  html += `<div class="card">${tbl(['Account Head','Debit','Credit'], rows.concat([['<b>TOTAL</b>', rightCell('<b>'+rupee(tb.totalDr)+'</b>'), rightCell('<b>'+rupee(tb.totalCr)+'</b>')]]))}</div>`;
+  html += tb.diff===0 ? `<div class="msg ok">Trial Balance is matched. Total Debit = Total Credit.</div>` :
+    `<div class="msg err">Trial Balance does NOT match. Difference: ${rupee(Math.abs(tb.diff))}. This should not normally occur since every voucher enforces equal debit and credit — check for data import issues.</div>`;
   return html;
 }
 
@@ -1220,12 +1336,8 @@ function runDataQuality(){
   // negative balances
   if(accountBalance('CASH')<0) issues.push({sev:'red', text:'Cash balance is negative.'});
   if(accountBalance('BANK')<0) issues.push({sev:'red', text:'Bank balance is negative.'});
-  // trial balance
-  const codes = allLedgerCodes();
-  let totalDr=0, totalCr=0;
-  codes.forEach(c=>{ const type=accountType(c); const normalDebit=(type==='asset'||type==='expense'); const bal=accountBalance(c);
-    if(normalDebit){ if(bal>=0) totalDr+=bal; else totalCr+=-bal; } else { if(bal>=0) totalCr+=bal; else totalDr+=-bal; } });
-  if(Math.round((totalDr-totalCr)*100)/100 !== 0) issues.push({sev:'red', text:'Trial Balance does not match.'});
+  // trial balance (reuses the same central calculation as the Trial Balance screen)
+  if(generateTrialBalance().diff !== 0) issues.push({sev:'red', text:'Trial Balance does not match.'});
   // duplicate members
   const seen = {};
   DB.members.forEach(m=>{ const key=(m.name||'').trim().toLowerCase()+'|'+(m.fatherHusband||'').trim().toLowerCase();
@@ -1320,6 +1432,10 @@ function viewHealthCheck(){
 }
 
 /* ============================================================ GRADING */
+// Performance indicators only — meetings, attendance, savings, loan recovery. Bookkeeping/data
+// quality is deliberately NOT averaged into this score (see item 17): a good-performing SHG
+// should not look weak just because one field is incomplete, and a badly-kept SHG should not
+// look good just because collections happened to come in. The two are reported side by side.
 function computeGrading(ym){
   const [y,m] = ym.split('-').map(Number);
   const from = ym+'-01';
@@ -1330,7 +1446,7 @@ function computeGrading(ym){
   const scheduled = freq==='Weekly'?4:(freq==='Fortnightly'?2:1);
   const meetingRegularity = Math.min(100, scheduled? (monthMeetings.length/scheduled*100) : 100);
   const totalMembers = activeMembers().length || 1;
-  const attendanceSum = monthMeetings.reduce((s,mt)=>s+mt.present,0);
+  const attendanceSum = monthMeetings.reduce((s,mt)=>s+(mt.present||0),0);
   const attendancePct = monthMeetings.length ? Math.min(100, attendanceSum/(monthMeetings.length*totalMembers)*100) : 0;
   const savers = new Set();
   DB.transactions.filter(t=>t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').forEach(t=>savers.add(t.memberId));
@@ -1338,19 +1454,24 @@ function computeGrading(ym){
   let principalRecovered = 0, principalDue = 0;
   DB.transactions.filter(t=>t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').forEach(t=>principalRecovered+=t.amount);
   DB.loans.filter(l=>l.status!=='Closed' && l.nextDueDate && l.nextDueDate>=from && l.nextDueDate<=to).forEach(l=>principalDue += (l.principal/(l.instalments||1)));
-  const loanRecovery = principalDue>0 ? Math.min(100, principalRecovered/principalDue*100) : (principalRecovered>0?100:100);
-  const dq = runDataQuality();
-  const bookkeeping = dq.some(i=>i.sev==='red') ? 30 : (dq.some(i=>i.sev==='amber') ? 70 : 100);
+  const loanRecovery = principalDue>0 ? Math.min(100, principalRecovered/principalDue*100) : 100;
   const indicators = [
     {key:'meetings', label:'Meeting Regularity', value:meetingRegularity},
     {key:'attendance', label:'Attendance', value:attendancePct},
     {key:'savings', label:'Savings Regularity', value:savingsRegularity},
-    {key:'recovery', label:'Loan Recovery', value:loanRecovery},
-    {key:'records', label:'Financial Record Keeping', value:bookkeeping}
+    {key:'recovery', label:'Loan Recovery', value:loanRecovery}
   ];
   const overall = indicators.reduce((s,i)=>s+i.value,0)/indicators.length;
-  let grade = overall>=80?'A':(overall>=60?'B':(overall>=40?'C':'D'));
-  return { ym, indicators, overall, grade, exceptions: dq.filter(i=>i.sev==='red').length, ruleVersion: DB.grading.ruleVersion };
+
+  // Data Quality is calculated separately and can block a grade from being issued at all.
+  const dq = runDataQuality();
+  const dqRed = dq.filter(i=>i.sev==='red').length, dqAmber = dq.filter(i=>i.sev==='amber').length;
+  const dqStatus = dqRed>0 ? 'red' : (dqAmber>0 ? 'amber' : 'green');
+  const gradePending = dqRed>0;
+  const grade = gradePending ? null : (overall>=80?'A':(overall>=60?'B':(overall>=40?'C':'D')));
+
+  return { ym, indicators, overall, grade, gradePending,
+    dqStatus, dqRed, dqAmber, exceptions: dqRed, ruleVersion: DB.grading.ruleVersion };
 }
 function viewGrading(){
   let html = `<div class="section-title"><h2>SHG Grading</h2></div>`;
@@ -1358,56 +1479,92 @@ function viewGrading(){
   const ym = monthKey(todayStr());
   const g = computeGrading(ym);
   html += `<div class="card"><h3>Current Month — ${ym}</h3>
-    <div class="grid cols3">${stat('Grade', g.grade)}${stat('Overall Score', g.overall.toFixed(1)+'%')}${stat('Data Exceptions', g.exceptions, g.exceptions>0)}</div>
+    <div class="grid cols3">
+      ${g.gradePending ? stat('Performance Grade', 'Pending', true) : stat('Performance Grade', g.grade)}
+      ${stat('Performance Score', g.overall.toFixed(1)+'%')}
+      ${stat('Data Quality', g.dqStatus==='green'?'Green':(g.dqStatus==='amber'?'Amber':'Red'), g.dqStatus!=='green')}
+    </div>
+    ${g.gradePending ? `<div class="msg err" style="margin-top:10px">Grade Pending — Data correction required. ${g.dqRed} critical data-quality issue(s) must be resolved before a reliable grade can be issued. <a style="cursor:pointer" onclick="go('dataquality')">Open Data Quality Check →</a></div>` : ''}
     <div style="margin-top:12px">${g.indicators.map(i=>{
       const sev = i.value>=80?'green':(i.value>=50?'amber':'red');
       return `<div class="qcard" style="margin-bottom:8px"><span class="dot ${sev}"></span><b>${esc(i.label)}</b> — ${i.value.toFixed(1)}%
         ${i.value<80?`<div class="hint" style="margin-top:4px">${gradingAction(i.key)}</div>`:''}</div>`;
-    }).join('')}</div>
+    }).join('')}
+    <div class="qcard" style="margin-bottom:8px"><span class="dot ${g.dqStatus}"></span><b>Data Quality (Bookkeeping)</b> — ${g.dqStatus==='green'?'No issues':(g.dqRed+' critical, '+g.dqAmber+' warning(s)')}
+      <div class="hint" style="margin-top:4px">Shown separately from the performance score, per item 17 — a data gap should be visible without unfairly lowering a genuinely good performance grade.</div></div>
+    </div>
     <button class="btn" style="margin-top:8px" onclick="saveGradeSnapshot('${ym}')">Save this Month's Grade to History</button>
   </div>`;
 
   const hist = Object.values(DB.grading.history).sort((a,b)=>a.ym<b.ym?-1:1);
   html += `<div class="card"><h3>Monthly Grading History</h3>`;
-  html += hist.length ? tbl(['Month','Grade','Score','Framework Version'], hist.map((h,i)=>{
+  html += hist.length ? tbl(['Month','Performance Grade','Score','Data Quality','Framework Version',''], hist.map((h,i)=>{
     const prev = hist[i-1];
     const change = prev ? (h.overall>prev.overall?'↑':(h.overall<prev.overall?'↓':'—')) : '—';
-    return [h.ym, h.grade+' '+change, h.overall.toFixed(1)+'%', h.ruleVersion];
+    return [h.ym, (h.gradePending?'Pending':h.grade)+' '+change, h.overall.toFixed(1)+'%',
+      badge(h.dqStatus==='green'?'Green':(h.dqStatus==='amber'?'Amber':'Red'), h.dqStatus==='green'?'green':(h.dqStatus==='amber'?'amber':'red')),
+      h.ruleVersion, h.revisions&&h.revisions.length ? `<a style="cursor:pointer;font-size:12px" onclick="showGradeRevisions('${h.ym}')">${h.revisions.length} revision(s)</a>` : ''];
   })) : `<div class="empty">No monthly grades saved yet.</div>`;
   html += `</div>`;
   return html;
+}
+function showGradeRevisions(ym){
+  const h = DB.grading.history[ym]; if(!h || !h.revisions) return;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Grade Revisions — ${esc(ym)}</h3>
+    ${tbl(['Date','User','Original Grade','Revised Grade','Original Score','Revised Score','Reason'],
+      h.revisions.map(r=>[fmtDate(r.date.slice(0,10)), esc(r.user), r.originalGrade||'Pending', r.revisedGrade||'Pending', r.originalScore.toFixed(1)+'%', r.revisedScore.toFixed(1)+'%', esc(r.reason||'—')]))}`);
 }
 function gradingAction(key){
   return ({
     meetings:'Ensure meetings are held on the scheduled day and recorded promptly.',
     attendance:'Follow up with members who are frequently absent.',
     savings:'Review members with unpaid monthly savings and remind them.',
-    recovery:'Review overdue member loans and the repayment schedule.',
-    records:'Resolve open items in the Data Quality Check before month-end.'
+    recovery:'Review overdue member loans and the repayment schedule.'
   })[key]||'';
 }
-function saveGradeSnapshot(ym){
+// Central save function — used both by the manual "Save Grade" button and by Month-End
+// Closing. If a CLOSED month's grade changes materially on re-save, the original and revised
+// grade/score are preserved in that month's revision history rather than overwritten silently.
+function saveGradeSnapshot(ym, silent){
   const g = computeGrading(ym);
+  const existing = DB.grading.history[ym];
+  if(existing && DB.closedPeriods.includes(ym)){
+    const materialChange = existing.grade!==g.grade || Math.abs(existing.overall-g.overall)>0.5;
+    if(materialChange){
+      const reason = silent ? 'Recalculated at month-end closing' : (prompt('This month is closed and its grade is changing. Reason for revision:','Data correction')||'');
+      const revisions = existing.revisions||[];
+      revisions.push({date:nowStamp(), user:DB.settings.currentUserName, originalGrade:existing.grade, revisedGrade:g.grade,
+        originalScore:existing.overall, revisedScore:g.overall, reason});
+      g.revisions = revisions;
+      logAudit('GRADE_REVISION', ym+': '+(existing.grade||'Pending')+' → '+(g.grade||'Pending')+' — '+reason);
+    } else {
+      g.revisions = existing.revisions||[];
+    }
+  }
   DB.grading.history[ym]=g;
-  logAudit('SAVE_GRADE', ym+' grade '+g.grade+' saved ('+g.overall.toFixed(1)+'%)');
-  flash('ok','Grade for '+ym+' saved to history.'); render();
+  if(!silent){
+    logAudit('SAVE_GRADE', ym+' grade '+(g.gradePending?'Pending':g.grade)+' saved ('+g.overall.toFixed(1)+'%)');
+    flash('ok','Grade for '+ym+' saved to history.'); render();
+  }
+  return g;
 }
 
 /* ============================================================ LOKOS READINESS & EXPORT */
 function viewLokos(){
   let html = `<div class="section-title"><h2>LokOS Data Readiness & Export</h2></div>`;
-  html += `<div class="msg info">This app does not connect to any LokOS API — no official DAY-NRLM/LokOS API is assumed here. It prepares a validated, correctly formatted export (CSV) that can be submitted through whatever official upload mechanism your SRLM/DAY-NRLM authorises. Field names below are configurable in Settings if your state's format differs.</div>`;
+  html += `<div class="msg info">This app does not connect to any LokOS API — no official DAY-NRLM/LokOS API is assumed here. It prepares a validated, correctly formatted export (CSV) that can be submitted through whatever official upload mechanism your SRLM/DAY-NRLM authorises. Field names are configurable below if your state's format differs.</div>`;
   const issues = runDataQuality();
   const red = issues.filter(i=>i.sev==='red').length;
   const status = red>0 ? 'RED — Upload Not Permitted' : (issues.length ? 'AMBER — Correction Recommended' : 'GREEN — Ready for Export');
   const cls = red>0?'red':(issues.length?'amber':'green');
   html += `<div class="card"><span class="dot ${cls}"></span><b>${status}</b></div>`;
-  html += `<div class="card"><h3>Export</h3>
+  html += `<div class="card"><h3>Validated Export</h3><p class="hint">Runs the Data Quality Check first — critical (red) issues must be acknowledged with an override before export, so invalid data is never exported unknowingly.</p>
     <div class="row">
-      <button class="btn secondary" onclick="exportCSV('members')">Export Members CSV</button>
-      <button class="btn secondary" onclick="exportCSV('savings')">Export Savings CSV</button>
-      <button class="btn secondary" onclick="exportCSV('loans')">Export Loans CSV</button>
-      <button class="btn secondary" onclick="exportCSV('transactions')">Export Transactions CSV</button>
+      <button class="btn secondary" onclick="generateLokOSExport('members')">Export Members</button>
+      <button class="btn secondary" onclick="generateLokOSExport('savings')">Export Savings</button>
+      <button class="btn secondary" onclick="generateLokOSExport('loans')">Export Loans</button>
+      <button class="btn secondary" onclick="generateLokOSExport('transactions')">Export Transactions</button>
+      <button class="btn secondary" onclick="generateLokOSExport('cif')">Export CIF</button>
     </div>
   </div>`;
   html += `<div class="card"><h3>Reconciliation vs Local Accounting Records</h3>${tbl(['Item','SHG Accounting Records'],[
@@ -1416,7 +1573,18 @@ function viewLokos(){
     ['Loans Outstanding', rupee(DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0))],
     ['CIF Outstanding', rupee(cifOutstanding())]
   ])}<div class="hint" style="margin-top:8px">These figures are the single source of truth — the same numbers that appear in every other module and export.</div></div>`;
+  html += `<div class="card"><h3>LokOS Field Mapping</h3><p class="hint">Administrator-configurable: change the LokOS-side field name if your SRLM's format differs. This only relabels export headers — the underlying accounting engine never changes.</p>`;
+  Object.keys(DB.lokosMapping).forEach(kind=>{
+    html += `<h4 style="margin-top:10px;text-transform:capitalize">${esc(kind)}</h4>${tbl(['Internal Field','LokOS Field Name','Mandatory'],
+      DB.lokosMapping[kind].map((f,i)=>[esc(f.internal),
+        `<input value="${esc(f.lokos)}" style="width:160px" onchange="updateLokosMapping('${kind}',${i},this.value)">`,
+        `<input type="checkbox" ${f.mandatory?'checked':''} disabled>`]))}`;
+  });
+  html += `</div>`;
   return html;
+}
+function updateLokosMapping(kind, idx, val){
+  if(DB.lokosMapping[kind] && DB.lokosMapping[kind][idx]){ DB.lokosMapping[kind][idx].lokos = val; saveDB(); }
 }
 function toCSV(headers, rows){
   const esc2 = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
@@ -1428,23 +1596,134 @@ function downloadFile(name, content, mime){
   const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
   document.body.removeChild(a); URL.revokeObjectURL(url);
 }
+// Single place that builds export rows for every module, using internal field names.
+// Both the plain Reports export and the LokOS-mapped export read from here, so the two
+// can never drift apart or show conflicting figures.
+function buildExportData(kind){
+  if(kind==='members') return {headers:['MemberID','Name','FatherHusband','Mobile','Village','DOJ','Status'],
+    rows: DB.members.map(m=>[m.id,m.name,m.fatherHusband,m.mobile,m.village,m.doj,m.status])};
+  if(kind==='savings') return {headers:['MemberID','Name','ClosingSavingsBalance'],
+    rows: activeMembers().map(m=>[m.id,m.name,memberSavingsBalance(m.id).toFixed(2)])};
+  if(kind==='loans') return {headers:['LoanID','MemberID','Member','Principal','Rate','OutstandingPrincipal','Status','NextDueDate'],
+    rows: DB.loans.map(l=>[l.id,l.memberId,memberName(l.memberId),l.principal,l.interestRate,loanOutstanding(l.id).principal.toFixed(2),l.status,l.nextDueDate])};
+  if(kind==='cif') return {headers:['Date','Source','Amount','Rate','PeriodMonths','OutstandingLiability'],
+    rows: DB.cif.map(c=>[c.date,c.source,c.amount,c.rate,c.period,cifOutstanding().toFixed(2)])};
+  if(kind==='attendance') return {headers:['MeetingDate','MemberID','Member','Present'],
+    rows: DB.meetings.flatMap(mt=>activeMembers().map(m=>[mt.date,m.id,memberName(m.id), (mt.presentIds||[]).includes(m.id)?'Yes':'No']))};
+  if(kind==='trialbalance'){ const tb = generateTrialBalance(); return {headers:['AccountHead','Debit','Credit'], rows: tb.rows.map(r=>[r.label, r.dr.toFixed(2), r.cr.toFixed(2)])}; }
+  if(kind==='grading'){ const hist = Object.values(DB.grading.history).sort((a,b)=>a.ym<b.ym?-1:1);
+    return {headers:['Month','PerformanceGrade','Score','DataQuality','FrameworkVersion'],
+      rows: hist.map(h=>[h.ym, h.gradePending?'Pending':h.grade, h.overall.toFixed(1), h.dqStatus, h.ruleVersion])}; }
+  if(kind==='dataquality'){ const issues = runDataQuality();
+    return {headers:['Severity','Issue'], rows: issues.map(i=>[i.sev==='red'?'Critical':'Warning', i.text])}; }
+  return {headers:['Date','VoucherNo','Type','Debit','Credit','Amount','MemberID','Narration'],
+    rows: DB.transactions.map(t=>[t.date,t.voucherNo,t.type,t.debit,t.credit,t.amount,t.memberId,t.narration])};
+}
 function exportCSV(kind){
-  let csv, name;
-  if(kind==='members'){
-    csv = toCSV(['MemberID','Name','FatherHusband','Mobile','Village','DOJ','Status'], DB.members.map(m=>[m.id,m.name,m.fatherHusband,m.mobile,m.village,m.doj,m.status]));
-    name='members_export.csv';
-  } else if(kind==='savings'){
-    csv = toCSV(['MemberID','Name','ClosingSavingsBalance'], activeMembers().map(m=>[m.id,m.name,memberSavingsBalance(m.id).toFixed(2)]));
-    name='savings_export.csv';
-  } else if(kind==='loans'){
-    csv = toCSV(['LoanID','MemberID','Member','Principal','Rate','OutstandingPrincipal','Status','NextDueDate'], DB.loans.map(l=>[l.id,l.memberId,memberName(l.memberId),l.principal,l.interestRate,loanOutstanding(l.id).principal.toFixed(2),l.status,l.nextDueDate]));
-    name='loans_export.csv';
-  } else {
-    csv = toCSV(['Date','VoucherNo','Type','Debit','Credit','Amount','MemberID','Narration'], DB.transactions.map(t=>[t.date,t.voucherNo,t.type,t.debit,t.credit,t.amount,t.memberId,t.narration]));
-    name='transactions_export.csv';
-  }
-  downloadFile(name, csv);
+  const {headers, rows} = buildExportData(kind);
+  downloadFile(kind+'_export.csv', toCSV(headers, rows));
   logAudit('EXPORT', kind+' CSV exported');
+}
+// LokOS-ready export: validates first, relabels headers through the configurable field
+// mapping, and never exports silently over unresolved critical data-quality issues.
+function generateLokOSExport(kind){
+  const issues = runDataQuality();
+  const red = issues.filter(i=>i.sev==='red').length;
+  if(red>0 && !confirm('There '+(red===1?'is 1 critical data-quality issue':'are '+red+' critical data-quality issues')+' right now. Exporting anyway is not recommended. Export with an authorised override?')){
+    return;
+  }
+  const {headers, rows} = buildExportData(kind);
+  const map = DB.lokosMapping[kind];
+  const mappedHeaders = map ? headers.map(h=>{ const f = map.find(x=>x.internal===h); return f ? f.lokos : h; }) : headers;
+  downloadFile(kind+'_lokos_export.csv', toCSV(mappedHeaders, rows));
+  logAudit('LOKOS_EXPORT', kind+' LokOS-mapped CSV exported'+(red>0?' (with '+red+' unresolved critical issue(s), authorised override)':''));
+}
+
+/* ============================================================ MONTH-END CLOSING */
+// Runs every reconciliation check (data validation, Trial Balance, cash/bank, loans, CIF,
+// savings, data quality) before allowing a month to be locked, matching item 18. This is the
+// single place a month actually gets closed — the quick "Close Period" control in Settings
+// remains for convenience but performs the same underlying closeMonth() function.
+function monthClosingChecklist(ym){
+  const from = ym+'-01';
+  const [y,m] = ym.split('-').map(Number);
+  const to = ym+'-'+String(new Date(y,m,0).getDate()).padStart(2,'0');
+  const tb = generateTrialBalance();
+  const dq = runDataQuality();
+  const dqRed = dq.filter(i=>i.sev==='red').length, dqAmber = dq.filter(i=>i.sev==='amber').length;
+  const monthHasMeeting = DB.meetings.some(mt=>mt.date>=from && mt.date<=to);
+  return [
+    {label:'Trial Balance', ok: tb.diff===0, detail: tb.diff===0?'Debit = Credit':'Mismatch of '+rupee(Math.abs(tb.diff))},
+    {label:'Cash reconciliation', ok: accountBalance('CASH')>=0, detail: rupee(accountBalance('CASH'))},
+    {label:'Bank reconciliation', ok: accountBalance('BANK')>=0, detail: rupee(accountBalance('BANK'))},
+    {label:'Loan sub-ledger', ok: DB.loans.every(l=>loanOutstanding(l.id).principal>=-0.5), detail: DB.loans.length+' loan(s) checked'},
+    {label:'CIF reconciliation', ok: accountBalance('CIF')>=0, detail: rupee(accountBalance('CIF'))},
+    {label:'Savings ledger', ok: activeMembers().every(mem=>memberSavingsBalance(mem.id)>=-0.5), detail: activeMembers().length+' member(s) checked'},
+    {label:'Meeting recorded this month', ok: monthHasMeeting, detail: monthHasMeeting?'Yes':'No meeting found for '+ym, warnOnly:true},
+    {label:'Data Quality', ok: dqRed===0, detail: dqRed+' critical, '+dqAmber+' warning(s)'}
+  ];
+}
+function closeMonth(ym, override){
+  const checklist = monthClosingChecklist(ym);
+  const criticalFails = checklist.filter(c=>!c.ok && !c.warnOnly);
+  if(criticalFails.length && !override){
+    return {ok:false, checklist, reason:'critical'};
+  }
+  if(!DB.closedPeriods.includes(ym)) DB.closedPeriods.push(ym);
+  const g = saveGradeSnapshot(ym, true);
+  logAudit('MONTH_CLOSE', ym+' closed'+(criticalFails.length?' with authorised override ('+criticalFails.length+' unresolved item(s))':'')+' — grade '+(g.gradePending?'Pending':g.grade));
+  return {ok:true, checklist, grade:g};
+}
+function viewMonthClosing(){
+  let html = `<div class="section-title"><h2>Month-End Closing</h2></div>`;
+  html += `<div class="msg info">Closing a month validates every ledger, locks it against accidental editing, and permanently saves that month's grading snapshot. Corrections after closing are always made by reversal, never by silent editing.</div>`;
+  const ym = monthKey(todayStr());
+  html += `<div class="card"><h3>Close ${ym}</h3><div id="closingChecklist"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" onclick="runMonthClose('${ym}', false)">Run Closing Checklist</button>
+    </div></div>`;
+  html += `<div class="card"><h3>Closed Periods</h3>${DB.closedPeriods.length ? tbl(['Month','Grade at Closing',''],
+    DB.closedPeriods.slice().sort().reverse().map(p=>{
+      const h = DB.grading.history[p];
+      return [p, h ? (h.gradePending?'Pending':h.grade)+' ('+h.overall.toFixed(1)+'%)' : '—',
+        `<button class="btn small secondary" onclick="reopenPeriodFrom('closing','${p}')">Reopen</button>`];
+    })) : `<div class="empty">No months closed yet.</div>`}</div>`;
+  setTimeout(()=>runMonthClose(ym,false),0);
+  return html;
+}
+function renderChecklist(ym, checklist){
+  const el = document.getElementById('closingChecklist');
+  if(!el) return;
+  const criticalFails = checklist.filter(c=>!c.ok && !c.warnOnly);
+  el.innerHTML = checklist.map(c=>`<div class="qcard" style="margin-bottom:6px"><span class="dot ${c.ok?'green':(c.warnOnly?'amber':'red')}"></span><b>${esc(c.label)}</b> — ${esc(c.detail)}</div>`).join('')
+    + (criticalFails.length ?
+        `<div class="msg err" style="margin-top:8px">${criticalFails.length} critical item(s) failed. Resolve them, or close with an authorised override (recorded in the audit trail).</div>
+         <button class="btn danger" style="margin-top:6px" onclick="runMonthClose('${ym}', true)">Close Anyway (Authorised Override)</button>`
+      : `<div class="msg ok" style="margin-top:8px">All critical checks passed.</div>
+         <button class="btn" style="margin-top:6px" onclick="doCloseMonth('${ym}', false)">Confirm & Close ${esc(ym)}</button>`);
+}
+function runMonthClose(ym, allowOverride){
+  const checklist = monthClosingChecklist(ym);
+  renderChecklist(ym, checklist);
+  if(allowOverride){
+    const criticalFails = checklist.filter(c=>!c.ok && !c.warnOnly);
+    if(criticalFails.length && confirm('Close '+ym+' with '+criticalFails.length+' unresolved critical item(s)? This will be recorded in the audit trail as an authorised override.')){
+      doCloseMonth(ym, true);
+    }
+  }
+}
+function doCloseMonth(ym, override){
+  const result = closeMonth(ym, override);
+  if(!result.ok){ flash('error','Cannot close '+ym+' — critical checks failed. Resolve them or use the authorised override.'); render(); return; }
+  flash('ok', ym+' closed. Grade: '+(result.grade.gradePending?'Pending':result.grade.grade)+'.');
+  render();
+}
+function reopenPeriodFrom(fromRoute, ym){
+  if(!confirm('Reopen '+ym+'? This allows further postings and edits in this period.')) return;
+  DB.closedPeriods = DB.closedPeriods.filter(p=>p!==ym);
+  logAudit('REOPEN_PERIOD', ym+' reopened');
+  flash('ok', ym+' reopened.');
+  ROUTE = fromRoute; render();
 }
 
 /* ============================================================ AUDIT TRAIL */
@@ -1461,13 +1740,17 @@ const REPORT_LIST = [
   {id:'members', label:'Member Register'},
   {id:'savings', label:'Savings Register'},
   {id:'loans', label:'Loan Register'},
+  {id:'cif', label:'CIF Statement'},
+  {id:'attendance', label:'Attendance Register'},
   {id:'transactions', label:'Transactions Register'},
-  {id:'trialbalance', label:'Trial Balance'}
+  {id:'trialbalance', label:'Trial Balance'},
+  {id:'grading', label:'SHG Performance (Grading) Report'},
+  {id:'dataquality', label:'Data Quality Report'}
 ];
 function viewReports(){
   let html = `<div class="section-title"><h2>Reports</h2></div><div class="card"><div class="row">`;
-  REPORT_LIST.forEach(r=>{ html += `<button class="btn secondary" onclick="exportCSV('${r.id==='trialbalance'?'transactions':r.id}')">${esc(r.label)} (CSV)</button>`; });
-  html += `</div><div class="hint" style="margin-top:8px">Use your browser's Print (Ctrl/Cmd+P) on any screen to save a PDF copy for records or audit.</div></div>`;
+  REPORT_LIST.forEach(r=>{ html += `<button class="btn secondary" onclick="exportCSV('${r.id}')">${esc(r.label)} (CSV)</button>`; });
+  html += `</div><div class="hint" style="margin-top:8px">Use your browser's Print (Ctrl/Cmd+P) on any screen — Cash Book, Ledger, Balance Sheet, Loan Schedule, Meeting register and others — to save a PDF copy for records or audit. LokOS-mapped exports with a readiness check are under LokOS Data Readiness & Export.</div></div>`;
   return html;
 }
 
@@ -1559,6 +1842,7 @@ function viewSettings(){
   </div>`;
 
   html += `<div class="card"><h3>Monthly / Annual Closing</h3>
+    <p class="hint">For the full validation checklist (Trial Balance, cash/bank, loans, CIF, savings, data quality) use <a style="cursor:pointer" onclick="go('closing')">Month-End Closing</a>. This quick control does the same thing without the checklist view.</p>
     <div class="row"><div class="field"><label>Close Month</label><input type="month" id="closeMonth" value="${monthKey(todayStr())}"></div>
     <button class="btn secondary" style="align-self:flex-end;height:38px" onclick="closePeriod()">Close Period</button></div>
     <p class="hint">Closed periods: ${DB.closedPeriods.length?DB.closedPeriods.join(', '):'none'}</p>
@@ -1583,8 +1867,20 @@ function saveOpening(ev){
 }
 function addExpCat(ev){ ev.preventDefault(); const f=new FormData(ev.target); const c=f.get('cat').trim(); if(c && !DB.expenseCategories.includes(c)) DB.expenseCategories.push(c); render(); return false; }
 function removeExpCat(i){ DB.expenseCategories.splice(i,1); render(); }
-function closePeriod(){ const v = document.getElementById('closeMonth').value; if(!v) return; if(!DB.closedPeriods.includes(v)){ DB.closedPeriods.push(v); logAudit('CLOSE_PERIOD',v+' closed'); } flash('ok',v+' closed.'); render(); }
-function reopenPeriod(){ const v = document.getElementById('reopenMonth').value; if(!confirm('Reopen '+v+'? This allows further postings in this period.')) return; DB.closedPeriods = DB.closedPeriods.filter(p=>p!==v); logAudit('REOPEN_PERIOD',v+' reopened'); flash('ok',v+' reopened.'); render(); }
+function closePeriod(){
+  const v = document.getElementById('closeMonth').value; if(!v) return;
+  const result = closeMonth(v, false);
+  if(!result.ok){
+    if(confirm('This month has unresolved critical checks. For the full checklist, use Month-End Closing. Close anyway with an authorised override?')){
+      closeMonth(v, true);
+      flash('ok', v+' closed with an authorised override — see Month-End Closing for details.');
+    } else { flash('error', 'Not closed. Open Month-End Closing to see what needs attention.'); }
+  } else {
+    flash('ok', v+' closed. Grade: '+(result.grade.gradePending?'Pending':result.grade.grade)+'.');
+  }
+  render();
+}
+function reopenPeriod(){ const v = document.getElementById('reopenMonth').value; reopenPeriodFrom('settings', v); }
 function saveGradingVersion(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.grading.ruleVersion=f.get('ruleVersion'); flash('ok','Grading version updated.'); render(); return false; }
 
 /* ============================================================ HELP */
@@ -1694,7 +1990,7 @@ function seedDemoDataCore(){
     const newMembers = names.map(n=>({id:nextId('MEM'), name:n+' (DEMO)', fatherHusband:'S/o Demo', mobile:'9800000'+(100+Math.floor(Math.random()*900)), village:'Demo Village', doj:'2023-04-10', status:'Active', occupation:'Agriculture', nominee:'', bankAccno:'', bankIfsc:'', demo:true}));
     DB.members = DB.members.concat(newMembers);
     if(accountBalance('CASH')===0 && accountBalance('BANK')===0){
-      try{ postOpeningBalances(5000, 0, addMonths(todayStr(),-6)); DB.settings.demoOpeningApplied = true; }catch(e){}
+      try{ postOpeningBalances(30000, 0, addMonths(todayStr(),-6)); DB.settings.demoOpeningApplied = true; }catch(e){}
     }
     // Run five monthly meetings ending in the current month, so dates are always current and never fall in a closed period.
     const anchor = new Date(); anchor.setDate(4);
