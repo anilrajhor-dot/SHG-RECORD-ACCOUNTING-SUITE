@@ -1137,17 +1137,20 @@ function renderMemberMeetingCard(m, asOfDate){
     html += `<details ${totalDue>0.5?'open':''} style="margin-top:6px">
       <summary style="cursor:pointer;font-weight:600;color:var(--navy-2);font-size:13.5px">Loan-wise Repayment (${dues.length} loan${dues.length>1?'s':''})</summary>
       <div class="row" style="margin-top:8px"><button type="button" class="btn small secondary" onclick="meetingAllocateDue('${m.id}')">Fill Due Amounts</button></div>
-      <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Loan ID</th><th>Purpose</th><th>Rate %</th><th>Loan O/S</th><th>Principal Due</th><th>Interest Due</th><th>Arrears (P/I)</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Loan Total</th><th>Balance</th></tr></thead><tbody>`;
+      <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Loan ID</th><th>Purpose</th><th>Rate %</th><th>Loan O/S</th><th>Current Principal Due</th><th>Current Interest Due</th><th>Arrears Principal</th><th>Arrears Interest</th><th>Total Principal Due</th><th>Total Interest Due</th><th>Total Amount Due</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Balance</th></tr></thead><tbody>`;
     dues.forEach(d=>{
       html += `<tr>
         <td>${d.loan.id}</td><td>${esc(d.loan.purpose||'—')}</td><td class="num">${d.loan.interestRate}%</td>
         <td class="num">${rupee(d.outstanding)}</td>
         <td class="num" id="pd_${d.loan.id}">${rupee(d.principalDue)}</td>
         <td class="num" id="id_${d.loan.id}">${rupee(d.interestDue)}</td>
-        <td class="num" id="ar_${d.loan.id}">${d.arrears>0?(rupee(d.arrearsPrincipal)+' / '+rupee(d.arrearsInterest)):'—'}</td>
+        <td class="num" id="arp_${d.loan.id}">${rupee(d.arrearsPrincipal)}</td>
+        <td class="num" id="ari_${d.loan.id}">${rupee(d.arrearsInterest)}</td>
+        <td class="num" id="tpd_${d.loan.id}"><b>${rupee(d.totalPrincipalDue)}</b></td>
+        <td class="num" id="tid_${d.loan.id}"><b>${rupee(d.totalInterestDue)}</b></td>
+        <td class="num" id="tad_${d.loan.id}"><b>${d.totalDue>0.5?rupee(d.totalDue):'—'}</b></td>
         <td><input type="number" min="0" step="0.01" name="rp_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
         <td><input type="number" min="0" step="0.01" name="ri_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
-        <td class="num" id="loantotal_${d.loan.id}">₹0.00</td>
         <td class="num" id="loanbal_${d.loan.id}">${d.totalDue>0.5?rupee(d.totalDue):'—'}</td>
       </tr>`;
     });
@@ -1164,8 +1167,10 @@ function meetingAllocateDue(mid){
   memberDueInfos(mid, (document.getElementById('meetingDate')||{}).value || todayStr()).forEach(d=>{
     const rpEl = document.querySelector('[name="rp_'+d.loan.id+'"]');
     const riEl = document.querySelector('[name="ri_'+d.loan.id+'"]');
-    if(rpEl) rpEl.value = d.principalDue.toFixed(2);
-    if(riEl) riEl.value = d.interestDue.toFixed(2);
+    // Fill the TOTAL unpaid amount (current instalment + arrears), not just the current
+    // instalment — otherwise arrears silently never get offered for repayment here.
+    if(rpEl) rpEl.value = d.totalPrincipalDue.toFixed(2);
+    if(riEl) riEl.value = d.totalInterestDue.toFixed(2);
   });
   meetingCalcMemberRow(mid);
 }
@@ -1184,10 +1189,14 @@ function toggleAdjustmentReason(){
 function reloadMeetingDueDate(newDate){
   activeMembers().forEach(m=>{
     memberDueInfos(m.id, newDate||todayStr()).forEach(d=>{
-      const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+      const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.innerHTML=v; };
       set('pd_'+d.loan.id, rupee(d.principalDue));
       set('id_'+d.loan.id, rupee(d.interestDue));
-      set('ar_'+d.loan.id, d.arrears>0?(rupee(d.arrearsPrincipal)+' / '+rupee(d.arrearsInterest)):'—');
+      set('arp_'+d.loan.id, rupee(d.arrearsPrincipal));
+      set('ari_'+d.loan.id, rupee(d.arrearsInterest));
+      set('tpd_'+d.loan.id, '<b>'+rupee(d.totalPrincipalDue)+'</b>');
+      set('tid_'+d.loan.id, '<b>'+rupee(d.totalInterestDue)+'</b>');
+      set('tad_'+d.loan.id, '<b>'+(d.totalDue>0.5?rupee(d.totalDue):'—')+'</b>');
       set('loanbal_'+d.loan.id, d.totalDue>0.5?rupee(d.totalDue):'—');
     });
   });
@@ -1196,8 +1205,6 @@ function reloadMeetingDueDate(newDate){
 function meetingCalcLoanRow(loanId, mid){
   const val = name => parseFloat((document.querySelector('[name="'+name+'_'+loanId+'"]')||{}).value)||0;
   const rp = val('rp'), ri = val('ri');
-  const cell = document.getElementById('loantotal_'+loanId);
-  if(cell) cell.textContent = rupee(rp+ri);
   const loan = DB.loans.find(l=>l.id===loanId);
   const due = loan ? memberDueInfos(loan.memberId, (document.getElementById('meetingDate')||{}).value || todayStr()).find(d=>d.loan.id===loanId) : null;
   const balCell = document.getElementById('loanbal_'+loanId);
@@ -1297,10 +1304,10 @@ function postMeeting(ev){
           if(!allowExcess) throw new Error('Principal repayment for '+m.name+' on loan '+loan.id+' ('+rupee(rp)+') exceeds that loan\'s outstanding balance ('+rupee(outstanding)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
           override = true;
         }
-        // Interest is checked against interest due only (current + interest arrears) —
-        // never against the combined principal+interest arrears figure, so this threshold
-        // can't be silently inflated by unrelated principal arrears.
-        const interestCeiling = due ? (due.interestDue+due.arrearsInterest) : 0;
+        // Interest is checked against that loan's total interest due (current + interest
+        // arrears) — never against the combined principal+interest arrears figure, so this
+        // threshold can't be silently inflated by unrelated principal arrears.
+        const interestCeiling = due ? due.totalInterestDue : 0;
         if(due && ri > interestCeiling+0.5 && interestCeiling>0){
           if(!allowExcess) throw new Error('Interest payment for '+m.name+' on loan '+loan.id+' ('+rupee(ri)+') exceeds the interest currently due on that loan ('+rupee(interestCeiling)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
           override = true;
