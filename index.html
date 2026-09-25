@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>SHG Records & Accounting Suite</title>
+<style>
+:root{
+  --navy:#12283F;
+  --navy-2:#1B3A5C;
+  --navy-3:#234A73;
+  --bg:#EEF2F6;
+  --card:#FFFFFF;
+  --border:#D9E1E8;
+  --text:#1B2733;
+  --muted:#5B6B7A;
+  --green:#1B7A4C;
+  --green-bg:#E5F4EC;
+  --amber:#A6650C;
+  --amber-bg:#FBF0DD;
+  --red:#B23A3A;
+  --red-bg:#FBE9E9;
+  --accent:#2E6F9E;
+  --radius:8px;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  font-size:15px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font-family:inherit;font-size:15px;}
+h1,h2,h3,h4{margin:0 0 8px 0;font-weight:600;letter-spacing:-0.01em;}
+a{color:var(--accent);}
+table{border-collapse:collapse;width:100%;font-size:13.5px;}
+th,td{padding:7px 9px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;}
+th{background:#F5F8FA;font-weight:600;color:var(--navy-2);position:sticky;top:0;}
+tbody tr:hover{background:#F7FAFC;}
+.tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);}
+.right{text-align:right;}
+.num{font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono);}
+
+/* ---- App shell ---- */
+#app{display:flex;min-height:100vh;}
+#sidebar{
+  width:240px;flex-shrink:0;background:var(--navy);color:#DCE6EF;
+  display:flex;flex-direction:column;
+  position:fixed;top:0;bottom:0;left:0;z-index:40;
+  transform:translateX(0);transition:transform .2s ease;
+}
+#sidebar .brand{padding:18px 16px 10px;border-bottom:1px solid rgba(255,255,255,.1);}
+#sidebar .brand b{color:#fff;font-size:16px;display:block;}
+#sidebar .brand span{font-size:11.5px;color:#9FB4C8;}
+#navlist{list-style:none;margin:0;padding:8px;overflow-y:auto;flex:1;}
+#navlist li{margin:1px 0;}
+#navlist a{
+  display:flex;gap:9px;align-items:center;padding:8px 10px;border-radius:6px;color:#C9D9E6;
+  text-decoration:none;font-size:13.6px;cursor:pointer;
+}
+#navlist a:hover{background:rgba(255,255,255,.07);}
+#navlist a.active{background:var(--navy-3);color:#fff;font-weight:600;}
+#navlist .grp{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#7C93A8;margin:12px 10px 4px;}
+#sidebar .foot{padding:10px 14px;font-size:10.5px;color:#7C93A8;border-top:1px solid rgba(255,255,255,.1);}
+#main{margin-left:240px;flex:1;min-width:0;display:flex;flex-direction:column;}
+#topbar{
+  background:var(--card);border-bottom:1px solid var(--border);padding:10px 20px;
+  display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:30;
+}
+#topbar .shgname{font-weight:700;color:var(--navy);font-size:15px;}
+#topbar .quickstats{display:flex;gap:16px;margin-left:auto;font-size:12.5px;color:var(--muted);flex-wrap:wrap;}
+#topbar .quickstats b{color:var(--text);font-family:var(--mono);}
+#hamburger{display:none;background:none;border:1px solid var(--border);border-radius:6px;width:34px;height:34px;cursor:pointer;}
+#content{padding:18px 20px 60px;max-width:1180px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+.card h3{color:var(--navy-2);font-size:14.5px;margin-bottom:10px;}
+.grid{display:grid;gap:12px;}
+.grid.cols4{grid-template-columns:repeat(4,1fr);}
+.grid.cols3{grid-template-columns:repeat(3,1fr);}
+.grid.cols2{grid-template-columns:repeat(2,1fr);}
+@media(max-width:900px){.grid.cols4{grid-template-columns:repeat(2,1fr);}.grid.cols3{grid-template-columns:repeat(2,1fr);}}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;}
+.stat .lbl{font-size:11.5px;color:var(--muted);margin-bottom:4px;}
+.stat .val{font-size:19px;font-weight:700;color:var(--navy);font-family:var(--mono);}
+.stat .val.neg{color:var(--red);}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;}
+.badge.green{background:var(--green-bg);color:var(--green);}
+.badge.amber{background:var(--amber-bg);color:var(--amber);}
+.badge.red{background:var(--red-bg);color:var(--red);}
+.badge.grey{background:#EEF1F4;color:var(--muted);}
+.btn{
+  display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:6px;border:1px solid var(--navy-3);
+  background:var(--navy-2);color:#fff;cursor:pointer;font-weight:600;font-size:13.5px;
+}
+.btn:hover{background:var(--navy-3);}
+.btn.secondary{background:#fff;color:var(--navy-2);border-color:var(--border);}
+.btn.secondary:hover{background:#F5F8FA;}
+.btn.danger{background:var(--red);border-color:var(--red);}
+.btn.small{padding:4px 9px;font-size:12px;}
+.btn:disabled{opacity:.45;cursor:not-allowed;}
+label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:3px;font-weight:600;}
+input[type=text],input[type=number],input[type=date],input[type=tel],select,textarea{
+  width:100%;padding:8px 9px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);
+}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;}
+.field{margin-bottom:11px;}
+.row{display:flex;gap:10px;flex-wrap:wrap;}
+.row>.field{flex:1;min-width:150px;}
+.hint{font-size:11.5px;color:var(--muted);margin-top:3px;}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:14px;flex-wrap:wrap;}
+.tabs button{background:none;border:none;padding:9px 13px;cursor:pointer;font-size:13.5px;color:var(--muted);font-weight:600;border-bottom:2px solid transparent;}
+.tabs button.active{color:var(--navy-2);border-bottom-color:var(--navy-2);}
+.section-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;}
+.msg{padding:10px 12px;border-radius:6px;font-size:13px;margin-bottom:12px;}
+.msg.err{background:var(--red-bg);color:var(--red);}
+.msg.ok{background:var(--green-bg);color:var(--green);}
+.msg.info{background:#E7F0F8;color:var(--navy-3);}
+.empty{padding:26px;text-align:center;color:var(--muted);font-size:13.5px;}
+.qcard{border:1px solid var(--border);border-radius:8px;padding:11px 13px;background:#fff;}
+.qcard .status{font-size:12px;font-weight:700;}
+.overlay{position:fixed;inset:0;background:rgba(15,25,35,.5);z-index:100;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:30px 14px;}
+.modal{background:#fff;border-radius:10px;max-width:640px;width:100%;padding:20px;}
+.modal .close{float:right;background:none;border:none;font-size:20px;cursor:pointer;color:var(--muted);}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;}
+.dot.green{background:var(--green);}.dot.amber{background:var(--amber);}.dot.red{background:var(--red);}
+.helpbox{background:#F5F8FA;border:1px dashed var(--border);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--muted);margin-bottom:12px;}
+footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0 6px;}
+#sidebarScrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:35;}
+@media(max-width:880px){
+  #sidebar{transform:translateX(-100%);}
+  #sidebar.open{transform:translateX(0);}
+  #sidebarScrim.show{display:block;}
+  #main{margin-left:0;}
+  #hamburger{display:block;}
+  .grid.cols4,.grid.cols3,.grid.cols2{grid-template-columns:1fr 1fr;}
+  #content{padding:14px 12px 60px;}
+}
+::-webkit-scrollbar{height:9px;width:9px;}
+::-webkit-scrollbar-thumb{background:#c5d0da;border-radius:5px;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebarScrim" onclick="closeSidebar()"></div>
+  <nav id="sidebar">
+    <div class="brand"><b>SHG Suite</b><span>Records · Accounting · Grading</span></div>
+    <ul id="navlist"></ul>
+    <div class="foot">Offline-first. Data stored on this device only.</div>
+  </nav>
+  <div id="main">
+    <div id="topbar">
+      <button id="hamburger" onclick="toggleSidebar()">☰</button>
+      <div class="shgname" id="topShgName">SHG</div>
+      <div class="quickstats" id="topStats"></div>
+    </div>
+    <div id="content"></div>
+    <footer class="byline">Developed by Anil Sharma, Former General Manager, Central Bank of India.</footer>
+  </div>
+</div>
+<div id="modalRoot"></div>
+
+<script>
+/* ============================================================
+   SHG RECORDS, ACCOUNTING & LOKOS-READY APPLICATION
+   Single-file, offline-first, no backend, no build step.
+   All data persists to localStorage on this device only.
+   ============================================================ */
+
+/* ---------------- Constants ---------------- */
+const LS_KEY = 'shg_suite_db_v1';
+const ACCOUNTS = {
+  CASH:            {label:'Cash in Hand',        type:'asset'},
+  BANK:            {label:'Bank Account',        type:'asset'},
+  MEMBER_LOANS:    {label:'Member Loans Outstanding', type:'asset'},
+  OTHER_ASSETS:    {label:'Other Assets',         type:'asset'},
+  MEMBER_SAVINGS:  {label:'Member Savings',       type:'liability'},
+  CIF:             {label:'Community Investment Fund (CIF)', type:'liability'},
+  OTHER_LIABILITIES:{label:'Other Liabilities',   type:'liability'},
+  SHG_FUND:        {label:'SHG Fund / Capital',   type:'equity'},
+  INTEREST_INCOME: {label:'Interest Income',      type:'income'},
+  FINE_INCOME:     {label:'Fine / Penalty Income',type:'income'},
+  OTHER_INCOME:    {label:'Other Income',         type:'income'}
+};
+const DEFAULT_EXPENSE_CATS = ['Stationery','Meeting Expenses','Training','Travel','Bank Charges','Audit','VO/CLF Contribution','Refreshments','Office Expenses','Other Approved Expenses'];
+const ROLES = ['SHG Admin','Bookkeeper','President/Secretary','Vitta Sakhi/Bank Sakhi','Auditor'];
+
+/* ---------------- State ---------------- */
+let DB = null;
+let ROUTE = 'dashboard';
+let FLASH = null;
+
+/* ---------------- Persistence ---------------- */
+function freshDB(){
+  return {
+    profile:{ name:'', shgId:'', state:'', district:'', block:'', gp:'', village:'', voClf:'',
+      formationDate:'', meetingDay:'Monday', meetingFrequency:'Monthly', financialYearStart:'04-01',
+      president:'', secretary:'', treasurer:'', contact:'',
+      banks:[] },
+    members:[],
+    meetings:[],
+    loans:[],
+    cif:[],
+    transactions:[],
+    expenseCategories: DEFAULT_EXPENSE_CATS.slice(),
+    closedPeriods:[],
+    auditLog:[],
+    grading:{ ruleVersion:'2026.1', history:{} },
+    settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'' },
+    seq:1
+  };
+}
+function loadDB(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(raw){ DB = JSON.parse(raw); if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{}}; return; }
+  }catch(e){}
+  DB = freshDB();
+}
+function saveDB(){ localStorage.setItem(LS_KEY, JSON.stringify(DB)); }
+function nextId(prefix){ DB.seq = (DB.seq||1)+1; return prefix+'-'+String(DB.seq).padStart(5,'0'); }
+function nowStamp(){ return new Date().toISOString(); }
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+
+/* ---------------- Utilities ---------------- */
+function rupee(n){
+  n = Math.round((n||0)*100)/100;
+  const neg = n<0; n=Math.abs(n);
+  let parts = n.toFixed(2).split('.');
+  let intPart = parts[0];
+  let last3 = intPart.slice(-3);
+  let rest = intPart.slice(0,-3);
+  if(rest!=='') rest = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',';
+  return (neg?'-':'') + '₹' + rest + last3 + '.' + parts[1];
+}
+function fmtDate(d){
+  if(!d) return '';
+  const dt = new Date(d+'T00:00:00');
+  if(isNaN(dt)) return d;
+  return String(dt.getDate()).padStart(2,'0')+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+dt.getFullYear();
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function monthKey(d){ return (d||todayStr()).slice(0,7); }
+function isPeriodClosed(date){ return DB.closedPeriods.includes(monthKey(date)); }
+function activeMembers(){ return DB.members.filter(m=>m.status==='Active'); }
+function memberName(id){ const m=DB.members.find(x=>x.id===id); return m?m.name:'—'; }
+function logAudit(action, details){
+  DB.auditLog.unshift({ts:nowStamp(), user:DB.settings.currentUserName, role:DB.settings.currentUserRole, action, details});
+  if(DB.auditLog.length>3000) DB.auditLog.length=3000;
+}
+function flash(type,text){ FLASH={type,text}; }
+
+/* ---------------- Transaction Engine (double entry) ---------------- */
+function postTxn(t){
+  // t: {date, type, debit, credit, amount, memberId, loanId, narration, meetingId, category}
+  if(!t.date) throw new Error('Date is required.');
+  if(isPeriodClosed(t.date)) throw new Error('Period '+monthKey(t.date)+' is closed. Reopen it in Settings to post here.');
+  if(!ACCOUNTS[t.debit] && !t.debit.startsWith('EXP_')) throw new Error('Unknown debit account: '+t.debit);
+  if(!ACCOUNTS[t.credit] && !t.credit.startsWith('EXP_')) throw new Error('Unknown credit account: '+t.credit);
+  const amt = Math.round((parseFloat(t.amount)||0)*100)/100;
+  if(amt<=0) throw new Error('Amount must be greater than zero.');
+  const txn = {
+    id: nextId('TXN'),
+    date: t.date,
+    voucherNo: t.voucherNo || nextId('V'),
+    type: t.type||'Journal',
+    debit: t.debit, credit: t.credit, amount: amt,
+    memberId: t.memberId||'', loanId: t.loanId||'', meetingId: t.meetingId||'',
+    narration: t.narration||'',
+    createdBy: DB.settings.currentUserName, createdAt: nowStamp(),
+    modifiedBy:'', modifiedAt:'',
+    reversed:false, reversalOf: t.reversalOf||''
+  };
+  DB.transactions.push(txn);
+  logAudit('POST_TXN', txn.voucherNo+' Dr '+txn.debit+' / Cr '+txn.credit+' '+rupee(amt));
+  return txn;
+}
+function reverseTxn(id, reason){
+  const orig = DB.transactions.find(x=>x.id===id);
+  if(!orig) throw new Error('Transaction not found.');
+  if(orig.reversed) throw new Error('Already reversed.');
+  const rev = postTxn({date: todayStr(), type:'Reversal', debit:orig.credit, credit:orig.debit,
+    amount:orig.amount, memberId:orig.memberId, loanId:orig.loanId, meetingId:orig.meetingId,
+    narration:'Reversal of '+orig.voucherNo+(reason?(' — '+reason):''), reversalOf:orig.id});
+  orig.reversed = true;
+  orig.modifiedBy = DB.settings.currentUserName; orig.modifiedAt = nowStamp();
+  logAudit('REVERSE_TXN', 'Reversed '+orig.voucherNo+' via '+rev.voucherNo+(reason?(' — '+reason):''));
+  saveDB();
+  return rev;
+}
+function accountType(code){
+  if(code.startsWith('EXP_')) return 'expense';
+  return ACCOUNTS[code] ? ACCOUNTS[code].type : 'asset';
+}
+function accountLabel(code){
+  if(code.startsWith('EXP_')) return 'Expense: '+code.slice(4);
+  return ACCOUNTS[code] ? ACCOUNTS[code].label : code;
+}
+// Ledger balance for an account, optionally filtered by memberId/loanId/date range
+function ledgerMovement(code, opts){
+  opts = opts||{};
+  let dr=0, cr=0;
+  for(const t of DB.transactions){
+    if(opts.upToDate && t.date > opts.upToDate) continue;
+    if(opts.fromDate && t.date < opts.fromDate) continue;
+    if(opts.memberId && t.memberId!==opts.memberId) continue;
+    if(opts.loanId && t.loanId!==opts.loanId) continue;
+    if(t.debit===code) dr += t.amount;
+    if(t.credit===code) cr += t.amount;
+  }
+  return {dr,cr};
+}
+function accountBalance(code, opts){
+  const {dr,cr} = ledgerMovement(code,opts);
+  const type = accountType(code);
+  const normalDebit = (type==='asset'||type==='expense');
+  // include opening balances for CASH/BANK
+  let opening = 0;
+  if(code==='CASH') opening = DB.settings.openingCash||0;
+  if(code==='BANK') opening = DB.settings.openingBank||0;
+  return normalDebit ? (opening+dr-cr) : (opening+cr-dr);
+}
+function allLedgerCodes(){
+  const codes = Object.keys(ACCOUNTS).slice();
+  const exp = new Set();
+  DB.transactions.forEach(t=>{ if(t.debit.startsWith('EXP_')) exp.add(t.debit); if(t.credit.startsWith('EXP_')) exp.add(t.credit); });
+  DB.expenseCategories.forEach(c=>exp.add('EXP_'+c));
+  return codes.concat(Array.from(exp).sort());
+}
+
+/* ---------------- Member helpers ---------------- */
+function memberSavingsBalance(id){ return accountBalance('MEMBER_SAVINGS',{memberId:id}); }
+function memberLoanOutstanding(id){
+  let total=0;
+  DB.loans.filter(l=>l.memberId===id && l.status!=='Closed').forEach(l=>{ total += loanOutstanding(l.id).principal; });
+  return total;
+}
+function loanOutstanding(loanId){
+  const loan = DB.loans.find(l=>l.id===loanId);
+  if(!loan) return {principal:0, interestReceivable:0};
+  let principalPaid=0, interestPaid=0;
+  DB.transactions.filter(t=>t.loanId===loanId).forEach(t=>{
+    if(t.credit==='MEMBER_LOANS') principalPaid += t.amount; // repayment of principal
+    if(t.debit==='MEMBER_LOANS' && t.type!=='Disbursement' ) { /* reversal add-back handled via signs already */ }
+  });
+  const principalOutstanding = Math.max(0, (loan.principal||0) - principalPaid);
+  return {principal: principalOutstanding, interestPaid};
+}
+
+/* ---------------- Rendering shell ---------------- */
+const NAV = [
+  {grp:'Overview'},
+  {id:'dashboard', label:'Dashboard', icon:'▦'},
+  {id:'profile', label:'SHG Profile', icon:'◎'},
+  {grp:'Field Operations'},
+  {id:'members', label:'Members', icon:'◈'},
+  {id:'meetings', label:'Meetings', icon:'◷'},
+  {id:'savings', label:'Savings', icon:'●'},
+  {id:'loans', label:'Loans', icon:'◐'},
+  {id:'cif', label:'CIF', icon:'◑'},
+  {grp:'Accounting'},
+  {id:'transactions', label:'Transactions / Vouchers', icon:'≡'},
+  {id:'cashbook', label:'Cash Book', icon:'▤'},
+  {id:'bankbook', label:'Bank Book', icon:'▥'},
+  {id:'ledger', label:'General Ledger', icon:'▦'},
+  {id:'trialbalance', label:'Trial Balance', icon:'⚖'},
+  {id:'statements', label:'Financial Statements', icon:'▧'},
+  {id:'reconciliation', label:'Bank Reconciliation', icon:'⇄'},
+  {grp:'Quality & Compliance'},
+  {id:'dataquality', label:'Data Quality Check', icon:'✓'},
+  {id:'grading', label:'SHG Grading', icon:'★'},
+  {id:'lokos', label:'LokOS Readiness & Export', icon:'⇪'},
+  {id:'audit', label:'Audit Trail', icon:'🕘'},
+  {grp:'Records'},
+  {id:'reports', label:'Reports', icon:'▤'},
+  {id:'memberstatement', label:'Member Statement', icon:'▤'},
+  {grp:'System'},
+  {id:'backup', label:'Backup & Restore', icon:'⇅'},
+  {id:'settings', label:'Settings', icon:'⚙'},
+  {id:'help', label:'Help & Training', icon:'?'}
+];
+function buildNav(){
+  const ul = document.getElementById('navlist');
+  ul.innerHTML = NAV.map(n=>{
+    if(n.grp) return `<li class="grp">${esc(n.grp)}</li>`;
+    return `<li><a class="${ROUTE===n.id?'active':''}" onclick="go('${n.id}')">${n.icon} &nbsp;${esc(n.label)}</a></li>`;
+  }).join('');
+}
+function go(route){ ROUTE = route; location.hash = route; closeSidebar(); render(); window.scrollTo(0,0); }
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); document.getElementById('sidebarScrim').classList.toggle('show'); }
+function closeSidebar(){ document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebarScrim').classList.remove('show'); }
+
+function render(){
+  buildNav();
+  document.getElementById('topShgName').textContent = DB.profile.name || 'Unnamed SHG';
+  document.getElementById('topStats').innerHTML =
+    `Cash <b>${rupee(accountBalance('CASH'))}</b> &nbsp;·&nbsp; Bank <b>${rupee(accountBalance('BANK'))}</b> &nbsp;·&nbsp; Members <b>${activeMembers().length}</b>`;
+  const c = document.getElementById('content');
+  let html = '';
+  if(FLASH){ html += `<div class="msg ${FLASH.type==='error'?'err':(FLASH.type==='ok'?'ok':'info')}">${esc(FLASH.text)}</div>`; FLASH=null; }
+  try{
+    html += ({
+      dashboard: viewDashboard, profile: viewProfile, members: viewMembers, meetings: viewMeetings,
+      savings: viewSavings, loans: viewLoans, cif: viewCIF, transactions: viewTransactions,
+      cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'),
+      ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
+      reconciliation: viewReconciliation, dataquality: viewDataQuality, grading: viewGrading,
+      lokos: viewLokos, audit: viewAudit, reports: viewReports, memberstatement: viewMemberStatement,
+      backup: viewBackup, settings: viewSettings, help: viewHelp
+    }[ROUTE] || viewDashboard)();
+  }catch(e){
+    html += `<div class="msg err">Error rendering this screen: ${esc(e.message)}</div>`;
+    console.error(e);
+  }
+  c.innerHTML = html;
+  saveDB();
+}
+function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
+function openModal(html){ document.getElementById('modalRoot').innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`; }
+
+/* ============================================================ DASHBOARD */
+function viewDashboard(){
+  const totalSavings = activeMembers().reduce((s,m)=>s+memberSavingsBalance(m.id),0);
+  const totalLoanOut = DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
+  const overdue = DB.loans.filter(l=>l.status!=='Closed' && l.nextDueDate && l.nextDueDate<todayStr());
+  const cifOut = DB.cif.reduce((s,c)=>s+(c.amount||0),0) - 0;
+  const monthTx = DB.transactions.filter(t=>monthKey(t.date)===monthKey(todayStr()) && !t.reversed);
+  const collection = monthTx.filter(t=>['CASH','BANK'].includes(t.debit)).reduce((s,t)=>s+t.amount,0);
+  const iAndE = incomeExpenditure(fyStart(), todayStr());
+
+  let html = `<div class="section-title"><h2>Dashboard</h2><span class="hint">${fmtDate(todayStr())}</span></div>`;
+  if(!DB.members.length){
+    html += `<div class="card"><h3>Get Started</h3><p class="hint">Set up your SHG Profile and add members to begin, or explore the app first with sample data.</p>
+      <div class="row"><button class="btn" onclick="go('profile')">Set Up SHG Profile</button><button class="btn secondary" onclick="go('members')">Add Members</button><button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button></div></div>`;
+  }
+  html += `<div class="grid cols4">
+    ${stat('Active Members', activeMembers().length)}
+    ${stat('Total Savings', rupee(totalSavings))}
+    ${stat('Loan Outstanding', rupee(totalLoanOut))}
+    ${stat('Overdue Loans', overdue.length, overdue.length>0)}
+    ${stat('Cash Balance', rupee(accountBalance('CASH')))}
+    ${stat('Bank Balance', rupee(accountBalance('BANK')))}
+    ${stat('CIF Outstanding', rupee(cifOutstanding()))}
+    ${stat('This Month Collection', rupee(collection))}
+    ${stat('Income (this FY)', rupee(iAndE.income))}
+    ${stat('Expenditure (this FY)', rupee(iAndE.expenditure))}
+    ${stat('Surplus / (Deficit)', rupee(iAndE.surplus), iAndE.surplus<0)}
+    ${stat('SHG Fund', rupee(accountBalance('SHG_FUND')))}
+  </div>`;
+
+  const dq = runDataQuality();
+  html += `<div class="card"><h3>Data Quality Snapshot</h3>${dqSummaryRow(dq)}
+    <div style="margin-top:8px"><a onclick="go('dataquality')" style="cursor:pointer">Open full Data Quality Check →</a></div></div>`;
+
+  const recent = DB.transactions.slice(-8).reverse();
+  html += `<div class="card"><h3>Recent Transactions</h3>`;
+  html += recent.length ? tbl(['Date','Voucher','Debit','Credit','Amount','Narration'],
+    recent.map(t=>[fmtDate(t.date), t.voucherNo, accountLabel(t.debit), accountLabel(t.credit), rightCell(rupee(t.amount)), esc(t.narration)])) :
+    `<div class="empty">No transactions posted yet. Start from Meetings or Transactions.</div>`;
+  html += `</div>`;
+  return html;
+}
+function stat(label,val,warn){ return `<div class="stat"><div class="lbl">${esc(label)}</div><div class="val ${warn?'neg':''}">${val}</div></div>`; }
+function rightCell(s){ return '§R§'+s; }
+function tbl(headers, rows){
+  let h = `<div class="tablewrap"><table><thead><tr>${headers.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`;
+  rows.forEach(r=>{ h+= '<tr>' + r.map(c=>{
+      if(typeof c==='string' && c.startsWith('§R§')) return `<td class="num">${c.slice(3)}</td>`;
+      return `<td>${c}</td>`;
+    }).join('') + '</tr>'; });
+  h += '</tbody></table></div>';
+  return h;
+}
+function fyStart(){
+  const d = new Date();
+  const [mm,dd] = (DB.profile.financialYearStart||'04-01').split('-').map(Number);
+  let y = d.getFullYear();
+  const fyThis = new Date(y,mm-1,dd);
+  if(d < fyThis) y -= 1;
+  return `${y}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+}
+
+/* ============================================================ PROFILE */
+function viewProfile(){
+  const p = DB.profile;
+  let html = `<div class="section-title"><h2>SHG Profile</h2></div>`;
+  html += `<div class="card"><form onsubmit="return saveProfile(event)">
+    <div class="row">
+      <div class="field"><label>SHG Name *</label><input required name="name" value="${esc(p.name)}"></div>
+      <div class="field"><label>SHG ID</label><input name="shgId" value="${esc(p.shgId)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>State</label><input name="state" value="${esc(p.state)}"></div>
+      <div class="field"><label>District</label><input name="district" value="${esc(p.district)}"></div>
+      <div class="field"><label>Block</label><input name="block" value="${esc(p.block)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Gram Panchayat</label><input name="gp" value="${esc(p.gp)}"></div>
+      <div class="field"><label>Village</label><input name="village" value="${esc(p.village)}"></div>
+      <div class="field"><label>VO / CLF</label><input name="voClf" value="${esc(p.voClf)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Formation Date</label><input type="date" name="formationDate" value="${esc(p.formationDate)}"></div>
+      <div class="field"><label>Meeting Day</label><select name="meetingDay">${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d=>`<option ${p.meetingDay===d?'selected':''}>${d}</option>`).join('')}</select></div>
+      <div class="field"><label>Meeting Frequency</label><select name="meetingFrequency">${['Weekly','Fortnightly','Monthly'].map(d=>`<option ${p.meetingFrequency===d?'selected':''}>${d}</option>`).join('')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>President</label><input name="president" value="${esc(p.president)}"></div>
+      <div class="field"><label>Secretary</label><input name="secretary" value="${esc(p.secretary)}"></div>
+      <div class="field"><label>Treasurer / Bookkeeper</label><input name="treasurer" value="${esc(p.treasurer)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Contact Details</label><input name="contact" value="${esc(p.contact)}"></div>
+      <div class="field"><label>Financial Year Start (MM-DD)</label><input name="financialYearStart" value="${esc(p.financialYearStart)}" placeholder="04-01"></div>
+    </div>
+    <button class="btn" type="submit">Save Profile</button>
+  </form></div>`;
+
+  html += `<div class="card"><h3>Bank Accounts</h3>`;
+  html += p.banks.length ? tbl(['Bank','Branch','Account No.','IFSC',''],
+    p.banks.map((b,i)=>[esc(b.bank),esc(b.branch),esc(b.accno),esc(b.ifsc),`<button class="btn small danger" onclick="removeBank(${i})">Remove</button>`])) :
+    `<div class="empty">No bank accounts added.</div>`;
+  html += `<div style="margin-top:10px"><button class="btn secondary small" onclick="addBankPrompt()">+ Add Bank Account</button></div></div>`;
+  return html;
+}
+function saveProfile(ev){
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  for(const [k,v] of f.entries()) DB.profile[k]=v;
+  logAudit('EDIT_PROFILE','Updated SHG profile');
+  flash('ok','Profile saved.'); render(); return false;
+}
+function addBankPrompt(){
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Add Bank Account</h3>
+  <form onsubmit="return addBank(event)">
+    <div class="field"><label>Bank Name</label><input name="bank" required></div>
+    <div class="field"><label>Branch</label><input name="branch"></div>
+    <div class="field"><label>Account Number</label><input name="accno" required></div>
+    <div class="field"><label>IFSC</label><input name="ifsc"></div>
+    <button class="btn" type="submit">Add</button>
+  </form>`);
+}
+function addBank(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  DB.profile.banks.push({bank:f.get('bank'),branch:f.get('branch'),accno:f.get('accno'),ifsc:f.get('ifsc')});
+  closeModal(); flash('ok','Bank account added.'); render(); return false;
+}
+function removeBank(i){ if(confirm('Remove this bank account?')){ DB.profile.banks.splice(i,1); render(); } }
+
+/* ============================================================ MEMBERS */
+function viewMembers(){
+  let html = `<div class="section-title"><h2>Member Register</h2><button class="btn" onclick="memberForm()">+ Add Member</button></div>`;
+  if(!DB.members.length){ html += `<div class="card"><div class="empty">No members yet. Add your first member to begin.</div></div>`; return html; }
+  html += `<div class="card">`;
+  html += tbl(['ID','Name','Father/Husband','Mobile','Village','Status','Savings Bal.','Loan O/S',''],
+    DB.members.map(m=>[m.id, esc(m.name), esc(m.fatherHusband), esc(m.mobile), esc(m.village),
+      badge(m.status, m.status==='Active'?'green':(m.status==='Exited'?'red':'amber')),
+      rightCell(rupee(memberSavingsBalance(m.id))), rightCell(rupee(memberLoanOutstanding(m.id))),
+      `<button class="btn small secondary" onclick="memberForm('${m.id}')">Edit</button> <a style="cursor:pointer;font-size:12px" onclick="go('memberstatement');setTimeout(()=>document.getElementById('msMember').value='${m.id}',0)">Statement</a>`
+    ]));
+  html += `</div>`;
+  return html;
+}
+function badge(text,cls){ return `<span class="badge ${cls}">${esc(text)}</span>`; }
+function memberForm(id){
+  const m = id ? DB.members.find(x=>x.id===id) : {id:'', name:'',fatherHusband:'',mobile:'',village:'',doj:todayStr(),status:'Active',occupation:'',nominee:'',bankAccno:'',bankIfsc:''};
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>${id?'Edit':'Add'} Member</h3>
+  <form onsubmit="return saveMember(event,'${id||''}')">
+    <div class="row">
+      <div class="field"><label>Name *</label><input name="name" required value="${esc(m.name)}"></div>
+      <div class="field"><label>Father's/Husband's Name</label><input name="fatherHusband" value="${esc(m.fatherHusband)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Mobile</label><input name="mobile" value="${esc(m.mobile)}"></div>
+      <div class="field"><label>Village</label><input name="village" value="${esc(m.village)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Date of Joining</label><input type="date" name="doj" value="${esc(m.doj)}"></div>
+      <div class="field"><label>Status</label><select name="status">${['Active','Inactive','Exited'].map(s=>`<option ${m.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Occupation</label><input name="occupation" value="${esc(m.occupation)}"></div>
+      <div class="field"><label>Nominee</label><input name="nominee" value="${esc(m.nominee)}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Bank Account No.</label><input name="bankAccno" value="${esc(m.bankAccno)}"></div>
+      <div class="field"><label>IFSC</label><input name="bankIfsc" value="${esc(m.bankIfsc)}"></div>
+    </div>
+    <button class="btn" type="submit">Save Member</button>
+  </form>`);
+}
+function saveMember(ev,id){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  const data = Object.fromEntries(f.entries());
+  if(id){
+    Object.assign(DB.members.find(x=>x.id===id), data);
+    logAudit('EDIT_MEMBER', id+' updated');
+  } else {
+    const dup = DB.members.some(x=>x.name.trim().toLowerCase()===data.name.trim().toLowerCase() && x.fatherHusband.trim().toLowerCase()===(data.fatherHusband||'').trim().toLowerCase());
+    const newId = nextId('MEM');
+    DB.members.push(Object.assign({id:newId}, data));
+    logAudit('ADD_MEMBER', newId+' '+data.name+(dup?' (possible duplicate name)':''));
+  }
+  closeModal(); flash('ok','Member saved.'); render(); return false;
+}
+
+/* ============================================================ MEETINGS (guided workflow) */
+function viewMeetings(){
+  let html = `<div class="section-title"><h2>SHG Meetings</h2><button class="btn" onclick="go('meetingnew')">+ Conduct New Meeting</button></div>`;
+  html += `<div class="card">`;
+  html += DB.meetings.length ? tbl(['Date','Attendance','Savings','Repayment','New Loans','Expenses','Status'],
+    DB.meetings.slice().reverse().map(mt=>[fmtDate(mt.date), mt.present+'/'+mt.totalMembers,
+      rightCell(rupee(mt.totals.savings)), rightCell(rupee(mt.totals.repayment)), rightCell(rupee(mt.totals.newLoans)),
+      rightCell(rupee(mt.totals.expenses)), badge('Posted','green')])) :
+    `<div class="empty">No meetings recorded yet.</div>`;
+  html += `</div>`;
+  if(ROUTE==='meetingnew') html += meetingWorkflow();
+  return html;
+}
+function meetingWorkflow(){
+  if(!activeMembers().length) return `<div class="card"><div class="empty">Add members first before conducting a meeting.</div></div>`;
+  let html = `<div class="card"><h3>Conduct Meeting</h3>
+  <div class="helpbox">Enter savings, repayment and fines for each present member. Add any new loan disbursements and meeting expenses below, then Post. All ledger entries are created automatically — nothing needs to be entered twice.</div>
+  <form onsubmit="return postMeeting(event)">
+  <div class="row">
+    <div class="field"><label>Meeting Date *</label><input type="date" name="date" value="${todayStr()}" required></div>
+    <div class="field"><label>Collect In</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+  </div>
+  <div class="tablewrap"><table><thead><tr><th>Present</th><th>Member</th><th>Savings ₹</th><th>Repay Principal ₹</th><th>Repay Interest ₹</th><th>Fine ₹</th></tr></thead><tbody>`;
+  activeMembers().forEach(m=>{
+    html += `<tr>
+      <td><input type="checkbox" name="present_${m.id}" checked></td>
+      <td>${esc(m.name)}</td>
+      <td><input type="number" min="0" step="0.01" name="sav_${m.id}" style="width:90px"></td>
+      <td><input type="number" min="0" step="0.01" name="rp_${m.id}" style="width:90px"></td>
+      <td><input type="number" min="0" step="0.01" name="ri_${m.id}" style="width:90px"></td>
+      <td><input type="number" min="0" step="0.01" name="fine_${m.id}" style="width:80px"></td>
+    </tr>`;
+  });
+  html += `</tbody></table></div>
+  <h3 style="margin-top:16px">New Loan Disbursed at this Meeting (optional)</h3>
+  <div class="row">
+    <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${activeMembers().map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Purpose</label><input name="newloan_purpose"></div>
+    <div class="field"><label>Principal ₹</label><input type="number" min="0" step="0.01" name="newloan_amount"></div>
+    <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="newloan_rate" value="12"></div>
+    <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="newloan_inst" value="12"></div>
+  </div>
+  <h3 style="margin-top:16px">Meeting Expenses (optional)</h3>
+  <div class="row">
+    <div class="field"><label>Category</label><select name="exp_cat">${DB.expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>
+    <div class="field"><label>Amount ₹</label><input type="number" min="0" step="0.01" name="exp_amount"></div>
+    <div class="field"><label>Narration</label><input name="exp_narration"></div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button class="btn" type="submit">Post Meeting</button>
+    <button class="btn secondary" type="button" onclick="go('meetings')">Cancel</button>
+  </div>
+  </form></div>`;
+  return html;
+}
+function postMeeting(ev){
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  const date = f.get('date');
+  const mode = f.get('mode');
+  if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
+  const totals = {savings:0, repayment:0, newLoans:0, expenses:0, fines:0};
+  let present=0;
+  const members = activeMembers();
+  const meetingId = nextId('MTG');
+  try{
+    members.forEach(m=>{
+      const isPresent = f.get('present_'+m.id);
+      if(isPresent) present++;
+      const sav = parseFloat(f.get('sav_'+m.id))||0;
+      const rp = parseFloat(f.get('rp_'+m.id))||0;
+      const ri = parseFloat(f.get('ri_'+m.id))||0;
+      const fine = parseFloat(f.get('fine_'+m.id))||0;
+      if(sav>0){ postTxn({date,type:'Savings',debit:mode,credit:'MEMBER_SAVINGS',amount:sav,memberId:m.id,meetingId,narration:'Meeting savings — '+m.name}); totals.savings+=sav; }
+      if(rp>0){
+        const loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed');
+        if(!loan) throw new Error('No open loan found for '+m.name+' but repayment entered.');
+        postTxn({date,type:'Loan Repayment',debit:mode,credit:'MEMBER_LOANS',amount:rp,memberId:m.id,loanId:loan.id,meetingId,narration:'Principal repayment — '+m.name});
+        totals.repayment+=rp;
+      }
+      if(ri>0){
+        const loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed');
+        postTxn({date,type:'Interest Received',debit:mode,credit:'INTEREST_INCOME',amount:ri,memberId:m.id,loanId:loan?loan.id:'',meetingId,narration:'Interest received — '+m.name});
+        totals.repayment+=ri;
+      }
+      if(fine>0){ postTxn({date,type:'Fine',debit:mode,credit:'FINE_INCOME',amount:fine,memberId:m.id,meetingId,narration:'Fine/penalty — '+m.name}); totals.fines+=fine; }
+    });
+    const nlMember = f.get('newloan_member');
+    if(nlMember){
+      const amt = parseFloat(f.get('newloan_amount'))||0;
+      if(amt>0){
+        const loan = {
+          id: nextId('LOAN'), memberId:nlMember, purpose:f.get('newloan_purpose')||'',
+          sanctionDate:date, disbursementDate:date, principal:amt,
+          interestRate: parseFloat(f.get('newloan_rate'))||0, instalments: parseInt(f.get('newloan_inst'))||12,
+          status:'Active', nextDueDate: addMonths(date,1)
+        };
+        DB.loans.push(loan);
+        postTxn({date,type:'Disbursement',debit:'MEMBER_LOANS',credit:mode,amount:amt,memberId:nlMember,loanId:loan.id,meetingId,narration:'Loan disbursed — '+memberName(nlMember)});
+        totals.newLoans+=amt;
+      }
+    }
+    const expAmt = parseFloat(f.get('exp_amount'))||0;
+    if(expAmt>0){
+      const cat = f.get('exp_cat');
+      postTxn({date,type:'Expense',debit:'EXP_'+cat,credit:mode,amount:expAmt,meetingId,narration:f.get('exp_narration')||cat});
+      totals.expenses+=expAmt;
+    }
+    DB.meetings.push({id:meetingId,date,totalMembers:members.length,present,totals});
+    logAudit('POST_MEETING', meetingId+' on '+date+' — '+present+'/'+members.length+' present');
+    flash('ok','Meeting posted. All registers and ledgers updated automatically.');
+    ROUTE='meetings'; render();
+  }catch(e){
+    flash('error', e.message);
+    render();
+  }
+  return false;
+}
+function addMonths(dateStr,n){
+  const d = new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10);
+}
+
+/* ============================================================ SAVINGS */
+function viewSavings(){
+  let html = `<div class="section-title"><h2>Savings Register</h2></div>`;
+  const rows = activeMembers().map(m=>{
+    const {dr,cr} = ledgerMovement('MEMBER_SAVINGS',{memberId:m.id});
+    return [m.id, esc(m.name), rightCell(rupee(cr)), rightCell(rupee(dr)), rightCell(rupee(memberSavingsBalance(m.id)))];
+  });
+  const totalSav = activeMembers().reduce((s,m)=>s+memberSavingsBalance(m.id),0);
+  html += `<div class="grid cols3">${stat('Total Members Saving', activeMembers().filter(m=>memberSavingsBalance(m.id)>0).length)}${stat('Total SHG Savings', rupee(totalSav))}${stat('Avg. Savings / Member', rupee(activeMembers().length?totalSav/activeMembers().length:0))}</div>`;
+  html += `<div class="card">${tbl(['ID','Member','Total Saved','Withdrawn','Closing Balance'], rows)}</div>`;
+  html += `<div class="card"><h3>Record a Standalone Savings / Withdrawal Entry</h3>
+  <form onsubmit="return postSavingsEntry(event)">
+    <div class="row">
+      <div class="field"><label>Member</label><select name="memberId" required>${activeMembers().map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
+      <div class="field"><label>Type</label><select name="dir"><option value="in">Savings Deposit</option><option value="out">Savings Withdrawal</option></select></div>
+      <div class="field"><label>Amount ₹</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
+      <div class="field"><label>Cash / Bank</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+    </div>
+    <button class="btn" type="submit">Post Entry</button>
+  </form></div>`;
+  return html;
+}
+function postSavingsEntry(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    const dir = f.get('dir'), mode=f.get('mode'), amount=f.get('amount'), memberId=f.get('memberId'), date=f.get('date');
+    if(dir==='in') postTxn({date,type:'Savings',debit:mode,credit:'MEMBER_SAVINGS',amount,memberId,narration:'Savings deposit — '+memberName(memberId)});
+    else postTxn({date,type:'Savings Withdrawal',debit:'MEMBER_SAVINGS',credit:mode,amount,memberId,narration:'Savings withdrawal — '+memberName(memberId)});
+    flash('ok','Savings entry posted.'); render();
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+
+/* ============================================================ LOANS */
+function viewLoans(){
+  let html = `<div class="section-title"><h2>Member Loans</h2><button class="btn" onclick="loanForm()">+ New Loan</button></div>`;
+  if(!DB.loans.length){ html += `<div class="card"><div class="empty">No loans issued yet.</div></div>`; return html; }
+  html += `<div class="card">${tbl(['Loan ID','Member','Purpose','Principal','Rate %','O/S Principal','Next Due','Status',''],
+    DB.loans.slice().reverse().map(l=>{
+      const os = loanOutstanding(l.id).principal;
+      const overdue = l.status!=='Closed' && l.nextDueDate && l.nextDueDate<todayStr();
+      return [l.id, esc(memberName(l.memberId)), esc(l.purpose), rightCell(rupee(l.principal)), l.interestRate+'%',
+        rightCell(rupee(os)), fmtDate(l.nextDueDate), overdue?badge('Overdue','red'):badge(l.status,l.status==='Closed'?'grey':'green'),
+        os<=0.5 && l.status!=='Closed' ? `<button class="btn small secondary" onclick="closeLoan('${l.id}')">Mark Closed</button>` : ''
+      ];
+    }))}</div>`;
+  return html;
+}
+function loanForm(){
+  if(!activeMembers().length){ flash('error','Add a member first.'); render(); return; }
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>New Loan</h3>
+  <form onsubmit="return saveLoan(event)">
+    <div class="row">
+      <div class="field"><label>Member *</label><select name="memberId" required>${activeMembers().map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Purpose</label><input name="purpose"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Sanction Date</label><input type="date" name="sanctionDate" value="${todayStr()}"></div>
+      <div class="field"><label>Disbursement Date</label><input type="date" name="disbursementDate" value="${todayStr()}"></div>
+      <div class="field"><label>Cash / Bank Out</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Principal ₹ *</label><input type="number" min="1" step="0.01" name="principal" required></div>
+      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="interestRate" value="12"></div>
+      <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="instalments" value="12"></div>
+    </div>
+    <button class="btn" type="submit">Disburse Loan</button>
+  </form>`);
+}
+function saveLoan(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    const data = Object.fromEntries(f.entries());
+    const loan = { id: nextId('LOAN'), memberId:data.memberId, purpose:data.purpose,
+      sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate,
+      principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
+      instalments: parseInt(data.instalments)||12, status:'Active', nextDueDate: addMonths(data.disbursementDate,1) };
+    DB.loans.push(loan);
+    postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:data.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,narration:'Loan disbursed — '+memberName(loan.memberId)});
+    closeModal(); flash('ok','Loan disbursed.'); render();
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+function closeLoan(id){
+  const l = DB.loans.find(x=>x.id===id); if(!l) return;
+  l.status='Closed'; logAudit('CLOSE_LOAN', id+' marked closed'); flash('ok','Loan marked closed.'); render();
+}
+
+/* ============================================================ CIF */
+function viewCIF(){
+  let html = `<div class="section-title"><h2>CIF Management</h2><button class="btn" onclick="cifForm()">+ Record CIF Received</button></div>`;
+  html += `<div class="grid cols2">${stat('Total CIF Received', rupee(DB.cif.reduce((s,c)=>s+(c.amount||0),0)))}${stat('CIF Outstanding (Liability)', rupee(cifOutstanding()))}</div>`;
+  html += `<div class="card">${DB.cif.length ? tbl(['Date','Source','Amount','Rate %','Period (months)','Bank'],
+    DB.cif.map(c=>[fmtDate(c.date), esc(c.source), rightCell(rupee(c.amount)), c.rate+'%', c.period, esc(c.bank)])) :
+    `<div class="empty">No CIF recorded yet.</div>`}</div>`;
+  return html;
+}
+function cifOutstanding(){ return accountBalance('CIF'); }
+function cifForm(){
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record CIF Received</h3>
+  <form onsubmit="return saveCIF(event)">
+    <div class="row">
+      <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
+      <div class="field"><label>Source</label><input name="source" placeholder="e.g. VO / CLF / NRLM"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Amount ₹ *</label><input type="number" min="1" step="0.01" name="amount" required></div>
+      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="9"></div>
+      <div class="field"><label>Repayment Period (months)</label><input type="number" min="1" step="1" name="period" value="36"></div>
+    </div>
+    <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
+    <button class="btn" type="submit">Post CIF Receipt</button>
+  </form>`);
+}
+function saveCIF(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    const data = Object.fromEntries(f.entries());
+    DB.cif.push({date:data.date, source:data.source, amount:parseFloat(data.amount), rate:parseFloat(data.rate)||0, period:parseInt(data.period)||36, bank:data.mode});
+    postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount:data.amount,narration:'CIF received from '+data.source});
+    closeModal(); flash('ok','CIF receipt posted.'); render();
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+
+/* ============================================================ TRANSACTIONS / VOUCHERS */
+function viewTransactions(){
+  let html = `<div class="section-title"><h2>Transactions / Vouchers</h2><button class="btn" onclick="txnForm()">+ New Voucher</button></div>`;
+  const rows = DB.transactions.slice().reverse().slice(0,300).map(t=>[
+    fmtDate(t.date), t.voucherNo, t.type, accountLabel(t.debit), accountLabel(t.credit), rightCell(rupee(t.amount)),
+    esc(t.narration), t.reversed?badge('Reversed','grey'):(t.type==='Reversal'?badge('Reversal','amber'):badge('Posted','green')),
+    t.reversed||t.type==='Reversal' ? '' : `<button class="btn small danger" onclick="doReverse('${t.id}')">Reverse</button>`
+  ]);
+  html += `<div class="card">${DB.transactions.length ? tbl(['Date','Voucher','Type','Debit','Credit','Amount','Narration','Status',''], rows) : `<div class="empty">No transactions yet.</div>`}
+  ${DB.transactions.length>300?'<div class="hint" style="margin-top:8px">Showing latest 300 of '+DB.transactions.length+'. Use Reports to export the full list.</div>':''}
+  </div>`;
+  return html;
+}
+function txnForm(){
+  const codes = allLedgerCodes();
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>New Journal Voucher</h3>
+  <div class="helpbox">Use this for entries not covered by Meetings/Savings/Loans/CIF screens (e.g. bank transfer, opening entries, other income/expense).</div>
+  <form onsubmit="return saveManualTxn(event)">
+    <div class="row">
+      <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
+      <div class="field"><label>Type</label><input name="type" value="Journal"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Debit Account *</label><select name="debit" required>${codes.map(c=>`<option value="${c}">${accountLabel(c)}</option>`).join('')}</select></div>
+      <div class="field"><label>Credit Account *</label><select name="credit" required>${codes.map(c=>`<option value="${c}">${accountLabel(c)}</option>`).join('')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Amount ₹ *</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
+      <div class="field"><label>Member (optional)</label><select name="memberId"><option value="">—</option>${DB.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>Narration</label><input name="narration"></div>
+    <button class="btn" type="submit">Post Voucher</button>
+  </form>`);
+}
+function saveManualTxn(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    const data = Object.fromEntries(f.entries());
+    if(data.debit===data.credit) throw new Error('Debit and credit accounts must differ.');
+    postTxn(data);
+    closeModal(); flash('ok','Voucher posted.'); render();
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+function doReverse(id){
+  const reason = prompt('Reason for reversal (optional):','');
+  try{ reverseTxn(id, reason||''); flash('ok','Transaction reversed.'); render(); }
+  catch(e){ flash('error',e.message); render(); }
+}
+
+/* ============================================================ CASH / BANK BOOK */
+function viewBook(code,title){
+  let html = `<div class="section-title"><h2>${esc(title)}</h2></div>`;
+  let bal = code==='CASH'?(DB.settings.openingCash||0):(DB.settings.openingBank||0);
+  const rows = [['', '', 'Opening Balance','','', rightCell(rupee(bal))]];
+  DB.transactions.filter(t=>t.debit===code||t.credit===code).sort((a,b)=>a.date<b.date?-1:1).forEach(t=>{
+    const isDr = t.debit===code;
+    bal += isDr? t.amount : -t.amount;
+    rows.push([fmtDate(t.date), t.voucherNo, esc(t.narration||t.type), isDr?rightCell(rupee(t.amount)):'', !isDr?rightCell(rupee(t.amount)):'', rightCell(rupee(bal))]);
+  });
+  html += `<div class="grid cols2">${stat('Closing Balance', rupee(bal))}${stat('Entries', rows.length-1)}</div>`;
+  html += `<div class="card">${tbl(['Date','Voucher','Particulars','Receipts (Dr)','Payments (Cr)','Balance'], rows)}</div>`;
+  return html;
+}
+
+/* ============================================================ GENERAL LEDGER */
+function viewLedger(){
+  let html = `<div class="section-title"><h2>General Ledger</h2></div>`;
+  const codes = allLedgerCodes();
+  html += `<div class="card"><label>Select Account</label><select id="ledgerAcct" onchange="render()" style="max-width:340px">${codes.map(c=>`<option value="${c}" ${ (window.__ledgerSel||codes[0])===c?'selected':''}>${accountLabel(c)}</option>`).join('')}</select></div>`;
+  const sel = document.getElementById && document.getElementById('ledgerAcct') ? document.getElementById('ledgerAcct').value : (window.__ledgerSel||codes[0]);
+  window.__ledgerSel = sel;
+  let bal = sel==='CASH'?(DB.settings.openingCash||0):(sel==='BANK'?(DB.settings.openingBank||0):0);
+  const type = accountType(sel);
+  const normalDebit = (type==='asset'||type==='expense');
+  const rows = [['','','Opening Balance','','', rightCell(rupee(bal))]];
+  DB.transactions.filter(t=>t.debit===sel||t.credit===sel).sort((a,b)=>a.date<b.date?-1:1).forEach(t=>{
+    const isDr = t.debit===sel;
+    if(normalDebit) bal += isDr? t.amount : -t.amount; else bal += isDr? -t.amount : t.amount;
+    rows.push([fmtDate(t.date), t.voucherNo, esc(t.narration||t.type), isDr?rightCell(rupee(t.amount)):'', !isDr?rightCell(rupee(t.amount)):'', rightCell(rupee(bal))]);
+  });
+  html += `<div class="card"><h3>${accountLabel(sel)}</h3>${tbl(['Date','Voucher','Particulars','Debit','Credit','Balance'],rows)}</div>`;
+  return html;
+}
+
+/* ============================================================ TRIAL BALANCE */
+function viewTrialBalance(){
+  let html = `<div class="section-title"><h2>Trial Balance</h2><span class="hint">As on ${fmtDate(todayStr())}</span></div>`;
+  const codes = allLedgerCodes();
+  let totalDr=0, totalCr=0;
+  const rows = codes.map(c=>{
+    const type = accountType(c);
+    const normalDebit = (type==='asset'||type==='expense');
+    const bal = accountBalance(c);
+    const dr = normalDebit ? Math.max(bal,0) : Math.max(-bal,0);
+    const cr = normalDebit ? Math.max(-bal,0) : Math.max(bal,0);
+    totalDr+=dr; totalCr+=cr;
+    return [accountLabel(c), rightCell(dr?rupee(dr):''), rightCell(cr?rupee(cr):'')];
+  }).filter(r=> r[1]!=='§R§' || r[2]!=='§R§');
+  html += `<div class="card">${tbl(['Account Head','Debit','Credit'], rows.concat([['<b>TOTAL</b>', rightCell('<b>'+rupee(totalDr)+'</b>'), rightCell('<b>'+rupee(totalCr)+'</b>')]]))}</div>`;
+  const diff = Math.round((totalDr-totalCr)*100)/100;
+  html += diff===0 ? `<div class="msg ok">Trial Balance is matched. Total Debit = Total Credit.</div>` :
+    `<div class="msg err">Trial Balance does NOT match. Difference: ${rupee(Math.abs(diff))}. This should not normally occur since every voucher enforces equal debit and credit — check for data import issues.</div>`;
+  return html;
+}
+
+/* ============================================================ FINANCIAL STATEMENTS */
+function incomeExpenditure(from,to){
+  const codes = allLedgerCodes();
+  let income=0, expenditure=0;
+  codes.forEach(c=>{
+    const type = accountType(c);
+    if(type==='income') income += (ledgerMovement(c,{fromDate:from,upToDate:to}).cr - ledgerMovement(c,{fromDate:from,upToDate:to}).dr);
+    if(type==='expense') expenditure += (ledgerMovement(c,{fromDate:from,upToDate:to}).dr - ledgerMovement(c,{fromDate:from,upToDate:to}).cr);
+  });
+  return {income, expenditure, surplus: income-expenditure};
+}
+function viewStatements(){
+  let html = `<div class="section-title"><h2>Financial Statements</h2><span class="hint">Financial Year from ${fmtDate(fyStart())}</span></div>`;
+  const from = fyStart(), to = todayStr();
+  const ie = incomeExpenditure(from,to);
+
+  // Receipts & Payments (cash+bank flows)
+  let receipts=0, payments=0;
+  DB.transactions.filter(t=>t.date>=from && t.date<=to && !t.reversed).forEach(t=>{
+    if(['CASH','BANK'].includes(t.debit) && !['CASH','BANK'].includes(t.credit)) receipts += t.amount;
+    if(['CASH','BANK'].includes(t.credit) && !['CASH','BANK'].includes(t.debit)) payments += t.amount;
+  });
+  html += `<div class="card"><h3>Receipts & Payments Account (${fmtDate(from)} to ${fmtDate(to)})</h3>
+    <div class="grid cols2">${stat('Total Receipts', rupee(receipts))}${stat('Total Payments', rupee(payments))}</div></div>`;
+
+  html += `<div class="card"><h3>Income & Expenditure Account</h3>
+    <div class="grid cols3">${stat('Income', rupee(ie.income))}${stat('Expenditure', rupee(ie.expenditure))}${stat('Surplus / (Deficit)', rupee(ie.surplus), ie.surplus<0)}</div></div>`;
+
+  // Balance sheet
+  const cash = accountBalance('CASH'), bank = accountBalance('BANK');
+  const loansOut = DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
+  const otherAssets = accountBalance('OTHER_ASSETS');
+  const assets = cash+bank+loansOut+otherAssets;
+  const savings = activeMembers().reduce((s,m)=>s+memberSavingsBalance(m.id),0) + DB.members.filter(m=>m.status!=='Active').reduce((s,m)=>s+memberSavingsBalance(m.id),0);
+  const cif = accountBalance('CIF');
+  const otherLiab = accountBalance('OTHER_LIABILITIES');
+  const fund = accountBalance('SHG_FUND');
+  const cumulativeSurplus = incomeExpenditure('1900-01-01', to).surplus;
+  const liabilities = savings + cif + otherLiab + fund + cumulativeSurplus;
+  html += `<div class="card"><h3>Balance Sheet as on ${fmtDate(to)}</h3>
+    <div class="grid cols2">
+      <div><h4>Assets</h4>${tbl(['Head','Amount'],[
+        ['Cash in Hand', rightCell(rupee(cash))], ['Bank Balance', rightCell(rupee(bank))],
+        ['Member Loans Outstanding', rightCell(rupee(loansOut))], ['Other Assets', rightCell(rupee(otherAssets))],
+        ['<b>Total Assets</b>', rightCell('<b>'+rupee(assets)+'</b>')]])}</div>
+      <div><h4>Liabilities & Funds</h4>${tbl(['Head','Amount'],[
+        ['Member Savings', rightCell(rupee(savings))], ['CIF', rightCell(rupee(cif))],
+        ['Other Liabilities', rightCell(rupee(otherLiab))], ['SHG Fund/Capital', rightCell(rupee(fund))],
+        ['Cumulative Surplus/(Deficit)', rightCell(rupee(cumulativeSurplus))],
+        ['<b>Total Liabilities & Funds</b>', rightCell('<b>'+rupee(liabilities)+'</b>')]])}</div>
+    </div>`;
+  const bsDiff = Math.round((assets-liabilities)*100)/100;
+  html += bsDiff===0 ? `<div class="msg ok" style="margin-top:10px">Balance Sheet is balanced.</div>` :
+    `<div class="msg err" style="margin-top:10px">Balance Sheet difference of ${rupee(Math.abs(bsDiff))} detected — see Data Quality Check.</div>`;
+  html += `</div>`;
+  return html;
+}
+
+/* ============================================================ BANK RECONCILIATION */
+function viewReconciliation(){
+  let html = `<div class="section-title"><h2>Bank Reconciliation</h2></div>`;
+  const bookBal = accountBalance('BANK');
+  html += `<div class="card"><form onsubmit="return doRecon(event)">
+    <div class="row">
+      <div class="field"><label>Bank Statement Balance ₹</label><input type="number" step="0.01" name="stmtBal" id="reconStmt"></div>
+      <div class="field"><label>Unpresented Cheques (−) ₹</label><input type="number" step="0.01" name="unpresented" value="0"></div>
+      <div class="field"><label>Deposits in Transit (+) ₹</label><input type="number" step="0.01" name="transit" value="0"></div>
+      <div class="field"><label>Bank Charges Not Recorded (−) ₹</label><input type="number" step="0.01" name="charges" value="0"></div>
+      <div class="field"><label>Interest Credited Not Recorded (+) ₹</label><input type="number" step="0.01" name="interest" value="0"></div>
+    </div>
+    <button class="btn" type="submit">Reconcile</button>
+  </form></div>`;
+  html += `<div class="card"><div class="grid cols2">${stat('Book Bank Balance', rupee(bookBal))}<div id="reconResult" class="stat"><div class="lbl">Adjusted Bank Balance</div><div class="val">—</div></div></div></div>`;
+  return html;
+}
+function doRecon(ev){
+  ev.preventDefault(); const f = new FormData(ev.target);
+  const stmt = parseFloat(f.get('stmtBal'))||0;
+  const unp = parseFloat(f.get('unpresented'))||0;
+  const trans = parseFloat(f.get('transit'))||0;
+  const chg = parseFloat(f.get('charges'))||0;
+  const int_ = parseFloat(f.get('interest'))||0;
+  const adjusted = stmt - unp + trans - chg + int_;
+  const bookBal = accountBalance('BANK');
+  const diff = Math.round((adjusted-bookBal)*100)/100;
+  document.getElementById('reconResult').innerHTML = `<div class="lbl">Adjusted Bank Balance</div><div class="val ${diff!==0?'neg':''}">${rupee(adjusted)}</div>
+    <div class="hint" style="margin-top:6px">${diff===0?'Matches book balance.':'Difference vs book balance: '+rupee(Math.abs(diff))}</div>`;
+  return false;
+}
+
+/* ============================================================ DATA QUALITY */
+function runDataQuality(){
+  const issues = [];
+  // negative balances
+  if(accountBalance('CASH')<0) issues.push({sev:'red', text:'Cash balance is negative.'});
+  if(accountBalance('BANK')<0) issues.push({sev:'red', text:'Bank balance is negative.'});
+  // trial balance
+  const codes = allLedgerCodes();
+  let totalDr=0, totalCr=0;
+  codes.forEach(c=>{ const type=accountType(c); const normalDebit=(type==='asset'||type==='expense'); const bal=accountBalance(c);
+    if(normalDebit){ if(bal>=0) totalDr+=bal; else totalCr+=-bal; } else { if(bal>=0) totalCr+=bal; else totalDr+=-bal; } });
+  if(Math.round((totalDr-totalCr)*100)/100 !== 0) issues.push({sev:'red', text:'Trial Balance does not match.'});
+  // duplicate members
+  const seen = {};
+  DB.members.forEach(m=>{ const key=(m.name||'').trim().toLowerCase()+'|'+(m.fatherHusband||'').trim().toLowerCase();
+    if(key.trim()!=='|'){ if(seen[key]) issues.push({sev:'amber', text:'Possible duplicate member: '+m.name}); seen[key]=true; } });
+  // missing mandatory fields
+  DB.members.forEach(m=>{ if(!m.mobile) issues.push({sev:'amber', text:'Member '+m.name+' has no mobile number on file.'}); });
+  if(!DB.profile.name) issues.push({sev:'red', text:'SHG Profile: name is not set.'});
+  if(!DB.profile.banks || !DB.profile.banks.length) issues.push({sev:'amber', text:'No bank account recorded in SHG Profile.'});
+  // loan issues
+  DB.loans.forEach(l=>{ if(!l.interestRate && l.interestRate!==0) issues.push({sev:'amber', text:'Loan '+l.id+' has no interest rate set.'});
+    if(loanOutstanding(l.id).principal<0) issues.push({sev:'red', text:'Loan '+l.id+' shows negative outstanding — check repayments.'}); });
+  // meetings without any postings
+  // unposted / unbalanced transactions can't occur since engine enforces equal dr=cr per entry
+  if(!DB.members.length) issues.push({sev:'amber', text:'No members registered yet.'});
+  if(!DB.meetings.length) issues.push({sev:'amber', text:'No meetings have been recorded yet.'});
+  return issues;
+}
+function dqSummaryRow(issues){
+  const red = issues.filter(i=>i.sev==='red').length;
+  const amber = issues.filter(i=>i.sev==='amber').length;
+  let overall = red>0?'red':(amber>0?'amber':'green');
+  let label = overall==='red'?'Error':(overall==='amber'?'Attention Required':'Ready');
+  return `<span class="dot ${overall}"></span><b>${label}</b> &nbsp; <span class="hint">${red} error(s), ${amber} item(s) needing attention</span>`;
+}
+function viewDataQuality(){
+  const issues = runDataQuality();
+  let html = `<div class="section-title"><h2>Data Quality Check</h2></div>`;
+  html += `<div class="card">${dqSummaryRow(issues)}</div>`;
+  if(!issues.length){ html += `<div class="card"><div class="empty">No issues found. Records look clean.</div></div>`; return html; }
+  html += `<div class="grid cols2">`;
+  issues.forEach(i=>{ html += `<div class="qcard"><span class="status" style="color:var(--${i.sev==='red'?'red':(i.sev==='amber'?'amber':'green')})"><span class="dot ${i.sev}"></span>${i.sev==='red'?'Error':'Attention Required'}</span><div style="margin-top:5px">${esc(i.text)}</div></div>`; });
+  html += `</div>`;
+  return html;
+}
+
+/* ============================================================ GRADING */
+function computeGrading(ym){
+  const [y,m] = ym.split('-').map(Number);
+  const from = ym+'-01';
+  const lastDay = new Date(y, m, 0).getDate();
+  const to = ym+'-'+String(lastDay).padStart(2,'0');
+  const monthMeetings = DB.meetings.filter(mt=>mt.date>=from && mt.date<=to);
+  const freq = DB.profile.meetingFrequency||'Monthly';
+  const scheduled = freq==='Weekly'?4:(freq==='Fortnightly'?2:1);
+  const meetingRegularity = Math.min(100, scheduled? (monthMeetings.length/scheduled*100) : 100);
+  const totalMembers = activeMembers().length || 1;
+  const attendanceSum = monthMeetings.reduce((s,mt)=>s+mt.present,0);
+  const attendancePct = monthMeetings.length ? Math.min(100, attendanceSum/(monthMeetings.length*totalMembers)*100) : 0;
+  const savers = new Set();
+  DB.transactions.filter(t=>t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').forEach(t=>savers.add(t.memberId));
+  const savingsRegularity = totalMembers? (savers.size/totalMembers*100) : 0;
+  let principalRecovered = 0, principalDue = 0;
+  DB.transactions.filter(t=>t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').forEach(t=>principalRecovered+=t.amount);
+  DB.loans.filter(l=>l.status!=='Closed' && l.nextDueDate && l.nextDueDate>=from && l.nextDueDate<=to).forEach(l=>principalDue += (l.principal/(l.instalments||1)));
+  const loanRecovery = principalDue>0 ? Math.min(100, principalRecovered/principalDue*100) : (principalRecovered>0?100:100);
+  const dq = runDataQuality();
+  const bookkeeping = dq.some(i=>i.sev==='red') ? 30 : (dq.some(i=>i.sev==='amber') ? 70 : 100);
+  const indicators = [
+    {key:'meetings', label:'Meeting Regularity', value:meetingRegularity},
+    {key:'attendance', label:'Attendance', value:attendancePct},
+    {key:'savings', label:'Savings Regularity', value:savingsRegularity},
+    {key:'recovery', label:'Loan Recovery', value:loanRecovery},
+    {key:'records', label:'Financial Record Keeping', value:bookkeeping}
+  ];
+  const overall = indicators.reduce((s,i)=>s+i.value,0)/indicators.length;
+  let grade = overall>=80?'A':(overall>=60?'B':(overall>=40?'C':'D'));
+  return { ym, indicators, overall, grade, exceptions: dq.filter(i=>i.sev==='red').length, ruleVersion: DB.grading.ruleVersion };
+}
+function viewGrading(){
+  let html = `<div class="section-title"><h2>SHG Grading</h2></div>`;
+  html += `<div class="msg info">Configurable/Local Grading Framework — Not an Official Government Grade. Grading Framework Version: ${esc(DB.grading.ruleVersion)}. If your SRLM/DAY-NRLM issues an official grading format, the weights and indicators below can be reconfigured to match it exactly in Settings.</div>`;
+  const ym = monthKey(todayStr());
+  const g = computeGrading(ym);
+  html += `<div class="card"><h3>Current Month — ${ym}</h3>
+    <div class="grid cols3">${stat('Grade', g.grade)}${stat('Overall Score', g.overall.toFixed(1)+'%')}${stat('Data Exceptions', g.exceptions, g.exceptions>0)}</div>
+    <div style="margin-top:12px">${g.indicators.map(i=>{
+      const sev = i.value>=80?'green':(i.value>=50?'amber':'red');
+      return `<div class="qcard" style="margin-bottom:8px"><span class="dot ${sev}"></span><b>${esc(i.label)}</b> — ${i.value.toFixed(1)}%
+        ${i.value<80?`<div class="hint" style="margin-top:4px">${gradingAction(i.key)}</div>`:''}</div>`;
+    }).join('')}</div>
+    <button class="btn" style="margin-top:8px" onclick="saveGradeSnapshot('${ym}')">Save this Month's Grade to History</button>
+  </div>`;
+
+  const hist = Object.values(DB.grading.history).sort((a,b)=>a.ym<b.ym?-1:1);
+  html += `<div class="card"><h3>Monthly Grading History</h3>`;
+  html += hist.length ? tbl(['Month','Grade','Score','Framework Version'], hist.map((h,i)=>{
+    const prev = hist[i-1];
+    const change = prev ? (h.overall>prev.overall?'↑':(h.overall<prev.overall?'↓':'—')) : '—';
+    return [h.ym, h.grade+' '+change, h.overall.toFixed(1)+'%', h.ruleVersion];
+  })) : `<div class="empty">No monthly grades saved yet.</div>`;
+  html += `</div>`;
+  return html;
+}
+function gradingAction(key){
+  return ({
+    meetings:'Ensure meetings are held on the scheduled day and recorded promptly.',
+    attendance:'Follow up with members who are frequently absent.',
+    savings:'Review members with unpaid monthly savings and remind them.',
+    recovery:'Review overdue member loans and the repayment schedule.',
+    records:'Resolve open items in the Data Quality Check before month-end.'
+  })[key]||'';
+}
+function saveGradeSnapshot(ym){
+  const g = computeGrading(ym);
+  DB.grading.history[ym]=g;
+  logAudit('SAVE_GRADE', ym+' grade '+g.grade+' saved ('+g.overall.toFixed(1)+'%)');
+  flash('ok','Grade for '+ym+' saved to history.'); render();
+}
+
+/* ============================================================ LOKOS READINESS & EXPORT */
+function viewLokos(){
+  let html = `<div class="section-title"><h2>LokOS Data Readiness & Export</h2></div>`;
+  html += `<div class="msg info">This app does not connect to any LokOS API — no official DAY-NRLM/LokOS API is assumed here. It prepares a validated, correctly formatted export (CSV) that can be submitted through whatever official upload mechanism your SRLM/DAY-NRLM authorises. Field names below are configurable in Settings if your state's format differs.</div>`;
+  const issues = runDataQuality();
+  const red = issues.filter(i=>i.sev==='red').length;
+  const status = red>0 ? 'RED — Upload Not Permitted' : (issues.length ? 'AMBER — Correction Recommended' : 'GREEN — Ready for Export');
+  const cls = red>0?'red':(issues.length?'amber':'green');
+  html += `<div class="card"><span class="dot ${cls}"></span><b>${status}</b></div>`;
+  html += `<div class="card"><h3>Export</h3>
+    <div class="row">
+      <button class="btn secondary" onclick="exportCSV('members')">Export Members CSV</button>
+      <button class="btn secondary" onclick="exportCSV('savings')">Export Savings CSV</button>
+      <button class="btn secondary" onclick="exportCSV('loans')">Export Loans CSV</button>
+      <button class="btn secondary" onclick="exportCSV('transactions')">Export Transactions CSV</button>
+    </div>
+  </div>`;
+  html += `<div class="card"><h3>Reconciliation vs Local Accounting Records</h3>${tbl(['Item','SHG Accounting Records'],[
+    ['Active Members', activeMembers().length],
+    ['Total Savings', rupee(activeMembers().reduce((s,m)=>s+memberSavingsBalance(m.id),0))],
+    ['Loans Outstanding', rupee(DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0))],
+    ['CIF Outstanding', rupee(cifOutstanding())]
+  ])}<div class="hint" style="margin-top:8px">These figures are the single source of truth — the same numbers that appear in every other module and export.</div></div>`;
+  return html;
+}
+function toCSV(headers, rows){
+  const esc2 = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  return headers.map(esc2).join(',')+'\n'+rows.map(r=>r.map(esc2).join(',')).join('\n');
+}
+function downloadFile(name, content, mime){
+  const blob = new Blob([content], {type:mime||'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function exportCSV(kind){
+  let csv, name;
+  if(kind==='members'){
+    csv = toCSV(['MemberID','Name','FatherHusband','Mobile','Village','DOJ','Status'], DB.members.map(m=>[m.id,m.name,m.fatherHusband,m.mobile,m.village,m.doj,m.status]));
+    name='members_export.csv';
+  } else if(kind==='savings'){
+    csv = toCSV(['MemberID','Name','ClosingSavingsBalance'], activeMembers().map(m=>[m.id,m.name,memberSavingsBalance(m.id).toFixed(2)]));
+    name='savings_export.csv';
+  } else if(kind==='loans'){
+    csv = toCSV(['LoanID','MemberID','Member','Principal','Rate','OutstandingPrincipal','Status','NextDueDate'], DB.loans.map(l=>[l.id,l.memberId,memberName(l.memberId),l.principal,l.interestRate,loanOutstanding(l.id).principal.toFixed(2),l.status,l.nextDueDate]));
+    name='loans_export.csv';
+  } else {
+    csv = toCSV(['Date','VoucherNo','Type','Debit','Credit','Amount','MemberID','Narration'], DB.transactions.map(t=>[t.date,t.voucherNo,t.type,t.debit,t.credit,t.amount,t.memberId,t.narration]));
+    name='transactions_export.csv';
+  }
+  downloadFile(name, csv);
+  logAudit('EXPORT', kind+' CSV exported');
+}
+
+/* ============================================================ AUDIT TRAIL */
+function viewAudit(){
+  let html = `<div class="section-title"><h2>Audit Trail</h2></div>`;
+  html += `<div class="card">${DB.auditLog.length ? tbl(['When','User','Role','Action','Details'],
+    DB.auditLog.slice(0,500).map(a=>[fmtDate(a.ts.slice(0,10))+' '+a.ts.slice(11,16), esc(a.user), esc(a.role), esc(a.action), esc(a.details)])) :
+    `<div class="empty">No activity recorded yet.</div>`}</div>`;
+  return html;
+}
+
+/* ============================================================ REPORTS */
+const REPORT_LIST = [
+  {id:'members', label:'Member Register'},
+  {id:'savings', label:'Savings Register'},
+  {id:'loans', label:'Loan Register'},
+  {id:'transactions', label:'Transactions Register'},
+  {id:'trialbalance', label:'Trial Balance'}
+];
+function viewReports(){
+  let html = `<div class="section-title"><h2>Reports</h2></div><div class="card"><div class="row">`;
+  REPORT_LIST.forEach(r=>{ html += `<button class="btn secondary" onclick="exportCSV('${r.id==='trialbalance'?'transactions':r.id}')">${esc(r.label)} (CSV)</button>`; });
+  html += `</div><div class="hint" style="margin-top:8px">Use your browser's Print (Ctrl/Cmd+P) on any screen to save a PDF copy for records or audit.</div></div>`;
+  return html;
+}
+
+/* ============================================================ MEMBER STATEMENT */
+function viewMemberStatement(){
+  let html = `<div class="section-title"><h2>Member Statement</h2></div>`;
+  html += `<div class="card"><label>Select Member</label><select id="msMember" onchange="render()" style="max-width:340px">${DB.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>`;
+  if(!DB.members.length){ html += `<div class="card"><div class="empty">No members yet.</div></div>`; return html; }
+  const sel = document.getElementById && document.getElementById('msMember') ? document.getElementById('msMember').value : DB.members[0].id;
+  const m = DB.members.find(x=>x.id===sel) || DB.members[0];
+  html += `<div class="card"><div class="grid cols4">
+    ${stat('Savings Balance', rupee(memberSavingsBalance(m.id)))}
+    ${stat('Loan Outstanding', rupee(memberLoanOutstanding(m.id)))}
+    ${stat('Date of Joining', fmtDate(m.doj))}
+    ${stat('Status', m.status)}
+  </div></div>`;
+  const txns = DB.transactions.filter(t=>t.memberId===m.id).sort((a,b)=>a.date<b.date?-1:1);
+  html += `<div class="card"><h3>Transaction History — ${esc(m.name)}</h3>${txns.length?tbl(['Date','Voucher','Type','Debit','Credit','Amount','Narration'],
+    txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)])):`<div class="empty">No transactions for this member.</div>`}</div>`;
+  return html;
+}
+
+/* ============================================================ BACKUP & RESTORE */
+function viewBackup(){
+  let html = `<div class="section-title"><h2>Backup & Restore</h2></div>`;
+  html += `<div class="card"><h3>Export Full Backup</h3><p class="hint">Downloads a single JSON file containing all members, meetings, transactions, loans, CIF, grading history and settings.</p>
+    <button class="btn" onclick="exportBackup()">Download Backup (.json)</button></div>`;
+  html += `<div class="card"><h3>Restore from Backup</h3><p class="hint">Restoring replaces ALL current data on this device. Export a backup first if unsure.</p>
+    <input type="file" id="restoreFile" accept="application/json">
+    <button class="btn danger" style="margin-top:8px" onclick="restoreBackup()">Restore from File</button></div>`;
+  html += `<div class="card"><h3>Sample Demo Data</h3><p class="hint">Adds a clearly-labelled DEMO SHG with sample members, meetings, savings and loans so you can explore the app before entering real records.</p>
+    <button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button></div>`;
+  html += `<div class="card"><h3>Reset Application</h3><p class="hint">Permanently erases all data on this device and starts fresh.</p>
+    <button class="btn danger" onclick="resetApp()">Erase All Data</button></div>`;
+  return html;
+}
+function exportBackup(){
+  downloadFile('shg_backup_'+todayStr()+'.json', JSON.stringify(DB,null,2), 'application/json');
+  logAudit('BACKUP_EXPORT','Full backup downloaded');
+}
+function restoreBackup(){
+  const inp = document.getElementById('restoreFile');
+  if(!inp.files.length){ alert('Choose a backup .json file first.'); return; }
+  if(!confirm('This will replace ALL current data. Continue?')) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      const data = JSON.parse(e.target.result);
+      if(!data.members || !data.transactions) throw new Error('This does not look like a valid backup file.');
+      DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{}};
+      logAudit('BACKUP_RESTORE','Data restored from backup file');
+      flash('ok','Backup restored.'); render();
+    }catch(err){ alert('Restore failed: '+err.message); }
+  };
+  reader.readAsText(inp.files[0]);
+}
+function resetApp(){
+  if(!confirm('This will permanently erase ALL data on this device. This cannot be undone. Continue?')) return;
+  if(!confirm('Are you absolutely sure? Consider exporting a backup first.')) return;
+  DB = freshDB(); saveDB(); flash('ok','Application data has been reset.'); ROUTE='dashboard'; render();
+}
+
+/* ============================================================ SETTINGS */
+function viewSettings(){
+  let html = `<div class="section-title"><h2>Settings</h2></div>`;
+  html += `<div class="card"><h3>Current User</h3><form onsubmit="return saveUserSettings(event)">
+    <div class="row">
+      <div class="field"><label>Name</label><input name="currentUserName" value="${esc(DB.settings.currentUserName)}"></div>
+      <div class="field"><label>Role</label><select name="currentUserRole">${ROLES.map(r=>`<option ${DB.settings.currentUserRole===r?'selected':''}>${r}</option>`).join('')}</select></div>
+    </div>
+    <button class="btn" type="submit">Save</button>
+  </form></div>`;
+
+  html += `<div class="card"><h3>Opening Balances</h3><form onsubmit="return saveOpening(event)">
+    <div class="row">
+      <div class="field"><label>Opening Cash ₹</label><input type="number" step="0.01" name="openingCash" value="${DB.settings.openingCash||0}"></div>
+      <div class="field"><label>Opening Bank ₹</label><input type="number" step="0.01" name="openingBank" value="${DB.settings.openingBank||0}"></div>
+    </div>
+    <button class="btn" type="submit">Save</button>
+  </form></div>`;
+
+  html += `<div class="card"><h3>Expense Categories</h3>
+    ${DB.expenseCategories.map((c,i)=>`<span class="badge grey" style="margin:2px">${esc(c)} <a style="cursor:pointer;color:var(--red)" onclick="removeExpCat(${i})">×</a></span>`).join(' ')}
+    <form onsubmit="return addExpCat(event)" style="margin-top:10px"><div class="row"><div class="field" style="flex:2"><input name="cat" placeholder="New category name" required></div><button class="btn secondary" type="submit">Add</button></div></form>
+  </div>`;
+
+  html += `<div class="card"><h3>Monthly / Annual Closing</h3>
+    <div class="row"><div class="field"><label>Close Month</label><input type="month" id="closeMonth" value="${monthKey(todayStr())}"></div>
+    <button class="btn secondary" style="align-self:flex-end;height:38px" onclick="closePeriod()">Close Period</button></div>
+    <p class="hint">Closed periods: ${DB.closedPeriods.length?DB.closedPeriods.join(', '):'none'}</p>
+    ${DB.closedPeriods.length?`<div class="row"><div class="field"><label>Reopen Month</label><select id="reopenMonth">${DB.closedPeriods.map(p=>`<option>${p}</option>`).join('')}</select></div><button class="btn secondary danger" style="align-self:flex-end;height:38px" onclick="reopenPeriod()">Reopen</button></div>`:''}
+  </div>`;
+
+  html += `<div class="card"><h3>Grading Framework Version</h3><form onsubmit="return saveGradingVersion(event)">
+    <div class="field"><label>Version Label</label><input name="ruleVersion" value="${esc(DB.grading.ruleVersion)}"></div>
+    <p class="hint">Changing this label does not alter previously saved monthly grades — each saved grade permanently records the version used at the time.</p>
+    <button class="btn" type="submit">Save</button>
+  </form></div>`;
+  return html;
+}
+function saveUserSettings(ev){ ev.preventDefault(); const f=new FormData(ev.target); Object.assign(DB.settings, Object.fromEntries(f.entries())); flash('ok','Saved.'); render(); return false; }
+function saveOpening(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.settings.openingCash=parseFloat(f.get('openingCash'))||0; DB.settings.openingBank=parseFloat(f.get('openingBank'))||0; flash('ok','Opening balances saved.'); render(); return false; }
+function addExpCat(ev){ ev.preventDefault(); const f=new FormData(ev.target); const c=f.get('cat').trim(); if(c && !DB.expenseCategories.includes(c)) DB.expenseCategories.push(c); render(); return false; }
+function removeExpCat(i){ DB.expenseCategories.splice(i,1); render(); }
+function closePeriod(){ const v = document.getElementById('closeMonth').value; if(!v) return; if(!DB.closedPeriods.includes(v)){ DB.closedPeriods.push(v); logAudit('CLOSE_PERIOD',v+' closed'); } flash('ok',v+' closed.'); render(); }
+function reopenPeriod(){ const v = document.getElementById('reopenMonth').value; if(!confirm('Reopen '+v+'? This allows further postings in this period.')) return; DB.closedPeriods = DB.closedPeriods.filter(p=>p!==v); logAudit('REOPEN_PERIOD',v+' reopened'); flash('ok',v+' reopened.'); render(); }
+function saveGradingVersion(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.grading.ruleVersion=f.get('ruleVersion'); flash('ok','Grading version updated.'); render(); return false; }
+
+/* ============================================================ HELP */
+function viewHelp(){
+  let html = `<div class="section-title"><h2>Help & Training</h2></div>`;
+  const items = [
+    ['Cash Book / Bank Book','Chronological record of every cash/bank receipt and payment, with a running balance. Every transaction posted anywhere in the app (Meetings, Savings, Loans, CIF, Expenses) appears here automatically.'],
+    ['General Ledger','Shows all debit/credit movements and the running balance for one account at a time — e.g. Member Savings, Interest Income.'],
+    ['Trial Balance','Lists every account with its closing debit or credit balance. Total debits must equal total credits; if not, the app flags it under Data Quality.'],
+    ['Example — Savings Collected in Cash','Debit: Cash in Hand. Credit: Member Savings. Cash increases; the SHG owes more to the member.'],
+    ['Example — Loan Disbursed','Debit: Member Loans Outstanding. Credit: Cash/Bank. An asset (amount owed by the member) is created; cash or bank reduces.'],
+    ['Example — Loan Repayment (Principal + Interest)','Debit: Cash/Bank for the full amount received. Credit: Member Loans Outstanding for the principal portion. Credit: Interest Income for the interest portion.'],
+    ['Example — Cash Deposited into Bank','Debit: Bank. Credit: Cash. Record this as a Journal Voucher under Transactions.'],
+    ['Example — CIF Received','Debit: Bank. Credit: CIF (liability — repayable to VO/CLF/NRLM).'],
+    ['Example — Meeting Expense','Debit: the relevant Expense account. Credit: Cash/Bank.'],
+    ['Common Mistakes','Entering the same collection twice from both the Meeting screen and a separate Savings entry; forgetting to select the correct loan when recording a repayment; posting into a closed period without reopening it first.']
+  ];
+  html += items.map(([t,d])=>`<div class="card"><h3>${esc(t)}</h3><p style="margin:0;color:var(--muted);font-size:13.5px">${esc(d)}</p></div>`).join('');
+  html += `<div class="card"><h3>About This Application</h3><p style="color:var(--muted);font-size:13.5px">This is a self-contained, offline-first SHG records, accounting and grading tool. It runs entirely in the browser and stores data only on this device (browser local storage) — nothing is sent anywhere. Use Backup & Restore regularly, and after any browser data clearing, restore from your last backup. It does not connect to any official LokOS/DAY-NRLM system; it prepares validated, correctly formatted data for submission through whatever mechanism your SRLM/DAY-NRLM officially authorises.</p></div>`;
+  return html;
+}
+
+/* ============================================================ DEMO DATA */
+function loadDemoData(){
+  if(!confirm('This will ADD a demo SHG with sample members, savings, loans and transactions on top of current data. Continue?')) return;
+  DB.profile = Object.assign(DB.profile, {name:'DEMO — Jyoti Mahila SHG', shgId:'DEMO-001', state:'Haryana', district:'Gurugram', block:'Farrukhnagar',
+    gp:'Demo GP', village:'Demo Village', voClf:'Demo VO', formationDate:'2023-04-01', meetingDay:'Monday', meetingFrequency:'Monthly',
+    president:'Demo President', secretary:'Demo Secretary', treasurer:'Demo Treasurer'});
+  if(!DB.profile.banks.length) DB.profile.banks.push({bank:'Demo Gramin Bank',branch:'Farrukhnagar',accno:'000DEMO0001234',ifsc:'DEMB0000001'});
+  const names = ['Sunita Devi','Rekha Kumari','Meena Yadav','Kamla Devi','Pooja Sharma','Anita Rani','Savita Devi','Geeta Kumari','Radha Devi','Suman Lata','Kavita Rani','Neelam Devi'];
+  const newMembers = names.map(n=>({id:nextId('MEM'), name:n+' (DEMO)', fatherHusband:'S/o Demo', mobile:'9800000'+(100+Math.floor(Math.random()*900)), village:'Demo Village', doj:'2023-04-10', status:'Active', occupation:'Agriculture', nominee:'', bankAccno:'', bankIfsc:''}));
+  DB.members = DB.members.concat(newMembers);
+  DB.settings.openingCash = DB.settings.openingCash || 5000;
+  DB.settings.openingDate = DB.settings.openingDate || '2026-04-01';
+  let d = new Date('2026-05-04');
+  for(let month=0; month<5; month++){
+    const dateStr = new Date(d.getFullYear(), d.getMonth()+month, 4).toISOString().slice(0,10);
+    if(isPeriodClosed(dateStr)) continue;
+    let present=0;
+    newMembers.forEach((m,idx)=>{
+      const isPresent = Math.random()>0.1;
+      if(isPresent){ present++;
+        try{ postTxn({date:dateStr,type:'Savings',debit:'CASH',credit:'MEMBER_SAVINGS',amount:100+Math.round(Math.random()*50),memberId:m.id,narration:'DEMO meeting savings — '+m.name}); }catch(e){}
+      }
+      if(month===0 && idx<4){
+        const amt = 5000+idx*1000;
+        const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1)};
+        DB.loans.push(loan);
+        try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); }catch(e){}
+      }
+      if(month>0){
+        const loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed');
+        if(loan && Math.random()>0.2){
+          const inst = Math.round(loan.principal/loan.instalments);
+          try{
+            postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:Math.min(inst,loanOutstanding(loan.id).principal||inst),memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
+            postTxn({date:dateStr,type:'Interest Received',debit:'CASH',credit:'INTEREST_INCOME',amount:Math.round(loan.principal*loan.interestRate/1200),memberId:m.id,loanId:loan.id,narration:'DEMO interest — '+m.name});
+          }catch(e){}
+        }
+      }
+    });
+    if(month===1){ try{ postTxn({date:dateStr,type:'CIF Receipt',debit:'BANK',credit:'CIF',amount:150000,narration:'DEMO CIF received from VO/CLF'}); DB.cif.push({date:dateStr,source:'Demo VO/CLF',amount:150000,rate:9,period:36,bank:'BANK'});}catch(e){} }
+    try{ postTxn({date:dateStr,type:'Expense',debit:'EXP_Stationery',credit:'CASH',amount:150,narration:'DEMO stationery expense'}); }catch(e){}
+    DB.meetings.push({id:nextId('MTG'), date:dateStr, totalMembers:newMembers.length, present, totals:{savings:0,repayment:0,newLoans:0,expenses:150}});
+  }
+  logAudit('LOAD_DEMO','Demo SHG data generated');
+  flash('ok','Demo data loaded — clearly separate from real records (names end in "(DEMO)"). Erase all data in Backup & Restore to remove.');
+  render();
+}
+
+/* ============================================================ INIT ============================================================ */
+loadDB();
+if(location.hash) ROUTE = location.hash.replace('#','')||'dashboard';
+window.addEventListener('hashchange', ()=>{ ROUTE = location.hash.replace('#','')||'dashboard'; render(); });
+if(!DB.profile.name && !DB.members.length){
+  // First run: offer demo data via a gentle prompt on the dashboard rather than auto-loading.
+}
+render();
+// Expose a console helper for demo data (also reachable via Settings-adjacent flow if desired)
+window.loadDemoData = loadDemoData;
+</script>
+</body>
+</html>
