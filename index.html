@@ -156,6 +156,7 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
       <button id="hamburger" onclick="toggleSidebar()">☰</button>
       <div class="shgname" id="topShgName">SHG</div>
       <div class="quickstats" id="topStats"></div>
+      <div id="langToggle" style="margin-left:10px;flex-shrink:0"></div>
     </div>
     <div id="content"></div>
     <footer class="byline">Developed by Anil Sharma, Former General Manager, Central Bank of India.</footer>
@@ -188,10 +189,102 @@ const ACCOUNTS = {
 const DEFAULT_EXPENSE_CATS = ['Stationery','Meeting Expenses','Training','Travel','Bank Charges','Audit','VO/CLF Contribution','Refreshments','Office Expenses','Other Approved Expenses'];
 const ROLES = ['SHG Admin','Bookkeeper','President/Secretary','Vitta Sakhi/Bank Sakhi','Auditor'];
 
+/* ---------------- Hindi translations (English text -> Hindi text) ----------------
+   Applied as a DOM pass after every render (see translatePage/translateNode). Only
+   exact matches on app chrome — nav, headers, buttons, field labels, table headers,
+   badges — are translated. Member names, narrations, and other data the user types
+   in are never touched, so nothing entered in the app gets silently rewritten. */
+const TRANSLATIONS = {
+  // Nav groups
+  'Overview':'अवलोकन','Field Operations':'फील्ड कार्य','Accounting':'लेखांकन',
+  'Quality & Compliance':'गुणवत्ता एवं अनुपालन','Records':'अभिलेख','System':'सिस्टम',
+  // Nav items / section titles
+  'Dashboard':'डैशबोर्ड','SHG Profile':'एसएचजी प्रोफ़ाइल','Members':'सदस्य','Meetings':'बैठकें',
+  'Savings':'बचत','Loans':'ऋण','CIF':'सीआईएफ','Transactions / Vouchers':'लेन-देन / वाउचर',
+  'Cash Book':'नकद बही','Bank Book':'बैंक बही','General Ledger':'सामान्य खाता बही',
+  'Trial Balance':'तलपट','Financial Statements':'वित्तीय विवरण','Bank Reconciliation':'बैंक समाधान',
+  'Data Quality Check':'डेटा गुणवत्ता जाँच','Health Check':'स्वास्थ्य जाँच','SHG Grading':'एसएचजी ग्रेडिंग',
+  'LokOS Data Readiness & Export':'लोकओएस डेटा तैयारी व निर्यात','Audit Trail':'ऑडिट ट्रेल',
+  'Reports':'रिपोर्ट','Member Statement':'सदस्य विवरण','Backup & Restore':'बैकअप व पुनर्स्थापन',
+  'Settings':'सेटिंग्स','Help & Training':'सहायता व प्रशिक्षण','Help Assistant':'सहायता सहायक',
+  'Member Register':'सदस्य रजिस्टर','SHG Meetings':'एसएचजी बैठकें','Savings Register':'बचत रजिस्टर',
+  'Member Loans':'सदस्य ऋण','CIF Management':'सीआईएफ प्रबंधन','About This Application':'इस एप्लिकेशन के बारे में',
+  'Get Started':'शुरू करें','Recent Transactions':'हाल के लेन-देन','New Journal Voucher':'नया जर्नल वाउचर',
+  'New Loan':'नया ऋण','Record CIF Received':'प्राप्त सीआईएफ दर्ज करें','Bank Accounts':'बैंक खाते',
+  'Add Bank Account':'बैंक खाता जोड़ें','Opening Balances':'प्रारंभिक शेष','Expense Categories':'व्यय श्रेणियाँ',
+  'Monthly / Annual Closing':'मासिक / वार्षिक समापन','Grading Framework Version':'ग्रेडिंग ढाँचा संस्करण',
+  'Current User':'वर्तमान उपयोगकर्ता','Reset Application':'एप्लिकेशन रीसेट करें',
+  'Restore from Backup':'बैकअप से पुनर्स्थापित करें','Export Full Backup':'पूर्ण बैकअप निर्यात करें',
+  'Backup Status':'बैकअप स्थिति','Demo Data':'डेमो डेटा','Device & Browser':'डिवाइस व ब्राउज़र',
+  'Data Quality Detail':'डेटा गुणवत्ता विवरण','Data Quality Snapshot':'डेटा गुणवत्ता स्नैपशॉट',
+  'Sample Demo Data':'नमूना डेमो डेटा','Conduct Meeting':'बैठक आयोजित करें',
+  'Record a Standalone Savings / Withdrawal Entry':'स्वतंत्र बचत / निकासी प्रविष्टि दर्ज करें',
+  'Reconciliation vs Local Accounting Records':'स्थानीय लेखा अभिलेखों से मिलान',
+  'Income & Expenditure Account':'आय-व्यय खाता','Monthly Grading History':'मासिक ग्रेडिंग इतिहास',
+  'Try asking about…':'इनके बारे में पूछें…','Conversation':'बातचीत',
+  // Buttons
+  'Save':'सहेजें','Add':'जोड़ें','Edit':'संपादित करें','Cancel':'रद्द करें','Remove':'हटाएँ',
+  'Reverse':'उलटें','Reopen':'फिर से खोलें','Reconcile':'मिलान करें','Ask':'पूछें',
+  'Save Profile':'प्रोफ़ाइल सहेजें','Save Member':'सदस्य सहेजें','Post Meeting':'बैठक पोस्ट करें',
+  'Post Voucher':'वाउचर पोस्ट करें','Post Entry':'प्रविष्टि पोस्ट करें','Post CIF Receipt':'सीआईएफ प्राप्ति पोस्ट करें',
+  'Disburse Loan':'ऋण वितरित करें','Mark Closed':'बंद के रूप में चिह्नित करें','Close Period':'अवधि बंद करें',
+  'Set Up SHG Profile':'एसएचजी प्रोफ़ाइल सेट करें','Add Members':'सदस्य जोड़ें',
+  'Load Sample Demo Data':'नमूना डेमो डेटा लोड करें','Clear Demo Data':'डेमो डेटा हटाएँ',
+  'Take Backup Now':'अभी बैकअप लें','Download Backup (.json)':'बैकअप डाउनलोड करें (.json)',
+  'Restore from File':'फ़ाइल से पुनर्स्थापित करें','Erase All Data':'सभी डेटा मिटाएँ',
+  'Export Members CSV':'सदस्य सीएसवी निर्यात करें','Export Savings CSV':'बचत सीएसवी निर्यात करें',
+  'Export Loans CSV':'ऋण सीएसवी निर्यात करें','Export Transactions CSV':'लेन-देन सीएसवी निर्यात करें',
+  // Field labels
+  'Date':'दिनांक','Amount ₹':'राशि ₹','Amount ₹ *':'राशि ₹ *','Name':'नाम','Name *':'नाम *',
+  'Member':'सदस्य','Member (optional)':'सदस्य (वैकल्पिक)','Member *':'सदस्य *','Mobile':'मोबाइल',
+  'Village':'गाँव','Status':'स्थिति','Narration':'विवरण','Type':'प्रकार','Purpose':'उद्देश्य',
+  'Occupation':'व्यवसाय','Nominee':'नामिती','President':'अध्यक्ष','Secretary':'सचिव',
+  'Treasurer / Bookkeeper':'कोषाध्यक्ष / बहीखाता लेखक','Contact Details':'संपर्क विवरण',
+  'State':'राज्य','District':'ज़िला','Block':'ब्लॉक','Gram Panchayat':'ग्राम पंचायत','VO / CLF':'वीओ / सीएलएफ',
+  'Formation Date':'गठन तिथि','Meeting Day':'बैठक दिवस','Meeting Frequency':'बैठक आवृत्ति',
+  'SHG ID':'एसएचजी आईडी','SHG Name *':'एसएचजी नाम *','Financial Year Start (MM-DD)':'वित्तीय वर्ष आरंभ (MM-DD)',
+  'Bank Name':'बैंक का नाम','Branch':'शाखा','Account Number':'खाता संख्या','IFSC':'आईएफएससी',
+  "Father's/Husband's Name":'पिता/पति का नाम','Date of Joining':'शामिल होने की तिथि',
+  'Bank Account No.':'बैंक खाता संख्या','Meeting Date *':'बैठक तिथि *','Collect In':'में एकत्र करें',
+  'Cash / Bank':'नकद / बैंक','Cash / Bank Out':'नकद / बैंक (निकासी)','Category':'श्रेणी',
+  'Sanction Date':'स्वीकृति तिथि','Disbursement Date':'वितरण तिथि','Principal ₹':'मूलधन ₹',
+  'Principal ₹ *':'मूलधन ₹ *','Interest Rate % p.a.':'ब्याज दर % वार्षिक','Instalments':'किस्तें',
+  'Source':'स्रोत','Received Into':'में प्राप्त','Repayment Period (months)':'चुकौती अवधि (माह)',
+  'Debit Account *':'डेबिट खाता *','Credit Account *':'क्रेडिट खाता *','Select Account':'खाता चुनें',
+  'Select Member':'सदस्य चुनें','Role':'भूमिका','Version Label':'संस्करण लेबल',
+  'Opening Cash ₹':'प्रारंभिक नकद ₹','Opening Bank ₹':'प्रारंभिक बैंक ₹','As on Date':'दिनांक तक',
+  'Close Month':'माह बंद करें','Reopen Month':'माह फिर खोलें',
+  'Bank Statement Balance ₹':'बैंक विवरण शेष ₹','Unpresented Cheques (−) ₹':'अप्रस्तुत चेक (−) ₹',
+  'Deposits in Transit (+) ₹':'मार्ग में जमा (+) ₹','Bank Charges Not Recorded (−) ₹':'अदर्ज बैंक शुल्क (−) ₹',
+  'Interest Credited Not Recorded (+) ₹':'अदर्ज जमा ब्याज (+) ₹',
+  'Ask a question about using this app':'इस एप्लिकेशन के उपयोग के बारे में प्रश्न पूछें',
+  // Table headers / stat labels
+  'Account Head':'खाता शीर्ष','Account No.':'खाता संख्या','Action':'कार्रवाई','Amount':'राशि',
+  'Attendance':'उपस्थिति','Balance':'शेष','Bank':'बैंक','Check':'जाँच','Closing Balance':'समापन शेष',
+  'Credit':'क्रेडिट','Debit':'डेबिट','Details':'विवरण','Expenses':'व्यय','Father/Husband':'पिता/पति',
+  'Framework Version':'ढाँचा संस्करण','Grade':'ग्रेड','Head':'शीर्ष','ID':'आईडी','Item':'मद',
+  'Loan ID':'ऋण आईडी','Loan O/S':'ऋण बकाया','Month':'माह','New Loans':'नए ऋण','Next Due':'अगली देय तिथि',
+  'O/S Principal':'बकाया मूलधन','Particulars':'विवरण','Payments (Cr)':'भुगतान (क्रेडिट)',
+  'Period (months)':'अवधि (माह)','Principal':'मूलधन','Rate %':'दर %','Receipts (Dr)':'प्राप्तियाँ (डेबिट)',
+  'Repayment':'चुकौती','Result':'परिणाम','SHG Accounting Records':'एसएचजी लेखा अभिलेख','Savings Bal.':'बचत शेष',
+  'Score':'स्कोर','Total Saved':'कुल बचत','User':'उपयोगकर्ता','Voucher':'वाउचर','When':'कब','Withdrawn':'निकाली गई',
+  // Badges / status words
+  'Active':'सक्रिय','Inactive':'निष्क्रिय','Exited':'बाहर निकल गया','Closed':'बंद','Overdue':'बकाया',
+  'Posted':'पोस्ट किया गया','Reversed':'उलटा गया','Reversal':'उलटाव','Ready':'तैयार','Error':'त्रुटि',
+  'Attention Required':'ध्यान आवश्यक','Healthy':'स्वस्थ','Needs Attention':'ध्यान देने योग्य',
+  'Attention Recommended':'ध्यान देने की सिफ़ारिश','Never':'कभी नहीं','Yes':'हाँ','No':'नहीं',
+  'Online':'ऑनलाइन','Weekly':'साप्ताहिक','Fortnightly':'पाक्षिक','Monthly':'मासिक',
+  'Monday':'सोमवार','Tuesday':'मंगलवार','Wednesday':'बुधवार','Thursday':'गुरुवार','Friday':'शुक्रवार','Saturday':'शनिवार','Sunday':'रविवार',
+  'Cash':'नकद','Unnamed SHG':'अनाम एसएचजी'
+};
+
+
 /* ---------------- State ---------------- */
 let DB = null;
 let ROUTE = 'dashboard';
 let FLASH = null;
+let DEMO_MODE = false; // true only while seedDemoDataCore() is generating sample records
+let HELP_CHAT = []; // in-memory only, not persisted — Help Assistant conversation for this session
 
 /* ---------------- Persistence ---------------- */
 function freshDB(){
@@ -209,7 +302,7 @@ function freshDB(){
     closedPeriods:[],
     auditLog:[],
     grading:{ ruleVersion:'2026.1', history:{} },
-    settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'' },
+    settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en' },
     seq:1
   };
 }
@@ -260,6 +353,7 @@ function postTxn(t){
   if(isPeriodClosed(t.date)) throw new Error('Period '+monthKey(t.date)+' is closed. Reopen it in Settings to post here.');
   if(!ACCOUNTS[t.debit] && !t.debit.startsWith('EXP_')) throw new Error('Unknown debit account: '+t.debit);
   if(!ACCOUNTS[t.credit] && !t.credit.startsWith('EXP_')) throw new Error('Unknown credit account: '+t.credit);
+  if(t.debit===t.credit) throw new Error('Debit and credit accounts must be different — "'+accountLabel(t.debit)+'" was selected on both sides.');
   const amt = Math.round((parseFloat(t.amount)||0)*100)/100;
   if(amt<=0) throw new Error('Amount must be greater than zero.');
   const txn = {
@@ -272,7 +366,8 @@ function postTxn(t){
     narration: t.narration||'',
     createdBy: DB.settings.currentUserName, createdAt: nowStamp(),
     modifiedBy:'', modifiedAt:'',
-    reversed:false, reversalOf: t.reversalOf||''
+    reversed:false, reversalOf: t.reversalOf||'',
+    demo: !!DEMO_MODE
   };
   DB.transactions.push(txn);
   logAudit('POST_TXN', txn.voucherNo+' Dr '+txn.debit+' / Cr '+txn.credit+' '+rupee(amt));
@@ -317,11 +412,23 @@ function accountBalance(code, opts){
   const {dr,cr} = ledgerMovement(code,opts);
   const type = accountType(code);
   const normalDebit = (type==='asset'||type==='expense');
-  // include opening balances for CASH/BANK
-  let opening = 0;
-  if(code==='CASH') opening = DB.settings.openingCash||0;
-  if(code==='BANK') opening = DB.settings.openingBank||0;
-  return normalDebit ? (opening+dr-cr) : (opening+cr-dr);
+  // Opening cash/bank balances are posted as real double-entry vouchers (see postOpeningBalances),
+  // Debit Cash/Bank, Credit SHG Fund — so no separate adjustment is needed here. This keeps the
+  // Trial Balance and Balance Sheet correct by construction rather than by a hidden add-on.
+  return normalDebit ? (dr-cr) : (cr-dr);
+}
+// Posts (or re-posts) the SHG's opening cash/bank balances as a proper journal entry:
+// Debit Cash/Bank, Credit SHG Fund/Capital — dated as given. Any previous opening-balance
+// entries are reversed first (never deleted) so the audit trail stays intact.
+function postOpeningBalances(cashAmt, bankAmt, date){
+  date = date || todayStr();
+  DB.transactions.filter(t=>t.type==='Opening Balance' && !t.reversed).forEach(t=>{
+    try{ reverseTxn(t.id, 'Superseded by revised opening balance'); }catch(e){}
+  });
+  cashAmt = parseFloat(cashAmt)||0; bankAmt = parseFloat(bankAmt)||0;
+  if(cashAmt>0) postTxn({date, type:'Opening Balance', debit:'CASH', credit:'SHG_FUND', amount:cashAmt, narration:'Opening cash balance'});
+  if(bankAmt>0) postTxn({date, type:'Opening Balance', debit:'BANK', credit:'SHG_FUND', amount:bankAmt, narration:'Opening bank balance'});
+  DB.settings.openingCash = cashAmt; DB.settings.openingBank = bankAmt; DB.settings.openingDate = date;
 }
 function allLedgerCodes(){
   const codes = Object.keys(ACCOUNTS).slice();
@@ -371,6 +478,7 @@ const NAV = [
   {id:'reconciliation', label:'Bank Reconciliation', icon:'⇄'},
   {grp:'Quality & Compliance'},
   {id:'dataquality', label:'Data Quality Check', icon:'✓'},
+  {id:'healthcheck', label:'Health Check', icon:'♥'},
   {id:'grading', label:'SHG Grading', icon:'★'},
   {id:'lokos', label:'LokOS Readiness & Export', icon:'⇪'},
   {id:'audit', label:'Audit Trail', icon:'🕘'},
@@ -380,13 +488,14 @@ const NAV = [
   {grp:'System'},
   {id:'backup', label:'Backup & Restore', icon:'⇅'},
   {id:'settings', label:'Settings', icon:'⚙'},
-  {id:'help', label:'Help & Training', icon:'?'}
+  {id:'help', label:'Help & Training', icon:'?'},
+  {id:'helpai', label:'Help Assistant', icon:'✦'}
 ];
 function buildNav(){
   const ul = document.getElementById('navlist');
   ul.innerHTML = NAV.map(n=>{
     if(n.grp) return `<li class="grp">${esc(n.grp)}</li>`;
-    return `<li><a class="${ROUTE===n.id?'active':''}" onclick="go('${n.id}')">${n.icon} &nbsp;${esc(n.label)}</a></li>`;
+    return `<li><a class="${ROUTE===n.id?'active':''}" onclick="go('${n.id}')">${n.icon} &nbsp;<span>${esc(n.label)}</span></a></li>`;
   }).join('');
 }
 function go(route){ ROUTE = route; location.hash = route; closeSidebar(); render(); window.scrollTo(0,0); }
@@ -398,6 +507,7 @@ function render(){
   document.getElementById('topShgName').textContent = DB.profile.name || 'Unnamed SHG';
   document.getElementById('topStats').innerHTML =
     `Cash <b>${rupee(accountBalance('CASH'))}</b> &nbsp;·&nbsp; Bank <b>${rupee(accountBalance('BANK'))}</b> &nbsp;·&nbsp; Members <b>${activeMembers().length}</b>`;
+  document.getElementById('langToggle').innerHTML = languageToggleHTML();
   const c = document.getElementById('content');
   let html = '';
   if(FLASH){ html += `<div class="msg ${FLASH.type==='error'?'err':(FLASH.type==='ok'?'ok':'info')}">${esc(FLASH.text)}</div>`; FLASH=null; }
@@ -407,19 +517,53 @@ function render(){
       savings: viewSavings, loans: viewLoans, cif: viewCIF, transactions: viewTransactions,
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
-      reconciliation: viewReconciliation, dataquality: viewDataQuality, grading: viewGrading,
+      reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
       lokos: viewLokos, audit: viewAudit, reports: viewReports, memberstatement: viewMemberStatement,
-      backup: viewBackup, settings: viewSettings, help: viewHelp
+      backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI
     }[ROUTE] || viewDashboard)();
   }catch(e){
     html += `<div class="msg err">Error rendering this screen: ${esc(e.message)}</div>`;
     console.error(e);
   }
   c.innerHTML = html;
+  translatePage();
   saveDB();
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
-function openModal(html){ document.getElementById('modalRoot').innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`; }
+function openModal(html){
+  document.getElementById('modalRoot').innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`;
+  translateNode(document.getElementById('modalRoot'));
+}
+
+/* ---------------- Language (English / Hindi) ---------------- */
+function languageToggleHTML(){
+  const lang = DB.settings.language||'en';
+  return `<button class="btn small ${lang==='en'?'':'secondary'}" style="padding:4px 10px" onclick="setLanguage('en')">EN</button> `+
+         `<button class="btn small ${lang==='hi'?'':'secondary'}" style="padding:4px 10px" onclick="setLanguage('hi')">हिं</button>`;
+}
+function setLanguage(lang){ DB.settings.language = lang; saveDB(); render(); }
+function translatePage(){
+  if((DB.settings.language||'en')!=='hi') return;
+  translateNode(document.getElementById('sidebar'));
+  translateNode(document.getElementById('topbar'));
+  translateNode(document.getElementById('content'));
+}
+function translateNode(root){
+  if(!root || (DB.settings.language||'en')!=='hi') return;
+  root.querySelectorAll('[placeholder]').forEach(el=>{
+    const key = (el.getAttribute('placeholder')||'').trim();
+    if(TRANSLATIONS[key]) el.setAttribute('placeholder', TRANSLATIONS[key]);
+  });
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  const nodes = [];
+  let n;
+  while(n = walker.nextNode()) nodes.push(n);
+  nodes.forEach(node=>{
+    const trimmed = node.nodeValue.trim();
+    if(!trimmed) return;
+    if(TRANSLATIONS[trimmed]) node.nodeValue = node.nodeValue.replace(trimmed, TRANSLATIONS[trimmed]);
+  });
+}
 
 /* ============================================================ DASHBOARD */
 function viewDashboard(){
@@ -432,7 +576,10 @@ function viewDashboard(){
   const iAndE = incomeExpenditure(fyStart(), todayStr());
 
   let html = `<div class="section-title"><h2>Dashboard</h2><span class="hint">${fmtDate(todayStr())}</span></div>`;
-  if(!DB.members.length){
+  if(DB.settings.demoDataLoaded){
+    html += `<div class="card"><span class="badge amber">DEMO DATA IN APP</span> &nbsp;<span class="hint">Sample records are loaded so you can explore the app. They're tagged internally and never mixed with real figures.</span>
+      &nbsp; <button class="btn small secondary" onclick="clearDemoData()">Clear Demo Data</button></div>`;
+  } else if(!DB.members.length){
     html += `<div class="card"><h3>Get Started</h3><p class="hint">Set up your SHG Profile and add members to begin, or explore the app first with sample data.</p>
       <div class="row"><button class="btn" onclick="go('profile')">Set Up SHG Profile</button><button class="btn secondary" onclick="go('members')">Add Members</button><button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button></div></div>`;
   }
@@ -878,16 +1025,32 @@ function txnForm(){
       <div class="field"><label>Type</label><input name="type" value="Journal"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Debit Account *</label><select name="debit" required>${codes.map(c=>`<option value="${c}">${accountLabel(c)}</option>`).join('')}</select></div>
-      <div class="field"><label>Credit Account *</label><select name="credit" required>${codes.map(c=>`<option value="${c}">${accountLabel(c)}</option>`).join('')}</select></div>
+      <div class="field"><label>Debit Account *</label><select name="debit" id="txnDebit" required onchange="guardTxnAccounts('debit')">${codes.map((c,i)=>`<option value="${c}" ${i===0?'selected':''}>${accountLabel(c)}</option>`).join('')}</select></div>
+      <div class="field"><label>Credit Account *</label><select name="credit" id="txnCredit" required onchange="guardTxnAccounts('credit')">${codes.map((c,i)=>`<option value="${c}" ${i===1?'selected':''}>${accountLabel(c)}</option>`).join('')}</select></div>
     </div>
+    <div class="hint" id="txnAccountWarning" style="display:none;color:var(--red)">Debit and credit accounts must be different — please choose two different heads.</div>
     <div class="row">
       <div class="field"><label>Amount ₹ *</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
       <div class="field"><label>Member (optional)</label><select name="memberId"><option value="">—</option>${DB.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
     </div>
     <div class="field"><label>Narration</label><input name="narration"></div>
-    <button class="btn" type="submit">Post Voucher</button>
+    <button class="btn" type="submit" id="txnSubmitBtn">Post Voucher</button>
   </form>`);
+}
+function guardTxnAccounts(changed){
+  const d = document.getElementById('txnDebit'), c = document.getElementById('txnCredit');
+  const warn = document.getElementById('txnAccountWarning'), btn = document.getElementById('txnSubmitBtn');
+  if(!d || !c) return;
+  if(d.value===c.value){
+    // Nudge whichever field the user did NOT just change onto the next different option, so they never stay stuck on the same head.
+    const codes = allLedgerCodes();
+    const other = changed==='debit' ? c : d;
+    const idx = codes.indexOf(other.value);
+    other.value = codes[(idx+1)%codes.length];
+  }
+  const same = d.value===c.value;
+  warn.style.display = same ? 'block' : 'none';
+  if(btn) btn.disabled = same;
 }
 function saveManualTxn(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -1098,6 +1261,64 @@ function viewDataQuality(){
   return html;
 }
 
+/* ============================================================ HEALTH CHECK */
+function daysSince(iso){ if(!iso) return null; const d=(Date.now()-new Date(iso).getTime())/86400000; return Math.floor(d); }
+function storageUsageKB(){ try{ return Math.round((JSON.stringify(DB).length)/1024); }catch(e){ return 0; } }
+function viewHealthCheck(){
+  let html = `<div class="section-title"><h2>Health Check</h2><span class="hint">A quick, all-in-one status check of your data, backups and this device</span></div>`;
+
+  // --- overall status
+  const dq = runDataQuality();
+  const dqRed = dq.filter(i=>i.sev==='red').length, dqAmber = dq.filter(i=>i.sev==='amber').length;
+  const backupDays = daysSince(DB.settings.lastBackupAt);
+  const backupStale = backupDays===null || backupDays>7;
+  const storageKB = storageUsageKB();
+  const storageWarn = storageKB > 4000; // browser localStorage is typically ~5-10MB
+  let overall = 'green', overallLabel = 'Healthy';
+  if(dqRed>0 || storageWarn){ overall='red'; overallLabel='Needs Attention'; }
+  else if(dqAmber>0 || backupStale){ overall='amber'; overallLabel='Attention Recommended'; }
+  html += `<div class="card"><span class="dot ${overall}"></span><b>${overallLabel}</b></div>`;
+
+  html += `<div class="grid cols3">
+    ${stat('Data Quality Errors', dqRed, dqRed>0)}
+    ${stat('Data Quality Warnings', dqAmber, dqAmber>0)}
+    ${stat('Storage Used', storageKB+' KB', storageWarn)}
+    ${stat('Last Backup', DB.settings.lastBackupAt ? (backupDays+' day(s) ago') : 'Never', backupStale)}
+    ${stat('Active Members', activeMembers().length)}
+    ${stat('Demo Data', DB.settings.demoDataLoaded ? 'Loaded' : 'Not loaded', DB.settings.demoDataLoaded)}
+  </div>`;
+
+  html += `<div class="card"><h3>Backup Status</h3>`;
+  if(!DB.settings.lastBackupAt){
+    html += `<div class="msg err">No backup has ever been taken on this device. If the browser data is cleared, all records will be lost. Take a backup now.</div>`;
+  } else if(backupStale){
+    html += `<div class="msg amber" style="background:var(--amber-bg);color:var(--amber)">Last backup was ${backupDays} day(s) ago (${fmtDate(DB.settings.lastBackupAt.slice(0,10))}). A fresh backup is recommended after every few meetings.</div>`;
+  } else {
+    html += `<div class="msg ok">Last backup was ${backupDays} day(s) ago (${fmtDate(DB.settings.lastBackupAt.slice(0,10))}). You're up to date.</div>`;
+  }
+  html += `<button class="btn" onclick="exportBackup();render();">Take Backup Now</button></div>`;
+
+  html += `<div class="card"><h3>Demo Data</h3>`;
+  if(DB.settings.demoDataLoaded){
+    html += `<p class="hint">Sample demo records are currently in the app (members named "(DEMO)"). They are tagged internally and kept completely separate from real figures, so removing them never touches genuine records.</p>
+    <button class="btn secondary" onclick="clearDemoData()">Clear Demo Data</button>`;
+  } else {
+    html += `<p class="hint">No demo data is loaded. Only real records are in the app.</p>
+    <button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="card"><h3>Device & Browser</h3>${tbl(['Check','Result'],[
+    ['Local storage available', (typeof(Storage)!=='undefined') ? 'Yes' : 'No'],
+    ['Network status', (typeof navigator!=='undefined' && navigator.onLine!==undefined) ? (navigator.onLine?'Online':'Offline (app still fully usable)') : 'Unknown'],
+    ['Closed accounting periods', DB.closedPeriods.length ? DB.closedPeriods.join(', ') : 'None'],
+    ['Total transactions recorded', DB.transactions.length]
+  ])}</div>`;
+
+  html += `<div class="card"><h3>Data Quality Detail</h3><div style="margin-top:4px">${dqSummaryRow(dq)}</div><div style="margin-top:8px"><a onclick="go('dataquality')" style="cursor:pointer">Open full Data Quality Check →</a></div></div>`;
+  return html;
+}
+
 /* ============================================================ GRADING */
 function computeGrading(ym){
   const [y,m] = ym.split('-').map(Number);
@@ -1272,19 +1493,22 @@ function viewMemberStatement(){
 /* ============================================================ BACKUP & RESTORE */
 function viewBackup(){
   let html = `<div class="section-title"><h2>Backup & Restore</h2></div>`;
+  const bDays = daysSince(DB.settings.lastBackupAt);
   html += `<div class="card"><h3>Export Full Backup</h3><p class="hint">Downloads a single JSON file containing all members, meetings, transactions, loans, CIF, grading history and settings.</p>
-    <button class="btn" onclick="exportBackup()">Download Backup (.json)</button></div>`;
+    <p class="hint">${DB.settings.lastBackupAt ? ('Last backup: '+fmtDate(DB.settings.lastBackupAt.slice(0,10))+' ('+bDays+' day(s) ago)') : 'No backup has been taken yet on this device.'}</p>
+    <button class="btn" onclick="exportBackup();render();">Download Backup (.json)</button></div>`;
   html += `<div class="card"><h3>Restore from Backup</h3><p class="hint">Restoring replaces ALL current data on this device. Export a backup first if unsure.</p>
     <input type="file" id="restoreFile" accept="application/json">
     <button class="btn danger" style="margin-top:8px" onclick="restoreBackup()">Restore from File</button></div>`;
-  html += `<div class="card"><h3>Sample Demo Data</h3><p class="hint">Adds a clearly-labelled DEMO SHG with sample members, meetings, savings and loans so you can explore the app before entering real records.</p>
-    <button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button></div>`;
+  html += `<div class="card"><h3>Sample Demo Data</h3><p class="hint">${DB.settings.demoDataLoaded ? 'Demo data is currently loaded in the app.' : 'Adds a clearly-labelled DEMO SHG with sample members, meetings, savings and loans so you can explore the app before entering real records.'}</p>
+    ${DB.settings.demoDataLoaded ? `<button class="btn secondary danger" onclick="clearDemoData()">Clear Demo Data</button>` : `<button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button>`}</div>`;
   html += `<div class="card"><h3>Reset Application</h3><p class="hint">Permanently erases all data on this device and starts fresh.</p>
     <button class="btn danger" onclick="resetApp()">Erase All Data</button></div>`;
   return html;
 }
 function exportBackup(){
   downloadFile('shg_backup_'+todayStr()+'.json', JSON.stringify(DB,null,2), 'application/json');
+  DB.settings.lastBackupAt = nowStamp();
   logAudit('BACKUP_EXPORT','Full backup downloaded');
 }
 function restoreBackup(){
@@ -1320,10 +1544,11 @@ function viewSettings(){
     <button class="btn" type="submit">Save</button>
   </form></div>`;
 
-  html += `<div class="card"><h3>Opening Balances</h3><form onsubmit="return saveOpening(event)">
+  html += `<div class="card"><h3>Opening Balances</h3><p class="hint">Posted as a proper journal entry (Debit Cash/Bank, Credit SHG Fund) so the Trial Balance stays correct. Saving again replaces the earlier opening entry via a reversal, never a silent overwrite.</p><form onsubmit="return saveOpening(event)">
     <div class="row">
       <div class="field"><label>Opening Cash ₹</label><input type="number" step="0.01" name="openingCash" value="${DB.settings.openingCash||0}"></div>
       <div class="field"><label>Opening Bank ₹</label><input type="number" step="0.01" name="openingBank" value="${DB.settings.openingBank||0}"></div>
+      <div class="field"><label>As on Date</label><input type="date" name="openingDate" value="${esc(DB.settings.openingDate||todayStr())}"></div>
     </div>
     <button class="btn" type="submit">Save</button>
   </form></div>`;
@@ -1348,7 +1573,14 @@ function viewSettings(){
   return html;
 }
 function saveUserSettings(ev){ ev.preventDefault(); const f=new FormData(ev.target); Object.assign(DB.settings, Object.fromEntries(f.entries())); flash('ok','Saved.'); render(); return false; }
-function saveOpening(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.settings.openingCash=parseFloat(f.get('openingCash'))||0; DB.settings.openingBank=parseFloat(f.get('openingBank'))||0; flash('ok','Opening balances saved.'); render(); return false; }
+function saveOpening(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    postOpeningBalances(f.get('openingCash'), f.get('openingBank'), f.get('openingDate'));
+    flash('ok','Opening balances posted.');
+  }catch(e){ flash('error', e.message); }
+  render(); return false;
+}
 function addExpCat(ev){ ev.preventDefault(); const f=new FormData(ev.target); const c=f.get('cat').trim(); if(c && !DB.expenseCategories.includes(c)) DB.expenseCategories.push(c); render(); return false; }
 function removeExpCat(i){ DB.expenseCategories.splice(i,1); render(); }
 function closePeriod(){ const v = document.getElementById('closeMonth').value; if(!v) return; if(!DB.closedPeriods.includes(v)){ DB.closedPeriods.push(v); logAudit('CLOSE_PERIOD',v+' closed'); } flash('ok',v+' closed.'); render(); }
@@ -1375,64 +1607,179 @@ function viewHelp(){
   return html;
 }
 
-/* ============================================================ DEMO DATA */
-function loadDemoData(){
-  if(!confirm('This will ADD a demo SHG with sample members, savings, loans and transactions on top of current data. Continue?')) return;
-  DB.profile = Object.assign(DB.profile, {name:'DEMO — Jyoti Mahila SHG', shgId:'DEMO-001', state:'Haryana', district:'Gurugram', block:'Farrukhnagar',
-    gp:'Demo GP', village:'Demo Village', voClf:'Demo VO', formationDate:'2023-04-01', meetingDay:'Monday', meetingFrequency:'Monthly',
-    president:'Demo President', secretary:'Demo Secretary', treasurer:'Demo Treasurer'});
-  if(!DB.profile.banks.length) DB.profile.banks.push({bank:'Demo Gramin Bank',branch:'Farrukhnagar',accno:'000DEMO0001234',ifsc:'DEMB0000001'});
-  const names = ['Sunita Devi','Rekha Kumari','Meena Yadav','Kamla Devi','Pooja Sharma','Anita Rani','Savita Devi','Geeta Kumari','Radha Devi','Suman Lata','Kavita Rani','Neelam Devi'];
-  const newMembers = names.map(n=>({id:nextId('MEM'), name:n+' (DEMO)', fatherHusband:'S/o Demo', mobile:'9800000'+(100+Math.floor(Math.random()*900)), village:'Demo Village', doj:'2023-04-10', status:'Active', occupation:'Agriculture', nominee:'', bankAccno:'', bankIfsc:''}));
-  DB.members = DB.members.concat(newMembers);
-  DB.settings.openingCash = DB.settings.openingCash || 5000;
-  DB.settings.openingDate = DB.settings.openingDate || '2026-04-01';
-  let d = new Date('2026-05-04');
-  for(let month=0; month<5; month++){
-    const dateStr = new Date(d.getFullYear(), d.getMonth()+month, 4).toISOString().slice(0,10);
-    if(isPeriodClosed(dateStr)) continue;
-    let present=0;
-    newMembers.forEach((m,idx)=>{
-      const isPresent = Math.random()>0.1;
-      if(isPresent){ present++;
-        try{ postTxn({date:dateStr,type:'Savings',debit:'CASH',credit:'MEMBER_SAVINGS',amount:100+Math.round(Math.random()*50),memberId:m.id,narration:'DEMO meeting savings — '+m.name}); }catch(e){}
-      }
-      if(month===0 && idx<4){
-        const amt = 5000+idx*1000;
-        const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1)};
-        DB.loans.push(loan);
-        try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); }catch(e){}
-      }
-      if(month>0){
-        const loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed');
-        if(loan && Math.random()>0.2){
-          const inst = Math.round(loan.principal/loan.instalments);
-          try{
-            postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:Math.min(inst,loanOutstanding(loan.id).principal||inst),memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
-            postTxn({date:dateStr,type:'Interest Received',debit:'CASH',credit:'INTEREST_INCOME',amount:Math.round(loan.principal*loan.interestRate/1200),memberId:m.id,loanId:loan.id,narration:'DEMO interest — '+m.name});
-          }catch(e){}
-        }
-      }
+/* ============================================================ HELP ASSISTANT (offline, rule-based — not a live/connected AI) */
+const HELP_KB = [
+  {kw:['savings','saving','collect savings','record savings'], a:'Go to Meetings → Conduct New Meeting and enter each member\'s savings amount, or use Savings → "Record a Standalone Savings / Withdrawal Entry" for a one-off entry. The app posts Debit Cash/Bank, Credit Member Savings automatically.'},
+  {kw:['loan','disburse','disbursement','new loan','issue loan'], a:'Record a new loan from Loans → "+ New Loan", or directly inside a Meeting under "New Loan Disbursed at this Meeting". You set the principal, interest rate and number of instalments — nothing is hard-coded.'},
+  {kw:['repay','repayment','instalment','installment','emi'], a:'Repayments are entered per member during a Meeting (Repay Principal / Repay Interest columns), or you can post a Journal Voucher under Transactions if it happens outside a meeting. The app automatically reduces the loan\'s outstanding principal and credits Interest Income for the interest portion.'},
+  {kw:['cif','community investment fund'], a:'Go to CIF → "+ Record CIF Received". Enter the source, amount, rate and repayment period. This posts Debit Bank/Cash, Credit CIF (a liability, since it is repayable).'},
+  {kw:['trial balance','tb','not matching','not balanced','mismatch'], a:'A Trial Balance mismatch should not normally happen, since every voucher enforces equal debit and credit. If you see one, check Data Quality Check for the exact issue, and check whether a backup was restored partway or a browser tab was closed mid-entry.'},
+  {kw:['balance sheet','bs'], a:'The Balance Sheet is generated automatically under Financial Statements from your Cash, Bank, Loan and Savings ledgers — you never fill it in manually. If assets and liabilities don\'t match, open Data Quality Check.'},
+  {kw:['backup','restore','lost data','device change','new phone'], a:'Go to Backup & Restore → "Download Backup (.json)" regularly, and keep the file somewhere safe (email to yourself, cloud drive, Working Copy). To move to a new device, open this same HTML file there and use "Restore from File" with that backup.'},
+  {kw:['demo','sample data','test data','remove demo','clear demo'], a:'Demo data is clearly tagged internally, separate from real records. Use "Load Sample Demo Data" or "Clear Demo Data" from the Dashboard, Backup & Restore, or Health Check screens at any time — clearing it never affects real entries.'},
+  {kw:['grading','grade','shg grade'], a:'SHG Grading (left menu) calculates a monthly grade automatically from your existing records — meetings, attendance, savings, loan recovery and bookkeeping quality. It is a configurable/local framework, not an official government grade, unless you update it to match your SRLM\'s exact formula in Settings.'},
+  {kw:['lokos','upload','export data','csv'], a:'LokOS Readiness & Export shows a GREEN/AMBER/RED readiness status and lets you download validated CSV files (Members, Savings, Loans, Transactions). This app does not connect to any official API — it prepares the data for whichever mechanism your SRLM/DAY-NRLM officially authorises.'},
+  {kw:['closed period','close month','reopen','cannot post','locked'], a:'If a date falls in a closed period, go to Settings → Monthly/Annual Closing and reopen that month before posting. Close periods again once corrections are done, to prevent accidental changes to finalised records.'},
+  {kw:['reverse','delete transaction','wrong entry','mistake','correct entry'], a:'Never delete a posted transaction. Open Transactions / Vouchers and click "Reverse" next to the entry — this posts an equal and opposite correcting entry and keeps a full audit trail, rather than erasing history.'},
+  {kw:['member','add member','new member'], a:'Go to Members → "+ Add Member". Each member gets a unique ID automatically. You can edit details or change status (Active/Inactive/Exited) at any time from the same screen.'},
+  {kw:['expense','expenses'], a:'Record expenses either inside a Meeting (Meeting Expenses section) or as a Journal Voucher under Transactions, selecting the correct Expense category and Cash/Bank as credit.'},
+  {kw:['cash book','bank book'], a:'Cash Book and Bank Book (left menu) show every receipt and payment for that account with a running balance — they update automatically from every module, you never fill them in directly.'},
+  {kw:['data quality','error','warning'], a:'Data Quality Check flags issues like negative balances, duplicate members, missing fields or a Trial Balance mismatch, each marked 🟢 Ready / 🟠 Attention Required / 🔴 Error, with enough detail to find and fix the record.'},
+  {kw:['health','health check','storage','device'], a:'Health Check (left menu) gives a one-screen status of data quality, backup age, demo data status and device storage — check it periodically, especially before a long field trip.'},
+  {kw:['reconciliation','bank statement'], a:'Bank Reconciliation (left menu) compares your book bank balance with the actual bank statement, adjusting for unpresented cheques, deposits in transit, bank charges and interest credited.'}
+];
+function helpAiAsk(q){
+  q = (q||'').toLowerCase();
+  if(!q.trim()) return null;
+  let best=null, bestScore=0;
+  HELP_KB.forEach(entry=>{
+    let score=0;
+    entry.kw.forEach(k=>{ if(q.includes(k)) score += k.split(' ').length; });
+    if(score>bestScore){ bestScore=score; best=entry; }
+  });
+  return bestScore>0 ? best.a : null;
+}
+function viewHelpAI(){
+  let html = `<div class="section-title"><h2>Help Assistant</h2></div>`;
+  html += `<div class="msg info">This is an offline, built-in assistant that matches your question against this app's own Help content — it is not a live AI model and does not connect to the internet. For anything it can't answer, see Help &amp; Training or ask your Vitta Sakhi / bank branch.</div>`;
+  html += `<div class="card"><form onsubmit="return helpAiSubmit(event)">
+    <div class="field"><label>Ask a question about using this app</label><input name="q" id="helpAiInput" placeholder="e.g. How do I record a loan repayment?" autocomplete="off"></div>
+    <button class="btn" type="submit">Ask</button>
+  </form></div>`;
+  if(HELP_CHAT.length){
+    html += `<div class="card"><h3>Conversation</h3>`;
+    HELP_CHAT.slice().reverse().forEach(c=>{
+      html += `<div style="margin-bottom:12px"><div style="font-weight:600;color:var(--navy-2);font-size:13px">You asked</div><div style="font-size:13.5px;margin-bottom:6px">${esc(c.q)}</div>
+        <div style="font-weight:600;color:var(--muted);font-size:12px">Help Assistant</div><div style="font-size:13.5px;color:var(--text)">${esc(c.a)}</div></div>`;
     });
-    if(month===1){ try{ postTxn({date:dateStr,type:'CIF Receipt',debit:'BANK',credit:'CIF',amount:150000,narration:'DEMO CIF received from VO/CLF'}); DB.cif.push({date:dateStr,source:'Demo VO/CLF',amount:150000,rate:9,period:36,bank:'BANK'});}catch(e){} }
-    try{ postTxn({date:dateStr,type:'Expense',debit:'EXP_Stationery',credit:'CASH',amount:150,narration:'DEMO stationery expense'}); }catch(e){}
-    DB.meetings.push({id:nextId('MTG'), date:dateStr, totalMembers:newMembers.length, present, totals:{savings:0,repayment:0,newLoans:0,expenses:150}});
+    html += `</div>`;
   }
-  logAudit('LOAD_DEMO','Demo SHG data generated');
-  flash('ok','Demo data loaded — clearly separate from real records (names end in "(DEMO)"). Erase all data in Backup & Restore to remove.');
+  html += `<div class="card"><h3>Try asking about…</h3><div class="row">${['Savings','Loan repayment','CIF','Trial Balance mismatch','Backup & restore','SHG Grading','LokOS export','Closed period','Reversing an entry'].map(t=>`<button type="button" class="btn small secondary" onclick="helpAiQuick('${esc(t)}')">${esc(t)}</button>`).join('')}</div></div>`;
+  return html;
+}
+function helpAiSubmit(ev){
+  ev.preventDefault();
+  const inp = document.getElementById('helpAiInput');
+  const q = inp.value;
+  if(!q.trim()) return false;
+  const ans = helpAiAsk(q) || 'I don\'t have a ready answer for that yet. Try Help & Training in the left menu, or rephrase using a word like "savings", "loan", "repayment", "CIF", "backup", "grading" or "LokOS".';
+  HELP_CHAT.push({q, a:ans});
+  ROUTE='helpai'; render();
+  setTimeout(()=>{ const el=document.getElementById('helpAiInput'); if(el) el.focus(); },0);
+  return false;
+}
+function helpAiQuick(q){
+  const ans = helpAiAsk(q) || 'I don\'t have a ready answer for that yet. Try Help & Training in the left menu.';
+  HELP_CHAT.push({q, a:ans});
   render();
+}
+
+/* ============================================================ DEMO DATA */
+// Every record created while DEMO_MODE is true carries demo:true, so it can be
+// added and removed cleanly without ever touching real SHG data.
+function seedDemoDataCore(){
+  DEMO_MODE = true;
+  try{
+    if(!DB.profile.name){
+      DB.profile = Object.assign(DB.profile, {name:'DEMO — Jyoti Mahila SHG', shgId:'DEMO-001', state:'Haryana', district:'Gurugram', block:'Farrukhnagar',
+        gp:'Demo GP', village:'Demo Village', voClf:'Demo VO', formationDate:'2023-04-01', meetingDay:'Monday', meetingFrequency:'Monthly',
+        president:'Demo President', secretary:'Demo Secretary', treasurer:'Demo Treasurer'});
+      DB.settings.demoProfileApplied = true;
+    }
+    if(!DB.profile.banks.length){
+      DB.profile.banks.push({bank:'Demo Gramin Bank',branch:'Farrukhnagar',accno:'000DEMO0001234',ifsc:'DEMB0000001'});
+      DB.settings.demoBankApplied = true;
+    }
+    const names = ['Sunita Devi','Rekha Kumari','Meena Yadav','Kamla Devi','Pooja Sharma','Anita Rani','Savita Devi','Geeta Kumari','Radha Devi','Suman Lata','Kavita Rani','Neelam Devi'];
+    const newMembers = names.map(n=>({id:nextId('MEM'), name:n+' (DEMO)', fatherHusband:'S/o Demo', mobile:'9800000'+(100+Math.floor(Math.random()*900)), village:'Demo Village', doj:'2023-04-10', status:'Active', occupation:'Agriculture', nominee:'', bankAccno:'', bankIfsc:'', demo:true}));
+    DB.members = DB.members.concat(newMembers);
+    if(accountBalance('CASH')===0 && accountBalance('BANK')===0){
+      try{ postOpeningBalances(5000, 0, addMonths(todayStr(),-6)); DB.settings.demoOpeningApplied = true; }catch(e){}
+    }
+    // Run five monthly meetings ending in the current month, so dates are always current and never fall in a closed period.
+    const anchor = new Date(); anchor.setDate(4);
+    for(let month=-4; month<=0; month++){
+      const dateStr = addMonths(anchor.toISOString().slice(0,10), month);
+      if(isPeriodClosed(dateStr)) continue;
+      let present=0;
+      newMembers.forEach((m,idx)=>{
+        const isPresent = Math.random()>0.1;
+        if(isPresent){ present++;
+          try{ postTxn({date:dateStr,type:'Savings',debit:'CASH',credit:'MEMBER_SAVINGS',amount:100+Math.round(Math.random()*50),memberId:m.id,narration:'DEMO meeting savings — '+m.name}); }catch(e){}
+        }
+        if(month===-4 && idx<4){
+          const amt = 5000+idx*1000;
+          const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
+          DB.loans.push(loan);
+          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); }catch(e){}
+        }
+        if(month>-4){
+          const loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed' && l.demo);
+          if(loan && Math.random()>0.2){
+            const inst = Math.round(loan.principal/loan.instalments);
+            try{
+              postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:Math.min(inst,loanOutstanding(loan.id).principal||inst),memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
+              postTxn({date:dateStr,type:'Interest Received',debit:'CASH',credit:'INTEREST_INCOME',amount:Math.round(loan.principal*loan.interestRate/1200),memberId:m.id,loanId:loan.id,narration:'DEMO interest — '+m.name});
+            }catch(e){}
+          }
+        }
+      });
+      if(month===-3){ try{ postTxn({date:dateStr,type:'CIF Receipt',debit:'BANK',credit:'CIF',amount:150000,narration:'DEMO CIF received from VO/CLF'}); DB.cif.push({date:dateStr,source:'Demo VO/CLF',amount:150000,rate:9,period:36,bank:'BANK',demo:true});}catch(e){} }
+      try{ postTxn({date:dateStr,type:'Expense',debit:'EXP_Stationery',credit:'CASH',amount:150,narration:'DEMO stationery expense'}); }catch(e){}
+      DB.meetings.push({id:nextId('MTG'), date:dateStr, totalMembers:newMembers.length, present, totals:{savings:0,repayment:0,newLoans:0,expenses:150}, demo:true});
+    }
+    DB.settings.demoDataLoaded = true;
+    logAudit('LOAD_DEMO','Demo SHG data generated');
+  } finally {
+    DEMO_MODE = false;
+  }
+}
+function loadDemoData(){
+  if(DB.settings.demoDataLoaded){ alert('Demo data is already loaded. Use "Clear Demo Data" first if you want to regenerate it.'); return; }
+  if(!confirm('This will add a demo SHG with sample members, meetings, savings, loans and CIF, clearly tagged as DEMO. Continue?')) return;
+  seedDemoDataCore();
+  flash('ok','Demo data loaded — every demo record is tagged internally and can be removed cleanly any time with "Clear Demo Data" in Backup & Restore.');
+  render();
+}
+function clearDemoData(){
+  if(!DB.settings.demoDataLoaded && !DB.members.some(m=>m.demo)){ alert('No demo data is currently loaded.'); return; }
+  if(!confirm('Remove all demo records? Your real SHG data (if any) will not be touched.')) return;
+  DB.members = DB.members.filter(m=>!m.demo);
+  DB.loans = DB.loans.filter(l=>!l.demo);
+  DB.meetings = DB.meetings.filter(mt=>!mt.demo);
+  DB.cif = DB.cif.filter(c=>!c.demo);
+  DB.transactions = DB.transactions.filter(t=>!t.demo);
+  if(DB.settings.demoProfileApplied){
+    Object.assign(DB.profile, {name:'', shgId:'', state:'', district:'', block:'', gp:'', village:'', voClf:'',
+      formationDate:'', president:'', secretary:'', treasurer:''});
+    DB.settings.demoProfileApplied = false;
+  }
+  if(DB.settings.demoBankApplied){
+    DB.profile.banks = DB.profile.banks.filter(b=>b.accno!=='000DEMO0001234');
+    DB.settings.demoBankApplied = false;
+  }
+  if(DB.settings.demoOpeningApplied){
+    DB.settings.openingCash = 0; DB.settings.openingBank = 0; DB.settings.openingDate = '';
+    DB.settings.demoOpeningApplied = false;
+  }
+  DB.settings.demoDataLoaded = false;
+  logAudit('CLEAR_DEMO','All demo records removed');
+  flash('ok','Demo data cleared.');
+  ROUTE='dashboard'; render();
 }
 
 /* ============================================================ INIT ============================================================ */
 loadDB();
 if(location.hash) ROUTE = location.hash.replace('#','')||'dashboard';
 window.addEventListener('hashchange', ()=>{ ROUTE = location.hash.replace('#','')||'dashboard'; render(); });
-if(!DB.profile.name && !DB.members.length){
-  // First run: offer demo data via a gentle prompt on the dashboard rather than auto-loading.
+if(!DB.members.length && !DB.settings.autoSeeded){
+  // First run on this device: fill and keep sample demo data automatically so the app is never empty.
+  seedDemoDataCore();
+  DB.settings.autoSeeded = true;
 }
 render();
-// Expose a console helper for demo data (also reachable via Settings-adjacent flow if desired)
 window.loadDemoData = loadDemoData;
+window.clearDemoData = clearDemoData;
 </script>
 </body>
 </html>
