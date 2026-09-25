@@ -275,7 +275,14 @@ const TRANSLATIONS = {
   'Attention Recommended':'ध्यान देने की सिफ़ारिश','Never':'कभी नहीं','Yes':'हाँ','No':'नहीं',
   'Online':'ऑनलाइन','Weekly':'साप्ताहिक','Fortnightly':'पाक्षिक','Monthly':'मासिक',
   'Monday':'सोमवार','Tuesday':'मंगलवार','Wednesday':'बुधवार','Thursday':'गुरुवार','Friday':'शुक्रवार','Saturday':'शनिवार','Sunday':'रविवार',
-  'Cash':'नकद','Unnamed SHG':'अनाम एसएचजी'
+  'Cash':'नकद','Unnamed SHG':'अनाम एसएचजी',
+  'Deposit to Bank':'बैंक में जमा करें','Conduct Meeting':'बैठक आयोजित करें','Post Meeting':'बैठक पोस्ट करें',
+  'Loan O/S':'ऋण बकाया','Due Now':'अभी देय','Row Total':'पंक्ति योग','Present':'उपस्थित',
+  'Total Savings':'कुल बचत','Total Principal + Interest':'कुल मूलधन + ब्याज','Total Fines':'कुल जुर्माना',
+  'Total Received':'कुल प्राप्त','Principal Due':'देय मूलधन','Interest Due':'देय ब्याज','Arrears':'बकाया राशि',
+  'Total Due':'कुल देय','Use in Grid':'ग्रिड में उपयोग करें','Post Deposit':'जमा पोस्ट करें',
+  'Bank Account':'बैंक खाता','Deposit / Reference No.':'जमा / संदर्भ संख्या','Remarks':'टिप्पणी',
+  'Deposit Date':'जमा तिथि','Confirm & Close':'पुष्टि करें व बंद करें','Run Closing Checklist':'समापन जाँच-सूची चलाएँ'
 };
 
 
@@ -510,6 +517,21 @@ function generateLoanSchedule(loanId){
       principalPaid, interestPaid, balance: Math.round(((principalDue-principalPaid)+(interestDue-interestPaid))*100)/100, status});
   }
   return schedule;
+}
+// Everything the Meeting module needs to know about one member's repayment position,
+// so the meeting grid can show it directly instead of the user looking it up elsewhere.
+// "Due now" is the oldest unpaid/overdue instalment; "arrears" is anything overdue before that.
+function memberDueInfo(memberId){
+  const loan = DB.loans.find(l=>l.memberId===memberId && l.status!=='Closed');
+  if(!loan) return null;
+  const schedule = generateLoanSchedule(loan.id);
+  const dueRows = schedule.filter(s=>s.status!=='Paid' && s.dueDate<=todayStr());
+  const current = dueRows.length ? dueRows[dueRows.length-1] : null;
+  const arrears = dueRows.length>1 ? Math.round(dueRows.slice(0,-1).reduce((s,r)=>s+r.balance,0)*100)/100 : 0;
+  const principalDue = current ? Math.max(0, Math.round((current.principalDue-current.principalPaid)*100)/100) : 0;
+  const interestDue = current ? Math.max(0, Math.round((current.interestDue-current.interestPaid)*100)/100) : 0;
+  return { loan, outstanding: loanOutstanding(loan.id).principal, principalDue, interestDue, arrears,
+    totalDue: Math.round((principalDue+interestDue+arrears)*100)/100 };
 }
 
 /* ---------------- Central engine aliases ----------------
@@ -822,14 +844,19 @@ function saveMember(ev,id){
 
 /* ============================================================ MEETINGS (guided workflow) */
 function viewMeetings(){
-  let html = `<div class="section-title"><h2>SHG Meetings</h2><button class="btn" onclick="go('meetingnew')">+ Conduct New Meeting</button></div>`;
+  let html = `<div class="section-title"><h2>SHG Meetings</h2><div class="row"><button class="btn secondary" onclick="depositToBankForm()">Deposit to Bank</button><button class="btn" onclick="go('meetingnew')">+ Conduct New Meeting</button></div></div>`;
   html += `<div class="card">`;
-  html += DB.meetings.length ? tbl(['Date','Attendance','Attendance %','Savings','Repayment','New Loans','Expenses','Status',''],
+  html += DB.meetings.length ? tbl(['Date','Attendance','Attendance %','Savings','Repayment','New Loans','Expenses','Recon.','Status',''],
     DB.meetings.slice().reverse().map(mt=>{
       const pct = mt.totalMembers ? Math.round(mt.present/mt.totalMembers*100) : 0;
+      let recon = '<span class="hint">—</span>';
+      if(mt.actualReceived!=null){
+        const diff = Math.round((mt.actualReceived-(mt.totals.savings+mt.totals.repayment+mt.totals.fines))*100)/100;
+        recon = diff===0 ? badge('Matched','green') : badge(rupee(Math.abs(diff))+(diff>0?' extra':' short'),'amber');
+      }
       return [fmtDate(mt.date), mt.present+'/'+mt.totalMembers, pct+'%',
       rightCell(rupee(mt.totals.savings)), rightCell(rupee(mt.totals.repayment)), rightCell(rupee(mt.totals.newLoans)),
-      rightCell(rupee(mt.totals.expenses)), badge('Posted','green'),
+      rightCell(rupee(mt.totals.expenses)), recon, badge('Posted','green'),
       mt.absentIds ? `<button class="btn small secondary" onclick="viewAttendance('${mt.id}')">Attendance</button>` : ''];
     })) :
     `<div class="empty">No meetings recorded yet.</div>`;
@@ -847,28 +874,57 @@ function viewAttendance(meetingId){
 }
 function meetingWorkflow(){
   if(!activeMembers().length) return `<div class="card"><div class="empty">Add members first before conducting a meeting.</div></div>`;
-  let html = `<div class="card"><h3>Conduct Meeting</h3>
-  <div class="helpbox">Enter savings, repayment and fines for each present member. Add any new loan disbursements and meeting expenses below, then Post. All ledger entries are created automatically — nothing needs to be entered twice.</div>
+  const members = activeMembers();
+  const dueList = members.map(m=>({m, due:memberDueInfo(m.id)})).filter(x=>x.due && x.due.totalDue>0.5);
+
+  let html = '';
+  if(dueList.length){
+    html += `<div class="card"><h3>Members with Repayment Due (${dueList.length})</h3>
+      ${tbl(['Member','Loan ID','Principal Due','Interest Due','Arrears','Total Due',''],
+        dueList.map(x=>[esc(x.m.name), x.due.loan.id, rightCell(rupee(x.due.principalDue)), rightCell(rupee(x.due.interestDue)),
+          rightCell(x.due.arrears>0?rupee(x.due.arrears):'—'), rightCell('<b>'+rupee(x.due.totalDue)+'</b>'),
+          `<button type="button" class="btn small secondary" onclick="meetingFillDue('${x.m.id}',${x.due.principalDue},${x.due.interestDue})">Use in Grid</button>`]))}
+      <p class="hint" style="margin-top:6px">Click "Use in Grid" to fill that member's Principal/Interest fields below with the due amount — you can still edit it before posting.</p>
+    </div>`;
+  }
+
+  html += `<div class="card"><h3>Conduct Meeting</h3>
+  <div class="helpbox">Enter savings, principal, interest and fines for each present member directly here — this is the only place repayments need to be entered; the Loan and Accounting modules update automatically. All ledger entries post themselves; nothing needs to be entered twice.</div>
   <form onsubmit="return postMeeting(event)">
   <div class="row">
     <div class="field"><label>Meeting Date *</label><input type="date" name="date" value="${todayStr()}" required></div>
     <div class="field"><label>Collect In</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
   </div>
-  <div class="tablewrap"><table><thead><tr><th>Present</th><th>Member</th><th>Savings ₹</th><th>Repay Principal ₹</th><th>Repay Interest ₹</th><th>Fine ₹</th></tr></thead><tbody>`;
-  activeMembers().forEach(m=>{
+  <div class="tablewrap"><table><thead><tr><th>Present</th><th>Member</th><th>Loan O/S</th><th>Due Now</th><th>Savings ₹</th><th>Principal ₹</th><th>Interest ₹</th><th>Fine ₹</th><th>Row Total</th></tr></thead><tbody>`;
+  members.forEach(m=>{
+    const due = memberDueInfo(m.id);
     html += `<tr>
       <td><input type="checkbox" name="present_${m.id}" checked></td>
       <td>${esc(m.name)}</td>
-      <td><input type="number" min="0" step="0.01" name="sav_${m.id}" style="width:90px"></td>
-      <td><input type="number" min="0" step="0.01" name="rp_${m.id}" style="width:90px"></td>
-      <td><input type="number" min="0" step="0.01" name="ri_${m.id}" style="width:90px"></td>
-      <td><input type="number" min="0" step="0.01" name="fine_${m.id}" style="width:80px"></td>
+      <td class="num">${due?rupee(due.outstanding):'—'}</td>
+      <td class="num">${due && due.totalDue>0.5 ? rupee(due.totalDue)+(due.arrears>0?`<div class="hint">incl. ${rupee(due.arrears)} arrears</div>`:'') : '<span class="hint">—</span>'}</td>
+      <td><input type="number" min="0" step="0.01" name="sav_${m.id}" style="width:85px" oninput="meetingCalcRow('${m.id}')"></td>
+      <td><input type="number" min="0" step="0.01" name="rp_${m.id}" style="width:85px" oninput="meetingCalcRow('${m.id}')"></td>
+      <td><input type="number" min="0" step="0.01" name="ri_${m.id}" style="width:85px" oninput="meetingCalcRow('${m.id}')"></td>
+      <td><input type="number" min="0" step="0.01" name="fine_${m.id}" style="width:75px" oninput="meetingCalcRow('${m.id}')"></td>
+      <td class="num" id="rowtotal_${m.id}">₹0.00</td>
     </tr>`;
   });
   html += `</tbody></table></div>
+  <div class="grid cols4" style="margin-top:10px">
+    <div class="stat"><div class="lbl">Total Savings</div><div class="val" id="meetingTotSav">₹0.00</div></div>
+    <div class="stat"><div class="lbl">Total Principal + Interest</div><div class="val" id="meetingTotRepay">₹0.00</div></div>
+    <div class="stat"><div class="lbl">Total Fines</div><div class="val" id="meetingTotFine">₹0.00</div></div>
+    <div class="stat"><div class="lbl">Total Received</div><div class="val" id="meetingGrandTotal">₹0.00</div></div>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <div class="field"><label>Actual Cash/Bank Counted Today ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
+  </div>
+  <div class="hint" id="meetingReconDiff"></div>
+  <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" style="width:auto"> Allow a member's principal repayment to exceed their loan's outstanding balance (authorised adjustment)</label></div>
   <h3 style="margin-top:16px">New Loan Disbursed at this Meeting (optional)</h3>
   <div class="row">
-    <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${activeMembers().map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Purpose</label><input name="newloan_purpose"></div>
     <div class="field"><label>Principal ₹</label><input type="number" min="0" step="0.01" name="newloan_amount"></div>
     <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="newloan_rate" value="12"></div>
@@ -887,11 +943,46 @@ function meetingWorkflow(){
   </form></div>`;
   return html;
 }
+// Live, client-side only — fills one member's Principal/Interest fields from the due-list
+// "Use in Grid" button, then recalculates that row and the meeting totals.
+function meetingFillDue(mid, principal, interest){
+  const rpEl = document.querySelector('[name="rp_'+mid+'"]');
+  const riEl = document.querySelector('[name="ri_'+mid+'"]');
+  if(rpEl) rpEl.value = principal.toFixed(2);
+  if(riEl) riEl.value = interest.toFixed(2);
+  meetingCalcRow(mid);
+}
+function meetingCalcRow(mid){
+  const val = name => parseFloat((document.querySelector('[name="'+name+'_'+mid+'"]')||{}).value)||0;
+  const total = val('sav')+val('rp')+val('ri')+val('fine');
+  const cell = document.getElementById('rowtotal_'+mid);
+  if(cell) cell.textContent = rupee(total);
+  meetingCalcGrandTotal();
+}
+function meetingCalcGrandTotal(){
+  const sum = prefix => { let s=0; document.querySelectorAll('input[name^="'+prefix+'_"]').forEach(el=>s+=parseFloat(el.value)||0); return s; };
+  const totSav = sum('sav'), totRp = sum('rp'), totRi = sum('ri'), totFine = sum('fine');
+  const grand = Math.round((totSav+totRp+totRi+totFine)*100)/100;
+  const setText = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent = rupee(v); };
+  setText('meetingTotSav', totSav); setText('meetingTotRepay', totRp+totRi); setText('meetingTotFine', totFine); setText('meetingGrandTotal', grand);
+  const actualEl = document.getElementById('actualReceived');
+  const diffEl = document.getElementById('meetingReconDiff');
+  if(actualEl && diffEl){
+    if(actualEl.value!==''){
+      const actual = parseFloat(actualEl.value)||0;
+      const diff = Math.round((actual-grand)*100)/100;
+      diffEl.textContent = diff===0 ? 'Matches the amount entered above.' : ('Difference from entries: '+rupee(Math.abs(diff))+(diff>0?' more counted than entered':' less counted than entered'));
+      diffEl.style.color = diff===0 ? 'var(--green)' : 'var(--red)';
+    } else { diffEl.textContent=''; }
+  }
+  return grand;
+}
 function postMeeting(ev){
   ev.preventDefault();
   const f = new FormData(ev.target);
   const date = f.get('date');
   const mode = f.get('mode');
+  const allowExcess = !!f.get('allowExcess');
   if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
   const totals = {savings:0, repayment:0, newLoans:0, expenses:0, fines:0};
   let present=0;
@@ -909,7 +1000,11 @@ function postMeeting(ev){
       if(sav>0){ postTxn({date,type:'Savings',debit:mode,credit:'MEMBER_SAVINGS',amount:sav,memberId:m.id,meetingId,narration:'Meeting savings — '+m.name}); totals.savings+=sav; }
       if(rp>0){
         const loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed');
-        if(!loan) throw new Error('No open loan found for '+m.name+' but repayment entered.');
+        if(!loan) throw new Error('No open loan found for '+m.name+' but a principal repayment was entered. Remove the amount, or check the member and loan.');
+        const outstanding = loanOutstanding(loan.id).principal;
+        if(rp > outstanding+0.5 && !allowExcess){
+          throw new Error('Principal repayment for '+m.name+' ('+rupee(rp)+') exceeds the loan\'s outstanding balance ('+rupee(outstanding)+'). Reduce the amount, or tick "Allow a member\'s principal repayment to exceed their loan\'s outstanding balance" if this is an authorised adjustment.');
+        }
         postTxn({date,type:'Loan Repayment',debit:mode,credit:'MEMBER_LOANS',amount:rp,memberId:m.id,loanId:loan.id,meetingId,narration:'Principal repayment — '+m.name});
         totals.repayment+=rp;
       }
@@ -943,14 +1038,60 @@ function postMeeting(ev){
       postTxn({date,type:'Expense',debit:'EXP_'+cat,credit:mode,amount:expAmt,meetingId,narration:f.get('exp_narration')||cat});
       totals.expenses+=expAmt;
     }
-    DB.meetings.push({id:meetingId,date,totalMembers:members.length,present,presentIds,absentIds,totals});
+    const actualRaw = f.get('actualReceived');
+    const actualReceived = (actualRaw!=null && actualRaw!=='') ? parseFloat(actualRaw) : null;
+    const computedTotal = Math.round((totals.savings+totals.repayment+totals.fines)*100)/100;
+    DB.meetings.push({id:meetingId,date,totalMembers:members.length,present,presentIds,absentIds,totals,actualReceived});
     logAudit('POST_MEETING', meetingId+' on '+date+' — '+present+'/'+members.length+' present');
-    flash('ok','Meeting posted. All registers and ledgers updated automatically.');
+    let msg = 'Meeting posted. All registers and ledgers updated automatically.';
+    if(actualReceived!=null){
+      const diff = Math.round((actualReceived-computedTotal)*100)/100;
+      msg += diff===0 ? ' Cash/bank counted matches entries.' : (' Note: counted amount differs from entries by '+rupee(Math.abs(diff))+' — check the meeting record.');
+    }
+    if(mode==='CASH' && computedTotal>0) msg += ' Remember to deposit the cash collected to the bank when convenient (Deposit to Bank).';
+    flash('ok', msg);
     ROUTE='meetings'; render();
   }catch(e){
     flash('error', e.message);
     render();
   }
+  return false;
+}
+// Records the SHG physically moving meeting cash into the bank — Debit Bank, Credit Cash —
+// so the Cash Book and Bank Book stay reconciled without a separate manual adjustment.
+function depositToBankForm(){
+  const cashBal = accountBalance('CASH');
+  if(cashBal<=0){ alert('There is no cash in hand to deposit right now.'); return; }
+  const banks = DB.profile.banks||[];
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Deposit to Bank</h3>
+  <p class="hint">Cash in hand available: <b>${rupee(cashBal)}</b></p>
+  <form onsubmit="return postDepositToBank(event)">
+    <div class="row">
+      <div class="field"><label>Deposit Date</label><input type="date" name="date" value="${todayStr()}"></div>
+      <div class="field"><label>Amount ₹ *</label><input type="number" min="0.01" step="0.01" name="amount" value="${cashBal.toFixed(2)}" required></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Bank Account</label><select name="bankAccount">${banks.length ? banks.map(b=>`<option value="${esc(b.bank+' - '+b.accno)}">${esc(b.bank)} — ${esc(b.accno)}</option>`).join('') : `<option value="">Not specified</option>`}</select></div>
+      <div class="field"><label>Deposit / Reference No.</label><input name="ref"></div>
+    </div>
+    <div class="field"><label>Remarks</label><input name="remarks"></div>
+    <button class="btn" type="submit">Post Deposit</button>
+  </form>`);
+}
+function postDepositToBank(ev){
+  ev.preventDefault(); const f = new FormData(ev.target);
+  try{
+    const date = f.get('date'), amount = parseFloat(f.get('amount'))||0, bankAccount = f.get('bankAccount')||'', ref = f.get('ref')||'', remarks = f.get('remarks')||'';
+    if(amount<=0) throw new Error('Enter a deposit amount greater than zero.');
+    const cashBal = accountBalance('CASH');
+    if(amount > cashBal+0.5) throw new Error('Deposit amount ('+rupee(amount)+') exceeds cash in hand ('+rupee(cashBal)+'). Reduce the amount to match what is actually being deposited.');
+    let narration = 'Cash deposited to bank';
+    if(bankAccount) narration += ' — '+bankAccount;
+    if(ref) narration += ' · Ref# '+ref;
+    if(remarks) narration += ' · '+remarks;
+    postTxn({date, type:'Bank Deposit', debit:'BANK', credit:'CASH', amount, narration});
+    closeModal(); flash('ok','Deposit posted — Cash Book and Bank Book now reconcile automatically.'); render();
+  }catch(e){ flash('error', e.message); render(); }
   return false;
 }
 function addMonths(dateStr,n){
@@ -1180,15 +1321,18 @@ function doReverse(id){
 
 /* ============================================================ CASH / BANK BOOK */
 function viewBook(code,title){
-  let html = `<div class="section-title"><h2>${esc(title)}</h2></div>`;
-  let bal = code==='CASH'?(DB.settings.openingCash||0):(DB.settings.openingBank||0);
-  const rows = [['', '', 'Opening Balance','','', rightCell(rupee(bal))]];
+  let html = `<div class="section-title"><h2>${esc(title)}</h2>${code==='CASH'?`<button class="btn secondary" onclick="depositToBankForm()">Deposit to Bank</button>`:''}</div>`;
+  // Opening balance is posted as a real transaction (Debit Cash/Bank, Credit SHG Fund — see
+  // postOpeningBalances), so it already appears in the transaction loop below. Starting the
+  // running balance at DB.settings.openingCash/openingBank here would double-count it.
+  let bal = 0;
+  const rows = [];
   DB.transactions.filter(t=>t.debit===code||t.credit===code).sort((a,b)=>a.date<b.date?-1:1).forEach(t=>{
     const isDr = t.debit===code;
     bal += isDr? t.amount : -t.amount;
     rows.push([fmtDate(t.date), t.voucherNo, esc(t.narration||t.type), isDr?rightCell(rupee(t.amount)):'', !isDr?rightCell(rupee(t.amount)):'', rightCell(rupee(bal))]);
   });
-  html += `<div class="grid cols2">${stat('Closing Balance', rupee(bal))}${stat('Entries', rows.length-1)}</div>`;
+  html += `<div class="grid cols2">${stat('Closing Balance', rupee(bal))}${stat('Entries', rows.length)}</div>`;
   html += `<div class="card">${tbl(['Date','Voucher','Particulars','Receipts (Dr)','Payments (Cr)','Balance'], rows)}</div>`;
   return html;
 }
@@ -1200,10 +1344,12 @@ function viewLedger(){
   html += `<div class="card"><label>Select Account</label><select id="ledgerAcct" onchange="render()" style="max-width:340px">${codes.map(c=>`<option value="${c}" ${ (window.__ledgerSel||codes[0])===c?'selected':''}>${accountLabel(c)}</option>`).join('')}</select></div>`;
   const sel = document.getElementById && document.getElementById('ledgerAcct') ? document.getElementById('ledgerAcct').value : (window.__ledgerSel||codes[0]);
   window.__ledgerSel = sel;
-  let bal = sel==='CASH'?(DB.settings.openingCash||0):(sel==='BANK'?(DB.settings.openingBank||0):0);
+  // Opening balance for Cash/Bank is a real posted transaction (see postOpeningBalances) and
+  // will appear naturally in the loop below — seeding bal from settings here would double-count it.
+  let bal = 0;
   const type = accountType(sel);
   const normalDebit = (type==='asset'||type==='expense');
-  const rows = [['','','Opening Balance','','', rightCell(rupee(bal))]];
+  const rows = [];
   DB.transactions.filter(t=>t.debit===sel||t.credit===sel).sort((a,b)=>a.date<b.date?-1:1).forEach(t=>{
     const isDr = t.debit===sel;
     if(normalDebit) bal += isDr? t.amount : -t.amount; else bal += isDr? -t.amount : t.amount;
