@@ -291,7 +291,11 @@ const TRANSLATIONS = {
   'Principal Paid':'भुगतान मूलधन','Interest Paid':'भुगतान ब्याज','Balance Due':'शेष देय','Eligible for Closure':'बंद करने योग्य',
   'Details':'विवरण','Total Principal':'कुल मूलधन','Total Interest':'कुल ब्याज',
   'Members with Repayment Due':'चुकौती देय सदस्य','New Loan Disbursed at this Meeting (optional)':'इस बैठक में नया ऋण वितरण (वैकल्पिक)',
-  'Meeting Expenses (optional)':'बैठक व्यय (वैकल्पिक)'
+  'Meeting Expenses (optional)':'बैठक व्यय (वैकल्पिक)',
+  'Loan-wise Repayment':'ऋण-वार चुकौती','Fill Due Amounts':'देय राशि भरें','Member Total':'सदस्य कुल',
+  'Member Loan Summary':'सदस्य ऋण सारांश','Loan Register':'ऋण रजिस्टर','View Loans':'ऋण देखें',
+  'Active Loans':'सक्रिय ऋण','Filter by Loan':'ऋण द्वारा फ़िल्टर करें','All Loans':'सभी ऋण',
+  'Loans':'ऋण','Member-wise':'सदस्य-वार','Loan-wise':'ऋण-वार'
 };
 
 
@@ -528,23 +532,29 @@ function generateLoanSchedule(loanId, asOfDate){
   }
   return schedule;
 }
-// Everything the Meeting module needs to know about one member's repayment position, as on
+// Everything the Meeting module needs to know about ALL of one member's active loans, as on
 // a given date (defaults to today) rather than always "as of now" — so a meeting dated
-// earlier than today shows the position that actually applied on that date.
-// "Due now" is the oldest unpaid/overdue instalment; "arrears" is anything overdue before that.
-function memberDueInfo(memberId, asOfDate){
+// earlier than today shows the position that actually applied on that date. A member can hold
+// several independent loans at once; this returns one entry per loan, never a merged figure.
+// "Due now" is the oldest unpaid/overdue instalment on that loan; "arrears" is anything
+// overdue on that loan before that.
+function memberDueInfos(memberId, asOfDate){
   asOfDate = asOfDate || todayStr();
-  const loan = DB.loans.find(l=>l.memberId===memberId && l.status!=='Closed');
-  if(!loan) return null;
-  const schedule = generateLoanSchedule(loan.id, asOfDate);
-  const dueRows = schedule.filter(s=>s.status!=='Paid' && s.dueDate<=asOfDate);
-  const current = dueRows.length ? dueRows[dueRows.length-1] : null;
-  const arrears = dueRows.length>1 ? Math.round(dueRows.slice(0,-1).reduce((s,r)=>s+r.balance,0)*100)/100 : 0;
-  const principalDue = current ? Math.max(0, Math.round((current.principalDue-current.principalPaid)*100)/100) : 0;
-  const interestDue = current ? Math.max(0, Math.round((current.interestDue-current.interestPaid)*100)/100) : 0;
-  return { loan, outstanding: loanOutstanding(loan.id).principal, principalDue, interestDue, arrears,
-    totalDue: Math.round((principalDue+interestDue+arrears)*100)/100 };
+  return DB.loans.filter(l=>l.memberId===memberId && l.status!=='Closed').map(loan=>{
+    const schedule = generateLoanSchedule(loan.id, asOfDate);
+    const dueRows = schedule.filter(s=>s.status!=='Paid' && s.dueDate<=asOfDate);
+    const current = dueRows.length ? dueRows[dueRows.length-1] : null;
+    const arrears = dueRows.length>1 ? Math.round(dueRows.slice(0,-1).reduce((s,r)=>s+r.balance,0)*100)/100 : 0;
+    const principalDue = current ? Math.max(0, Math.round((current.principalDue-current.principalPaid)*100)/100) : 0;
+    const interestDue = current ? Math.max(0, Math.round((current.interestDue-current.interestPaid)*100)/100) : 0;
+    const fullySettled = schedule.every(s=>s.status==='Paid');
+    return { loan, outstanding: loanOutstanding(loan.id).principal, principalDue, interestDue, arrears, fullySettled,
+      totalDue: Math.round((principalDue+interestDue+arrears)*100)/100 };
+  });
 }
+// Single-loan convenience wrapper, used only where a member is already known to have at most
+// one loan in context (e.g. a report cell). The Meeting module always uses memberDueInfos().
+function memberDueInfo(memberId, asOfDate){ return memberDueInfos(memberId, asOfDate)[0] || null; }
 
 /* ---------------- Central engine aliases ----------------
    Thin named wrappers only — each calls the one real implementation above, so there is
@@ -858,7 +868,7 @@ function saveMember(ev,id){
 function viewMeetings(){
   let html = `<div class="section-title"><h2>SHG Meetings</h2><div class="row"><button class="btn secondary" onclick="depositToBankForm()">Deposit to Bank</button><button class="btn" onclick="go('meetingnew')">+ Conduct New Meeting</button></div></div>`;
   html += `<div class="card">`;
-  html += DB.meetings.length ? tbl(['Date','Attendance','Savings','Principal','Interest','Fine','Total Collection','New Loans','Expenses','Recon.','Status',''],
+  html += DB.meetings.length ? tbl(['Date','Attendance','Savings','Principal','Interest','Fine','Total Collection','New Loans','Expenses','Deposit Made','Recon.','Status',''],
     DB.meetings.slice().reverse().map(mt=>{
       const pct = mt.totalMembers ? Math.round(mt.present/mt.totalMembers*100) : 0;
       // Older meetings (before principal/interest were split) only have a combined totals.repayment.
@@ -873,7 +883,8 @@ function viewMeetings(){
       return [fmtDate(mt.date), mt.present+'/'+mt.totalMembers+' ('+pct+'%)',
       rightCell(rupee(mt.totals.savings)), rightCell(rupee(principal)), rightCell(rupee(interest)), rightCell(rupee(mt.totals.fines)),
       rightCell('<b>'+rupee(totalCollection)+'</b>'), rightCell(rupee(mt.totals.newLoans)),
-      rightCell(rupee(mt.totals.expenses)), recon, badge('Posted','green'),
+      rightCell(rupee(mt.totals.expenses)), mt.bankDeposit&&mt.bankDeposit.amount?rightCell(rupee(mt.bankDeposit.amount)):'—',
+      recon, badge('Posted','green'),
       `${mt.absentIds?`<button class="btn small secondary" onclick="viewAttendance('${mt.id}')">Attendance</button> `:''}<button class="btn small secondary" onclick="viewMeetingDetail('${mt.id}')">Details</button>`];
     })) :
     `<div class="empty">No meetings recorded yet.</div>`;
@@ -889,28 +900,36 @@ function viewAttendance(meetingId){
       <div><h4>Absent (${(mt.absentIds||[]).length})</h4>${(mt.absentIds||[]).map(id=>`<div>${esc(memberName(id))}</div>`).join('')||'<div class="hint">—</div>'}</div>
     </div>`);
 }
-// Reconstructs a member-wise breakdown of one posted meeting straight from the transaction
-// ledger (grouped by meetingId) — never from a separately-stored summary — so it can never
-// drift from the actual postings. Also shows each member's loan outstanding as it stands now.
+// Reconstructs BOTH a member-wise and a loan-wise breakdown of one posted meeting straight
+// from the transaction ledger (grouped by meetingId), never from a separately-stored summary
+// — so it can never drift from the actual postings, and each loan's contribution stays visible
+// even when a member repaid more than one loan in the same meeting.
 function viewMeetingDetail(meetingId){
   const mt = DB.meetings.find(x=>x.id===meetingId); if(!mt) return;
   const txns = DB.transactions.filter(t=>t.meetingId===meetingId);
   const memberIds = Array.from(new Set(txns.map(t=>t.memberId).filter(Boolean)));
-  const rows = memberIds.map(mid=>{
+  const memberRows = memberIds.map(mid=>{
     const mine = txns.filter(t=>t.memberId===mid);
     const sav = mine.filter(t=>t.credit==='MEMBER_SAVINGS').reduce((s,t)=>s+t.amount,0);
     const prin = mine.filter(t=>t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0);
     const int_ = mine.filter(t=>t.credit==='INTEREST_INCOME').reduce((s,t)=>s+t.amount,0);
     const fine = mine.filter(t=>t.credit==='FINE_INCOME').reduce((s,t)=>s+t.amount,0);
-    const loanId = mine.find(t=>t.loanId)?.loanId;
-    const os = loanId ? loanOutstanding(loanId).principal : null;
-    return [esc(memberName(mid)), rightCell(rupee(sav)), rightCell(rupee(prin)), rightCell(rupee(int_)), rightCell(rupee(fine)),
-      rightCell('<b>'+rupee(sav+prin+int_+fine)+'</b>'), os!=null?rightCell(rupee(os)):'—'];
+    return [esc(memberName(mid)), rightCell(rupee(sav)), rightCell(rupee(prin+int_)), rightCell(rupee(fine)), rightCell('<b>'+rupee(sav+prin+int_+fine)+'</b>')];
+  });
+  const loanTx = txns.filter(t=>t.loanId && (t.credit==='MEMBER_LOANS'||t.credit==='INTEREST_INCOME'));
+  const loanIds = Array.from(new Set(loanTx.map(t=>t.loanId)));
+  const loanRows = loanIds.map(lid=>{
+    const mine = loanTx.filter(t=>t.loanId===lid);
+    const prin = mine.filter(t=>t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0);
+    const int_ = mine.filter(t=>t.credit==='INTEREST_INCOME').reduce((s,t)=>s+t.amount,0);
+    const memberId = mine[0].memberId;
+    return [esc(memberName(memberId)), lid, rightCell(rupee(prin)), rightCell(rupee(int_)), rightCell('<b>'+rupee(prin+int_)+'</b>'), rightCell(rupee(loanOutstanding(lid).principal))];
   });
   const nonMember = txns.filter(t=>!t.memberId);
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Details — ${fmtDate(mt.date)}</h3>
     <p class="hint">Present: ${mt.present}/${mt.totalMembers}${mt.postedBy?(' · Posted by '+esc(mt.postedBy)+(mt.postedAt?(' on '+fmtDate(mt.postedAt.slice(0,10))):'')):''}</p>
-    ${rows.length ? tbl(['Member','Savings','Principal','Interest','Fine','Total Paid','Loan O/S Now'], rows) : '<div class="empty">No member-wise transactions.</div>'}
+    <h4>Member-wise</h4>${memberRows.length ? tbl(['Member','Savings','Loan Repayment','Fine','Total'], memberRows) : '<div class="empty">No member-wise transactions.</div>'}
+    ${loanRows.length ? `<h4 style="margin-top:12px">Loan-wise</h4>${tbl(['Member','Loan ID','Principal','Interest','Total','Loan O/S Now'], loanRows)}` : ''}
     ${nonMember.length ? `<h4 style="margin-top:12px">Other Entries (New Loan / Expenses)</h4>${tbl(['Type','Debit','Credit','Amount','Narration'],
       nonMember.map(t=>[t.type, accountLabel(t.debit), accountLabel(t.credit), rightCell(rupee(t.amount)), esc(t.narration)]))}` : ''}
     ${mt.bankDeposit && mt.bankDeposit.amount ? `<div class="msg info" style="margin-top:10px">Cash of ${rupee(mt.bankDeposit.amount)} was deposited to bank as part of this meeting.</div>` : ''}`);
@@ -919,53 +938,37 @@ function meetingWorkflow(){
   if(!activeMembers().length) return `<div class="card"><div class="empty">Add members first before conducting a meeting.</div></div>`;
   const members = activeMembers();
   const today = todayStr();
-  const dueList = members.map(m=>({m, due:memberDueInfo(m.id, today)})).filter(x=>x.due && x.due.totalDue>0.5);
+  const dueList = [];
+  members.forEach(m=> memberDueInfos(m.id, today).forEach(d=>{ if(d.totalDue>0.5) dueList.push({m,d}); }));
 
   let html = '';
   if(dueList.length){
-    html += `<div class="card"><h3>Members with Repayment Due (${dueList.length})</h3>
-      ${tbl(['Member','Loan ID','Principal Due','Interest Due','Arrears','Total Due',''],
-        dueList.map(x=>[esc(x.m.name), x.due.loan.id, rightCell(rupee(x.due.principalDue)), rightCell(rupee(x.due.interestDue)),
-          rightCell(x.due.arrears>0?rupee(x.due.arrears):'—'), rightCell('<b>'+rupee(x.due.totalDue)+'</b>'),
-          `<button type="button" class="btn small secondary" onclick="meetingFillDue('${x.m.id}',${x.due.principalDue},${x.due.interestDue})">Use in Grid</button>`]))}
-      <p class="hint" style="margin-top:6px">As on today. If the meeting date below is changed, the grid recalculates due amounts as on that date.</p>
+    html += `<div class="card"><h3>Members with Repayment Due (${dueList.length} loan(s))</h3>
+      ${tbl(['Member','Loan ID','Principal Due','Interest Due','Arrears','Total Due'],
+        dueList.map(x=>[esc(x.m.name), x.d.loan.id, rightCell(rupee(x.d.principalDue)), rightCell(rupee(x.d.interestDue)),
+          rightCell(x.d.arrears>0?rupee(x.d.arrears):'—'), rightCell('<b>'+rupee(x.d.totalDue)+'</b>')]))}
+      <p class="hint" style="margin-top:6px">As on today. Expand a member below and use "Fill Due Amounts" to apply these to the grid — changing the meeting date recalculates as on that date.</p>
     </div>`;
   }
 
   html += `<div class="card"><h3>Conduct Meeting</h3>
-  <div class="helpbox">Enter savings, principal, interest and fines for each present member directly here — this is the only place repayments need to be entered; the Loan and Accounting modules update automatically. Nothing needs to be entered twice.</div>
+  <div class="helpbox">Enter savings, fines, and each loan's repayment directly here — this is the only place repayments need to be entered. A member with more than one loan repays each loan separately below; nothing needs to be entered twice.</div>
   <form onsubmit="return postMeeting(event)">
   <div class="row">
     <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
     <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
-  </div>
-  <div class="tablewrap"><table><thead><tr><th>Present</th><th>Member</th><th>Loan O/S</th><th>Principal Due</th><th>Interest Due</th><th>Arrears</th><th>Savings ₹</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Fine ₹</th><th>Total Paid</th><th>Balance Due</th></tr></thead><tbody>`;
-  members.forEach(m=>{
-    const due = memberDueInfo(m.id, today);
-    html += `<tr>
-      <td><input type="checkbox" name="present_${m.id}" checked></td>
-      <td>${esc(m.name)}${due?`<div class="hint">${due.loan.id}</div>`:''}</td>
-      <td class="num" id="os_${m.id}">${due?rupee(due.outstanding):'—'}</td>
-      <td class="num" id="pd_${m.id}">${due?rupee(due.principalDue):'—'}</td>
-      <td class="num" id="id_${m.id}">${due?rupee(due.interestDue):'—'}</td>
-      <td class="num" id="ar_${m.id}">${due&&due.arrears>0?rupee(due.arrears):'—'}</td>
-      <td><input type="number" min="0" step="0.01" name="sav_${m.id}" style="width:80px" oninput="meetingCalcRow('${m.id}')"></td>
-      <td><input type="number" min="0" step="0.01" name="rp_${m.id}" style="width:80px" oninput="meetingCalcRow('${m.id}')"></td>
-      <td><input type="number" min="0" step="0.01" name="ri_${m.id}" style="width:80px" oninput="meetingCalcRow('${m.id}')"></td>
-      <td><input type="number" min="0" step="0.01" name="fine_${m.id}" style="width:70px" oninput="meetingCalcRow('${m.id}')"></td>
-      <td class="num" id="rowtotal_${m.id}">₹0.00</td>
-      <td class="num" id="rowbal_${m.id}">${due&&due.totalDue>0.5?rupee(due.totalDue):'—'}</td>
-    </tr>`;
-  });
-  html += `</tbody></table></div>
-  <div class="grid cols4" style="margin-top:10px">
+  </div>`;
+
+  members.forEach(m=>{ html += renderMemberMeetingCard(m, today); });
+
+  html += `<div class="grid cols4" style="margin-top:10px">
     <div class="stat"><div class="lbl">Total Savings</div><div class="val" id="meetingTotSav">₹0.00</div></div>
     <div class="stat"><div class="lbl">Total Principal</div><div class="val" id="meetingTotPrin">₹0.00</div></div>
     <div class="stat"><div class="lbl">Total Interest</div><div class="val" id="meetingTotInt">₹0.00</div></div>
     <div class="stat"><div class="lbl">Total Fines</div><div class="val" id="meetingTotFine">₹0.00</div></div>
   </div>
   <div class="grid cols3" style="margin-top:10px">
-    <div class="stat"><div class="lbl">Members Present / Saving / Repaying</div><div class="val" id="meetingCounts" style="font-size:14px">—</div></div>
+    <div class="stat"><div class="lbl">Present / Saving / Repaying / Multi-Loan</div><div class="val" id="meetingCounts" style="font-size:13px">—</div></div>
     <div class="stat"><div class="lbl">Total Collection</div><div class="val" id="meetingGrandTotal">₹0.00</div></div>
     <div class="stat"><div class="lbl">Net Collection (after new loans &amp; expenses)</div><div class="val" id="meetingNetCollection">₹0.00</div></div>
   </div>
@@ -973,16 +976,16 @@ function meetingWorkflow(){
     <div class="field"><label>Actual Cash/Bank Counted Today ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
   </div>
   <div class="hint" id="meetingReconDiff"></div>
-  <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" style="width:auto"> Allow a member's principal or interest payment to exceed the amount due (authorised adjustment)</label></div>
+  <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" style="width:auto"> Allow a loan's principal or interest payment to exceed the amount due (authorised adjustment)</label></div>
   <h3 style="margin-top:16px">New Loan Disbursed at this Meeting (optional)</h3>
   <div class="row">
-    <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${members.filter(m=>!DB.loans.some(l=>l.memberId===m.id && l.status!=='Closed')).map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Purpose</label><input name="newloan_purpose"></div>
     <div class="field"><label>Principal ₹</label><input type="number" min="0" step="0.01" name="newloan_amount" oninput="meetingCalcGrandTotal()"></div>
     <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="newloan_rate" value="12"></div>
     <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="newloan_inst" value="12"></div>
   </div>
-  <div class="hint">Only members without an existing active loan are listed — this app allows one active loan per member at a time.</div>
+  <div class="hint">A member may take a new loan even while an existing loan is still open — each gets its own Loan ID and independent schedule.</div>
   <h3 style="margin-top:16px">Meeting Expenses (optional)</h3>
   <div class="row">
     <div class="field"><label>Category</label><select name="exp_cat">${DB.expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>
@@ -1009,51 +1012,111 @@ function meetingWorkflow(){
   </form></div>`;
   return html;
 }
-// Live, client-side only — fills one member's Principal/Interest fields from the due-list
-// "Use in Grid" button, then recalculates that row and the meeting totals.
-function meetingFillDue(mid, principal, interest){
-  const rpEl = document.querySelector('[name="rp_'+mid+'"]');
-  const riEl = document.querySelector('[name="ri_'+mid+'"]');
-  if(rpEl) rpEl.value = principal.toFixed(2);
-  if(riEl) riEl.value = interest.toFixed(2);
-  meetingCalcRow(mid);
+// One member's card: Present/Savings/Fine at member level, plus an expandable per-loan grid
+// (native <details>, so no JS is needed to show/hide, and field values still submit when
+// collapsed). This is what keeps a 2-loan member's repayment unambiguous — every rupee typed
+// goes into a specific loan's own Principal/Interest field, never a shared member-level box.
+function renderMemberMeetingCard(m, asOfDate){
+  const dues = memberDueInfos(m.id, asOfDate);
+  const totalOS = dues.reduce((s,d)=>s+d.outstanding,0);
+  const totalDue = dues.reduce((s,d)=>s+d.totalDue,0);
+  let html = `<div class="card" id="mcard_${m.id}" style="margin-top:10px;padding:12px 14px">
+    <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:6px">
+      <label style="display:flex;align-items:center;gap:7px;font-weight:600;color:var(--text)"><input type="checkbox" name="present_${m.id}" checked style="width:auto"> ${esc(m.name)}</label>
+      <span class="hint">${dues.length?('Loans: '+dues.length+' · O/S '+rupee(totalOS)+(totalDue>0.5?(' · Due '+rupee(totalDue)):'')):'No active loan'}</span>
+    </div>
+    <div class="row">
+      <div class="field"><label>Savings ₹</label><input type="number" min="0" step="0.01" name="sav_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
+      <div class="field"><label>Fine ₹</label><input type="number" min="0" step="0.01" name="fine_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
+      <div class="field"><label>Member Total</label><div class="num" id="mtotal_${m.id}" style="padding-top:8px;font-weight:600">₹0.00</div></div>
+    </div>`;
+  if(dues.length){
+    html += `<details ${totalDue>0.5?'open':''} style="margin-top:6px">
+      <summary style="cursor:pointer;font-weight:600;color:var(--navy-2);font-size:13.5px">Loan-wise Repayment (${dues.length} loan${dues.length>1?'s':''})</summary>
+      <div class="row" style="margin-top:8px"><button type="button" class="btn small secondary" onclick="meetingAllocateDue('${m.id}')">Fill Due Amounts</button></div>
+      <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Loan ID</th><th>Purpose</th><th>Loan O/S</th><th>Principal Due</th><th>Interest Due</th><th>Arrears</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Loan Total</th><th>Balance</th></tr></thead><tbody>`;
+    dues.forEach(d=>{
+      html += `<tr>
+        <td>${d.loan.id}</td><td>${esc(d.loan.purpose||'—')}</td>
+        <td class="num">${rupee(d.outstanding)}</td>
+        <td class="num" id="pd_${d.loan.id}">${rupee(d.principalDue)}</td>
+        <td class="num" id="id_${d.loan.id}">${rupee(d.interestDue)}</td>
+        <td class="num" id="ar_${d.loan.id}">${d.arrears>0?rupee(d.arrears):'—'}</td>
+        <td><input type="number" min="0" step="0.01" name="rp_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
+        <td><input type="number" min="0" step="0.01" name="ri_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
+        <td class="num" id="loantotal_${d.loan.id}">₹0.00</td>
+        <td class="num" id="loanbal_${d.loan.id}">${d.totalDue>0.5?rupee(d.totalDue):'—'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></details>`;
+  }
+  html += `</div>`;
+  return html;
+}
+// Fills every one of this member's loan rows with that loan's own due principal/interest —
+// this is the "Allocate Due Amounts" convenience. Nothing is posted here; the user can still
+// edit any figure before Review & Post, and manual entry (leaving this unused) is always the
+// default — no repayment is ever assumed or auto-posted against an unspecified loan.
+function meetingAllocateDue(mid){
+  memberDueInfos(mid, (document.getElementById('meetingDate')||{}).value || todayStr()).forEach(d=>{
+    const rpEl = document.querySelector('[name="rp_'+d.loan.id+'"]');
+    const riEl = document.querySelector('[name="ri_'+d.loan.id+'"]');
+    if(rpEl) rpEl.value = d.principalDue.toFixed(2);
+    if(riEl) riEl.value = d.interestDue.toFixed(2);
+  });
+  meetingCalcMemberRow(mid);
 }
 function toggleDepositSection(){
   const mode = (document.getElementById('meetingMode')||{}).value;
   const sec = document.getElementById('depositSection');
   if(sec) sec.style.display = mode==='BANK' ? 'none' : '';
 }
-// Recomputes every member's Loan O/S / Due Now columns as on the newly-selected meeting date
-// — without a full page re-render, so amounts already typed into the grid are preserved.
+// Recomputes every loan's Due columns as on the newly-selected meeting date — without a full
+// page re-render, so amounts already typed into the grid are preserved.
 function reloadMeetingDueDate(newDate){
   activeMembers().forEach(m=>{
-    const due = memberDueInfo(m.id, newDate||todayStr());
-    const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
-    set('os_'+m.id, due?rupee(due.outstanding):'—');
-    set('pd_'+m.id, due?rupee(due.principalDue):'—');
-    set('id_'+m.id, due?rupee(due.interestDue):'—');
-    set('ar_'+m.id, due&&due.arrears>0?rupee(due.arrears):'—');
-    set('rowbal_'+m.id, due&&due.totalDue>0.5?rupee(due.totalDue):'—');
+    memberDueInfos(m.id, newDate||todayStr()).forEach(d=>{
+      const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent=v; };
+      set('pd_'+d.loan.id, rupee(d.principalDue));
+      set('id_'+d.loan.id, rupee(d.interestDue));
+      set('ar_'+d.loan.id, d.arrears>0?rupee(d.arrears):'—');
+      set('loanbal_'+d.loan.id, d.totalDue>0.5?rupee(d.totalDue):'—');
+    });
   });
   meetingCalcGrandTotal();
 }
-function meetingCalcRow(mid){
-  const val = name => parseFloat((document.querySelector('[name="'+name+'_'+mid+'"]')||{}).value)||0;
-  const sav=val('sav'), rp=val('rp'), ri=val('ri'), fine=val('fine');
-  const total = sav+rp+ri+fine;
-  const cell = document.getElementById('rowtotal_'+mid);
-  if(cell) cell.textContent = rupee(total);
-  const due = memberDueInfo(mid, (document.getElementById('meetingDate')||{}).value || todayStr());
-  const balCell = document.getElementById('rowbal_'+mid);
+function meetingCalcLoanRow(loanId, mid){
+  const val = name => parseFloat((document.querySelector('[name="'+name+'_'+loanId+'"]')||{}).value)||0;
+  const rp = val('rp'), ri = val('ri');
+  const cell = document.getElementById('loantotal_'+loanId);
+  if(cell) cell.textContent = rupee(rp+ri);
+  const loan = DB.loans.find(l=>l.id===loanId);
+  const due = loan ? memberDueInfos(loan.memberId, (document.getElementById('meetingDate')||{}).value || todayStr()).find(d=>d.loan.id===loanId) : null;
+  const balCell = document.getElementById('loanbal_'+loanId);
   if(balCell && due){
     const bal = Math.round((due.totalDue - rp - ri)*100)/100;
     balCell.textContent = bal>0.005 ? rupee(bal) : (bal<-0.005 ? (rupee(Math.abs(bal))+' over') : 'Cleared');
   }
+  meetingCalcMemberRow(mid);
+}
+function meetingCalcMemberRow(mid){
+  const sav = parseFloat((document.querySelector('[name="sav_'+mid+'"]')||{}).value)||0;
+  const fine = parseFloat((document.querySelector('[name="fine_'+mid+'"]')||{}).value)||0;
+  let loanTotal = 0;
+  memberDueInfos(mid).forEach(d=>{
+    loanTotal += (parseFloat((document.querySelector('[name="rp_'+d.loan.id+'"]')||{}).value)||0);
+    loanTotal += (parseFloat((document.querySelector('[name="ri_'+d.loan.id+'"]')||{}).value)||0);
+  });
+  const total = Math.round((sav+fine+loanTotal)*100)/100;
+  const cell = document.getElementById('mtotal_'+mid);
+  if(cell) cell.textContent = rupee(total);
   meetingCalcGrandTotal();
 }
 function meetingCalcGrandTotal(){
   const sum = prefix => { let s=0; document.querySelectorAll('input[name^="'+prefix+'_"]').forEach(el=>s+=parseFloat(el.value)||0); return s; };
-  const totSav = sum('sav'), totRp = sum('rp'), totRi = sum('ri'), totFine = sum('fine');
+  const totSav = sum('sav'), totFine = sum('fine');
+  let totRp=0, totRi=0;
+  DB.loans.forEach(l=>{ totRp += parseFloat((document.querySelector('[name="rp_'+l.id+'"]')||{}).value)||0; totRi += parseFloat((document.querySelector('[name="ri_'+l.id+'"]')||{}).value)||0; });
   const grand = Math.round((totSav+totRp+totRi+totFine)*100)/100;
   const newLoanAmt = parseFloat((document.querySelector('[name="newloan_amount"]')||{}).value)||0;
   const expAmt = parseFloat((document.querySelector('[name="exp_amount"]')||{}).value)||0;
@@ -1062,14 +1125,16 @@ function meetingCalcGrandTotal(){
   const setText = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent = rupee(v); };
   setText('meetingTotSav', totSav); setText('meetingTotPrin', totRp); setText('meetingTotInt', totRi); setText('meetingTotFine', totFine);
   setText('meetingGrandTotal', grand); setText('meetingNetCollection', netCollection);
-  let present=0, saving=0, repaying=0;
+  let present=0, saving=0, repaying=0, multiLoan=0;
   activeMembers().forEach(m=>{
     if((document.querySelector('[name="present_'+m.id+'"]')||{}).checked) present++;
     if((parseFloat((document.querySelector('[name="sav_'+m.id+'"]')||{}).value)||0)>0) saving++;
-    if((parseFloat((document.querySelector('[name="rp_'+m.id+'"]')||{}).value)||0)>0) repaying++;
+    const loans = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed');
+    if(loans.length>1) multiLoan++;
+    if(loans.some(l=>(parseFloat((document.querySelector('[name="rp_'+l.id+'"]')||{}).value)||0)>0 || (parseFloat((document.querySelector('[name="ri_'+l.id+'"]')||{}).value)||0)>0)) repaying++;
   });
   const countsEl = document.getElementById('meetingCounts');
-  if(countsEl) countsEl.textContent = present+' / '+saving+' / '+repaying;
+  if(countsEl) countsEl.textContent = present+' / '+saving+' / '+repaying+' / '+multiLoan;
   const actualEl = document.getElementById('actualReceived');
   const diffEl = document.getElementById('meetingReconDiff');
   if(actualEl && diffEl){
@@ -1083,8 +1148,9 @@ function meetingCalcGrandTotal(){
   return grand;
 }
 // Meeting posting is a two-pass, all-or-nothing process:
-// PASS 1 (here): read and validate every field. Nothing is posted yet, so a mistake found on
-//   member 8 never leaves members 1–7 already posted — the classic half-posted-meeting problem.
+// PASS 1 (here): read and validate every field — every loan gets its own explicit Principal
+//   Paid/Interest Paid, so a repayment is never posted against an unspecified or guessed loan.
+//   Nothing is posted yet, so a mistake found on loan 8 never leaves loans 1–7 already posted.
 // PASS 2 (confirmPostMeeting, after the user reviews the summary): only then are transactions
 //   actually created, in one go.
 let PENDING_MEETING_PLAN = null;
@@ -1098,30 +1164,37 @@ function postMeeting(ev){
   if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
   const members = activeMembers();
   try{
-    const rows = [];
+    const memberEntries = [];
     let present=0; const presentIds=[], absentIds=[];
+    let dupWarnings = [];
     members.forEach(m=>{
       const isPresent = !!f.get('present_'+m.id);
       if(isPresent){ present++; presentIds.push(m.id); } else { absentIds.push(m.id); }
       const sav = parseFloat(f.get('sav_'+m.id))||0;
-      const rp = parseFloat(f.get('rp_'+m.id))||0;
-      const ri = parseFloat(f.get('ri_'+m.id))||0;
       const fine = parseFloat(f.get('fine_'+m.id))||0;
-      if(sav<0||rp<0||ri<0||fine<0) throw new Error('Negative amounts are not allowed ('+m.name+'). Enter zero or a positive amount.');
-      let loan = null;
-      if(rp>0 || ri>0){
-        loan = DB.loans.find(l=>l.memberId===m.id && l.status!=='Closed');
-        if(!loan) throw new Error('No active loan found for '+m.name+' but a principal or interest amount was entered. Remove the amount, or check the member.');
-        const due = memberDueInfo(m.id, date);
+      if(sav<0||fine<0) throw new Error('Negative amounts are not allowed ('+m.name+'). Enter zero or a positive amount.');
+      const loans = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed');
+      const loanRows = [];
+      loans.forEach(loan=>{
+        const rp = parseFloat(f.get('rp_'+loan.id))||0;
+        const ri = parseFloat(f.get('ri_'+loan.id))||0;
+        if(rp<0||ri<0) throw new Error('Negative amounts are not allowed on loan '+loan.id+' ('+m.name+').');
+        if(rp===0 && ri===0) return;
+        const due = memberDueInfos(m.id, date).find(d=>d.loan.id===loan.id);
         const outstanding = loanOutstanding(loan.id).principal;
         if(rp > outstanding+0.5 && !allowExcess){
-          throw new Error('Principal repayment for '+m.name+' ('+rupee(rp)+') exceeds the loan\'s outstanding balance ('+rupee(outstanding)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
+          throw new Error('Principal repayment for '+m.name+' on loan '+loan.id+' ('+rupee(rp)+') exceeds that loan\'s outstanding balance ('+rupee(outstanding)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
         }
         if(due && ri > (due.interestDue+due.arrears)+0.5 && (due.interestDue+due.arrears)>0 && !allowExcess){
-          throw new Error('Interest payment for '+m.name+' ('+rupee(ri)+') exceeds the interest currently due ('+rupee(due.interestDue+due.arrears)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
+          throw new Error('Interest payment for '+m.name+' on loan '+loan.id+' ('+rupee(ri)+') exceeds the interest currently due on that loan ('+rupee(due.interestDue+due.arrears)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
         }
-      }
-      if(sav>0||rp>0||ri>0||fine>0) rows.push({m, sav, rp, ri, fine, loan});
+        // Cross-meeting duplicate check: the same loan already has an identical, un-reversed
+        // repayment posted on the same date — warn (shown in the review screen) rather than block.
+        const dupe = DB.transactions.some(t=>!t.reversed && t.loanId===loan.id && t.date===date && t.credit==='MEMBER_LOANS' && t.amount===rp && rp>0);
+        if(dupe) dupWarnings.push(m.name+' — loan '+loan.id+': a principal repayment of '+rupee(rp)+' on '+fmtDate(date)+' already exists.');
+        loanRows.push({loan, rp, ri});
+      });
+      if(sav>0||fine>0||loanRows.length) memberEntries.push({m, sav, fine, loanRows});
     });
 
     let newLoan = null;
@@ -1130,7 +1203,6 @@ function postMeeting(ev){
       const amt = parseFloat(f.get('newloan_amount'))||0;
       if(amt>0){
         if(amt<0) throw new Error('New loan amount cannot be negative.');
-        if(DB.loans.some(l=>l.memberId===nlMember && l.status!=='Closed')) throw new Error(memberName(nlMember)+' already has an active loan — only one active loan per member is allowed.');
         newLoan = { memberId:nlMember, purpose:f.get('newloan_purpose')||'', amount:amt,
           rate: parseFloat(f.get('newloan_rate'))||0, inst: parseInt(f.get('newloan_inst'))||12 };
       }
@@ -1140,10 +1212,10 @@ function postMeeting(ev){
     if(expAmt>0){ if(expAmt<0) throw new Error('Expense amount cannot be negative.'); expense = { cat:f.get('exp_cat'), amount:expAmt, narration:f.get('exp_narration')||f.get('exp_cat') }; }
 
     const totals = {
-      savings: Math.round(rows.reduce((s,r)=>s+r.sav,0)*100)/100,
-      principal: Math.round(rows.reduce((s,r)=>s+r.rp,0)*100)/100,
-      interest: Math.round(rows.reduce((s,r)=>s+r.ri,0)*100)/100,
-      fines: Math.round(rows.reduce((s,r)=>s+r.fine,0)*100)/100,
+      savings: Math.round(memberEntries.reduce((s,r)=>s+r.sav,0)*100)/100,
+      principal: Math.round(memberEntries.reduce((s,r)=>s+r.loanRows.reduce((s2,lr)=>s2+lr.rp,0),0)*100)/100,
+      interest: Math.round(memberEntries.reduce((s,r)=>s+r.loanRows.reduce((s2,lr)=>s2+lr.ri,0),0)*100)/100,
+      fines: Math.round(memberEntries.reduce((s,r)=>s+r.fine,0)*100)/100,
       newLoans: newLoan ? newLoan.amount : 0,
       expenses: expense ? expense.amount : 0
     };
@@ -1163,10 +1235,14 @@ function postMeeting(ev){
     const actualReceived = (actualRaw!=null && actualRaw!=='') ? parseFloat(actualRaw) : null;
     const reconDiff = actualReceived!=null ? Math.round((actualReceived-totalCollection)*100)/100 : null;
 
-    PENDING_MEETING_PLAN = { date, mode, allowExcess, rows, newLoan, expense, deposit, actualReceived, reconDiff,
+    const savingCount = memberEntries.filter(r=>r.sav>0).length;
+    const repayingCount = memberEntries.filter(r=>r.loanRows.length>0).length;
+    const multiLoanRepayCount = memberEntries.filter(r=>r.loanRows.length>1).length;
+
+    PENDING_MEETING_PLAN = { date, mode, allowExcess, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings,
       totals, totalCollection, netCash, present, totalMembers:members.length, presentIds, absentIds,
-      savingCount: rows.filter(r=>r.sav>0).length, repayingCount: rows.filter(r=>r.rp>0||r.ri>0).length,
-      dueCount: members.filter(m=>{ const d=memberDueInfo(m.id,date); return d && d.totalDue>0.5; }).length };
+      savingCount, repayingCount, multiLoanRepayCount,
+      dueCount: (()=>{ let c=0; members.forEach(m=>memberDueInfos(m.id,date).forEach(d=>{ if(d.totalDue>0.5) c++; })); return c; })() };
     showMeetingConfirmation();
   }catch(e){
     flash('error', e.message);
@@ -1176,10 +1252,16 @@ function postMeeting(ev){
 }
 function showMeetingConfirmation(){
   const p = PENDING_MEETING_PLAN; if(!p) return;
+  const memberRows = p.memberEntries.map(r=>{
+    const loanTotal = r.loanRows.reduce((s,lr)=>s+lr.rp+lr.ri,0);
+    return [esc(r.m.name), rightCell(rupee(r.sav)), rightCell(rupee(loanTotal)), rightCell(rupee(r.fine)), rightCell('<b>'+rupee(r.sav+loanTotal+r.fine)+'</b>')];
+  });
+  const loanRows = [];
+  p.memberEntries.forEach(r=> r.loanRows.forEach(lr=>{ if(lr.rp>0||lr.ri>0) loanRows.push([esc(r.m.name), lr.loan.id, rightCell(rupee(lr.rp)), rightCell(rupee(lr.ri)), rightCell('<b>'+rupee(lr.rp+lr.ri)+'</b>')]); }));
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Summary — ${fmtDate(p.date)}</h3>
     <div class="grid cols2">
       ${stat('Members Present', p.present+' / '+p.totalMembers)}
-      ${stat('Making Savings / Repaying', p.savingCount+' / '+p.repayingCount)}
+      ${stat('Saving / Repaying / Multi-Loan', p.savingCount+' / '+p.repayingCount+' / '+p.multiLoanRepayCount)}
       ${stat('Savings Collected', rupee(p.totals.savings))}
       ${stat('Principal Recovered', rupee(p.totals.principal))}
       ${stat('Interest Received', rupee(p.totals.interest))}
@@ -1190,6 +1272,9 @@ function showMeetingConfirmation(){
       ${stat('Proposed Bank Deposit', p.deposit?rupee(p.deposit.amount):'—')}
       ${stat('Net Cash Remaining', p.mode==='CASH'?rupee(Math.round((p.netCash-(p.deposit?p.deposit.amount:0))*100)/100):'—')}
     </div>
+    ${memberRows.length ? `<h4 style="margin-top:12px">Member-wise</h4>${tbl(['Member','Savings','Loan Repayment','Fine','Total'], memberRows)}` : ''}
+    ${loanRows.length ? `<h4 style="margin-top:10px">Loan-wise</h4>${tbl(['Member','Loan ID','Principal','Interest','Total'], loanRows)}` : ''}
+    ${p.dupWarnings && p.dupWarnings.length ? `<div class="msg err" style="margin-top:10px">Possible duplicate entr${p.dupWarnings.length>1?'ies':'y'}:<br>${p.dupWarnings.map(esc).join('<br>')}<br>You can still post if this is intentional (e.g. a genuine second payment).</div>` : ''}
     ${p.reconDiff!=null && p.reconDiff!==0 ? `<div class="msg err" style="margin-top:10px">Counted amount (${rupee(p.actualReceived)}) differs from entries by ${rupee(Math.abs(p.reconDiff))}. You can still post — the difference is saved with the meeting for follow-up.</div>` : ''}
     <p class="hint" style="margin-top:10px">Nothing has been posted yet. Review the figures, then confirm to create all accounting entries in one step.</p>
     <div class="row" style="margin-top:10px">
@@ -1198,15 +1283,18 @@ function showMeetingConfirmation(){
     </div>`);
 }
 // PASS 2: everything below was already validated in postMeeting(), so this loop posts the
-// whole meeting in one uninterrupted pass — the meeting is only saved if every entry succeeds.
+// whole meeting — every loan repayment tagged with its own loanId — in one uninterrupted
+// pass. The meeting record is only saved if every posting succeeds.
 function confirmPostMeeting(){
   const p = PENDING_MEETING_PLAN; if(!p) return;
   const meetingId = nextId('MTG');
   try{
-    p.rows.forEach(r=>{
+    p.memberEntries.forEach(r=>{
       if(r.sav>0) postTxn({date:p.date,type:'Savings',debit:p.mode,credit:'MEMBER_SAVINGS',amount:r.sav,memberId:r.m.id,meetingId,narration:'Meeting savings — '+r.m.name});
-      if(r.rp>0) postTxn({date:p.date,type:'Loan Repayment',debit:p.mode,credit:'MEMBER_LOANS',amount:r.rp,memberId:r.m.id,loanId:r.loan.id,meetingId,narration:'Principal repayment — '+r.m.name});
-      if(r.ri>0) postTxn({date:p.date,type:'Interest Received',debit:p.mode,credit:'INTEREST_INCOME',amount:r.ri,memberId:r.m.id,loanId:r.loan?r.loan.id:'',meetingId,narration:'Interest received — '+r.m.name});
+      r.loanRows.forEach(lr=>{
+        if(lr.rp>0) postTxn({date:p.date,type:'Loan Repayment',debit:p.mode,credit:'MEMBER_LOANS',amount:lr.rp,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:'Principal repayment — '+r.m.name+' ('+lr.loan.id+')'});
+        if(lr.ri>0) postTxn({date:p.date,type:'Interest Received',debit:p.mode,credit:'INTEREST_INCOME',amount:lr.ri,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:'Interest received — '+r.m.name+' ('+lr.loan.id+')'});
+      });
       if(r.fine>0) postTxn({date:p.date,type:'Fine',debit:p.mode,credit:'FINE_INCOME',amount:r.fine,memberId:r.m.id,meetingId,narration:'Fine/penalty — '+r.m.name});
     });
     if(p.newLoan){
@@ -1332,19 +1420,62 @@ function postSavingsEntry(ev){
 function viewLoans(){
   let html = `<div class="section-title"><h2>Member Loans</h2><button class="btn" onclick="loanForm()">+ New Loan</button></div>`;
   if(!DB.loans.length){ html += `<div class="card"><div class="empty">No loans issued yet.</div></div>`; return html; }
-  html += `<div class="card">${tbl(['Loan ID','Member','Purpose','Principal','Rate %','O/S Principal','Next Due','Status',''],
-    DB.loans.slice().reverse().map(l=>{
+
+  // --- Member Loan Summary: one member can hold several independent loans (item 15) ---
+  const memberIds = Array.from(new Set(DB.loans.map(l=>l.memberId)));
+  const summaryRows = memberIds.map(mid=>{
+    const loans = DB.loans.filter(l=>l.memberId===mid && l.status!=='Closed');
+    if(!loans.length) return null;
+    const dues = memberDueInfos(mid, todayStr());
+    const totalOS = loans.reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
+    const totalDue = dues.reduce((s,d)=>s+d.totalDue,0);
+    const arrears = dues.reduce((s,d)=>s+d.arrears,0);
+    return [esc(memberName(mid)), loans.length, rightCell(rupee(totalOS)), rightCell(totalDue>0.5?rupee(totalDue):'—'),
+      rightCell(arrears>0.5?rupee(arrears):'—'), `<button class="btn small secondary" onclick="viewMemberLoans('${mid}')">View Loans</button>`];
+  }).filter(Boolean);
+  html += `<div class="card"><h3>Member Loan Summary</h3>${summaryRows.length ? tbl(['Member','Active Loans','Total Loan O/S','Total Due','Arrears',''], summaryRows) : `<div class="empty">No members with active loans.</div>`}</div>`;
+
+  // --- Full Loan Register with filter ---
+  const filter = window.__loansFilter || 'all';
+  html += `<div class="card"><div class="section-title" style="margin-bottom:8px"><h3>Loan Register</h3>
+    <select id="loansFilterSel" onchange="window.__loansFilter=this.value; render();" style="max-width:200px">
+      <option value="all" ${filter==='all'?'selected':''}>All</option>
+      <option value="active" ${filter==='active'?'selected':''}>Active</option>
+      <option value="overdue" ${filter==='overdue'?'selected':''}>Overdue</option>
+      <option value="closure" ${filter==='closure'?'selected':''}>Eligible for Closure</option>
+      <option value="closed" ${filter==='closed'?'selected':''}>Closed</option>
+    </select></div>`;
+  let loans = DB.loans.slice().reverse();
+  if(filter==='active') loans = loans.filter(l=>l.status!=='Closed');
+  if(filter==='closed') loans = loans.filter(l=>l.status==='Closed');
+  if(filter==='overdue') loans = loans.filter(l=>l.status!=='Closed' && l.nextDueDate && l.nextDueDate<todayStr());
+  if(filter==='closure') loans = loans.filter(l=>loanEligibleForClosure(l));
+  html += tbl(['Loan ID','Member','Purpose','Principal','Rate %','O/S Principal','Next Due','Status',''],
+    loans.map(l=>{
       const os = loanOutstanding(l.id).principal;
       const overdue = l.status!=='Closed' && l.nextDueDate && l.nextDueDate<todayStr();
-      const eligibleForClosure = l.status!=='Closed' && os<=0.5;
+      const eligibleForClosure = loanEligibleForClosure(l);
       return [l.id, esc(memberName(l.memberId)), esc(l.purpose), rightCell(rupee(l.principal)), l.interestRate+'%',
         rightCell(rupee(os)), fmtDate(l.nextDueDate),
         eligibleForClosure ? badge('Eligible for Closure','amber') : (overdue?badge('Overdue','red'):badge(l.status,l.status==='Closed'?'grey':'green')),
         `<button class="btn small secondary" onclick="viewLoanSchedule('${l.id}')">Schedule</button> `+
         (eligibleForClosure ? `<button class="btn small secondary" onclick="closeLoan('${l.id}')">Mark Closed</button>` : '')
       ];
-    }))}</div>`;
+    }));
+  html += `</div>`;
   return html;
+}
+function viewMemberLoans(memberId){
+  const loans = DB.loans.filter(l=>l.memberId===memberId && l.status!=='Closed');
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Loans — ${esc(memberName(memberId))}</h3>
+    ${tbl(['Loan ID','Purpose','Principal','O/S','Next Due','Status',''],
+      loans.map(l=>{
+        const os = loanOutstanding(l.id).principal;
+        const eligibleForClosure = loanEligibleForClosure(l);
+        return [l.id, esc(l.purpose), rightCell(rupee(l.principal)), rightCell(rupee(os)), fmtDate(l.nextDueDate),
+          eligibleForClosure?badge('Eligible for Closure','amber'):badge('Active','green'),
+          `<button class="btn small secondary" onclick="closeModal();viewLoanSchedule('${l.id}')">Schedule</button>`];
+      }))}`);
 }
 function viewLoanSchedule(loanId){
   const loan = DB.loans.find(l=>l.id===loanId); if(!loan) return;
@@ -1362,13 +1493,14 @@ function viewLoanSchedule(loanId){
 }
 function loanForm(){
   if(!activeMembers().length){ flash('error','Add a member first.'); render(); return; }
-  const eligible = activeMembers().filter(m=>!DB.loans.some(l=>l.memberId===m.id && l.status!=='Closed'));
-  if(!eligible.length){ flash('error','Every active member already has an active loan. This app allows one active loan per member — close or fully repay an existing loan first.'); render(); return; }
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>New Loan</h3>
-  <p class="hint">One active loan per member is allowed — members with an existing active loan aren't listed below.</p>
+  <p class="hint">A member may hold more than one loan at a time (e.g. a business loan and an emergency loan) — each gets its own Loan ID and is tracked, repaid and reported independently.</p>
   <form onsubmit="return saveLoan(event)">
     <div class="row">
-      <div class="field"><label>Member *</label><select name="memberId" required>${eligible.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Member *</label><select name="memberId" required>${activeMembers().map(m=>{
+        const n = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed').length;
+        return `<option value="${m.id}">${esc(m.name)}${n?' ('+n+' existing loan'+(n>1?'s':'')+')':''}</option>`;
+      }).join('')}</select></div>
       <div class="field"><label>Purpose</label><input name="purpose"></div>
     </div>
     <div class="row">
@@ -1393,11 +1525,6 @@ function saveLoan(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
   try{
     const data = Object.fromEntries(f.entries());
-    // This app supports one active loan per member at a time (enforced consistently
-    // everywhere a loan is matched to a member — meetings, statements, due lists), so a
-    // second loan is blocked with a clear message rather than silently picking one later.
-    const existing = DB.loans.find(l=>l.memberId===data.memberId && l.status!=='Closed');
-    if(existing) throw new Error(memberName(data.memberId)+' already has an active loan ('+existing.id+', outstanding '+rupee(loanOutstanding(existing.id).principal)+'). Close or fully repay it before issuing a new one.');
     const loan = { id: nextId('LOAN'), memberId:data.memberId, purpose:data.purpose,
       sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate,
       principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
@@ -1410,8 +1537,16 @@ function saveLoan(ev){
   }catch(e){ flash('error',e.message); render(); }
   return false;
 }
+// A loan becomes eligible for closure only once BOTH principal and interest across its whole
+// schedule are settled — never on principal alone, so an authorised interest balance can't be
+// silently dropped by closing the loan.
+function loanEligibleForClosure(loan){
+  if(loan.status==='Closed') return false;
+  return generateLoanSchedule(loan.id).every(s=>s.status==='Paid');
+}
 function closeLoan(id){
   const l = DB.loans.find(x=>x.id===id); if(!l) return;
+  if(!loanEligibleForClosure(l)){ flash('error','This loan still has principal or interest outstanding and cannot be closed yet.'); render(); return; }
   l.status='Closed'; logAudit('CLOSE_LOAN', id+' marked closed'); flash('ok','Loan marked closed.'); render();
 }
 
@@ -1694,6 +1829,24 @@ function runDataQuality(){
   // loan issues
   DB.loans.forEach(l=>{ if(!l.interestRate && l.interestRate!==0) issues.push({sev:'amber', text:'Loan '+l.id+' has no interest rate set.'});
     if(loanOutstanding(l.id).principal<0) issues.push({sev:'red', text:'Loan '+l.id+' shows negative outstanding — check repayments.'}); });
+  // orphan transactions: a loanId or memberId that no longer matches any real record
+  const loanIdSet = new Set(DB.loans.map(l=>l.id)), memberIdSet = new Set(DB.members.map(m=>m.id));
+  DB.transactions.forEach(t=>{
+    if(t.loanId && !loanIdSet.has(t.loanId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references loan '+t.loanId+', which no longer exists.'});
+    if(t.memberId && !memberIdSet.has(t.memberId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references a member that no longer exists.'});
+  });
+  // repayment posted against a loan that is now closed (the loan may have been closed after this posting)
+  DB.transactions.filter(t=>!t.reversed && t.loanId && t.credit==='MEMBER_LOANS').forEach(t=>{
+    const loan = DB.loans.find(l=>l.id===t.loanId);
+    if(loan && loan.status==='Closed' && loanOutstanding(loan.id).principal<-0.5) issues.push({sev:'amber', text:'Loan '+t.loanId+' is closed but shows an overpaid/negative position — check repayment history.'});
+  });
+  // possible duplicate transactions: same loan, date, type and amount posted more than once
+  const txKeySeen = {};
+  DB.transactions.filter(t=>!t.reversed && t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')).forEach(t=>{
+    const key = t.loanId+'|'+t.date+'|'+t.type+'|'+t.amount;
+    if(txKeySeen[key]) issues.push({sev:'amber', text:'Possible duplicate: loan '+t.loanId+' has two '+t.type+' entries of '+rupee(t.amount)+' on '+fmtDate(t.date)+'.'});
+    txKeySeen[key] = true;
+  });
   // meetings without any postings
   // unposted / unbalanced transactions can't occur since engine enforces equal dr=cr per entry
   if(!DB.members.length) issues.push({sev:'amber', text:'No members registered yet.'});
@@ -2106,15 +2259,30 @@ function viewMemberStatement(){
   if(!DB.members.length){ html += `<div class="card"><div class="empty">No members yet.</div></div>`; return html; }
   const sel = document.getElementById && document.getElementById('msMember') ? document.getElementById('msMember').value : DB.members[0].id;
   const m = DB.members.find(x=>x.id===sel) || DB.members[0];
+  const memberLoans = DB.loans.filter(l=>l.memberId===m.id);
   html += `<div class="card"><div class="grid cols4">
     ${stat('Savings Balance', rupee(memberSavingsBalance(m.id)))}
-    ${stat('Loan Outstanding', rupee(memberLoanOutstanding(m.id)))}
+    ${stat('Loan Outstanding (All Loans)', rupee(memberLoanOutstanding(m.id)))}
     ${stat('Date of Joining', fmtDate(m.doj))}
     ${stat('Status', m.status)}
   </div></div>`;
-  const txns = DB.transactions.filter(t=>t.memberId===m.id).sort((a,b)=>a.date<b.date?-1:1);
-  html += `<div class="card"><h3>Transaction History — ${esc(m.name)}</h3>${txns.length?tbl(['Date','Voucher','Type','Debit','Credit','Amount','Narration'],
-    txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)])):`<div class="empty">No transactions for this member.</div>`}</div>`;
+  if(memberLoans.length){
+    html += `<div class="card"><h3>Loans</h3>${tbl(['Loan ID','Purpose','Principal','O/S','Status'],
+      memberLoans.map(l=>[l.id, esc(l.purpose||'—'), rightCell(rupee(l.principal)), rightCell(rupee(loanOutstanding(l.id).principal)),
+        badge(l.status, l.status==='Closed'?'grey':'green')]))}</div>`;
+  }
+  const loanFilter = window.__msLoanFilter || 'all';
+  let txns = DB.transactions.filter(t=>t.memberId===m.id);
+  if(memberLoans.length>1){
+    html += `<div class="card"><label>Filter by Loan</label><select id="msLoanFilter" onchange="window.__msLoanFilter=this.value; render();" style="max-width:280px">
+      <option value="all" ${loanFilter==='all'?'selected':''}>All Loans</option>
+      ${memberLoans.map(l=>`<option value="${l.id}" ${loanFilter===l.id?'selected':''}>${l.id} — ${esc(l.purpose||'')}</option>`).join('')}
+    </select></div>`;
+  }
+  if(memberLoans.length>1 && loanFilter!=='all') txns = txns.filter(t=>t.loanId===loanFilter);
+  txns = txns.sort((a,b)=>a.date<b.date?-1:1);
+  html += `<div class="card"><h3>Transaction History — ${esc(m.name)}</h3>${txns.length?tbl(['Date','Voucher','Type','Loan ID','Debit','Credit','Amount','Narration'],
+    txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)])):`<div class="empty">No transactions for this member.</div>`}</div>`;
   return html;
 }
 
