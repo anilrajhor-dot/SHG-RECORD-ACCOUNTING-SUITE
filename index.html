@@ -497,7 +497,10 @@ function loanOutstanding(loanId){
 function generateLoanSchedule(loanId, asOfDate){
   asOfDate = asOfDate || todayStr();
   const loan = DB.loans.find(l=>l.id===loanId);
-  if(!loan) return [];
+  // Defensive: a loan record missing its own required terms (principal, disbursement date)
+  // cannot have a schedule computed — return empty rather than crash, and let Data Quality
+  // flag the missing fields so they get corrected at the source.
+  if(!loan || !loan.principal || !loan.disbursementDate || isNaN(new Date(loan.disbursementDate+'T00:00:00').getTime())) return [];
   const n = Math.max(1, loan.instalments||1);
   const method = loan.interestMethod || 'flat';
   const principalPerInst = Math.round((loan.principal/n)*100)/100;
@@ -678,8 +681,11 @@ function translateNode(root){
 /* ============================================================ DASHBOARD */
 function viewDashboard(){
   const totalSavings = activeMembers().reduce((s,m)=>s+memberSavingsBalance(m.id),0);
-  const totalLoanOut = DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
-  const overdue = DB.loans.filter(l=>l.status!=='Closed' && l.nextDueDate && l.nextDueDate<todayStr());
+  const activeLoans = DB.loans.filter(l=>l.status!=='Closed');
+  const totalLoanOut = activeLoans.reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
+  const overdue = activeLoans.filter(l=>l.nextDueDate && l.nextDueDate<todayStr());
+  const loanMemberIds = Array.from(new Set(activeLoans.map(l=>l.memberId)));
+  const multiLoanMemberIds = loanMemberIds.filter(mid=>activeLoans.filter(l=>l.memberId===mid).length>1);
   const cifOut = DB.cif.reduce((s,c)=>s+(c.amount||0),0) - 0;
   const monthTx = DB.transactions.filter(t=>monthKey(t.date)===monthKey(todayStr()) && !t.reversed);
   const collection = monthTx.filter(t=>['CASH','BANK'].includes(t.debit)).reduce((s,t)=>s+t.amount,0);
@@ -707,6 +713,12 @@ function viewDashboard(){
     ${stat('Surplus / (Deficit)', rupee(iAndE.surplus), iAndE.surplus<0)}
     ${stat('SHG Fund', rupee(accountBalance('SHG_FUND')))}
   </div>`;
+  html += `<div class="card"><h3>Loan Position</h3><div class="grid cols4">
+    ${stat('Total Active Loans', activeLoans.length)}
+    ${stat('Members with Loans', loanMemberIds.length)}
+    <div class="stat" style="cursor:pointer" onclick="viewMultiLoanMembers()"><div class="lbl">Members with Multiple Loans</div><div class="val">${multiLoanMemberIds.length}</div></div>
+    ${stat('Overdue Loans', overdue.length, overdue.length>0)}
+  </div>${multiLoanMemberIds.length?`<p class="hint" style="margin-top:8px">Click "Members with Multiple Loans" to see the breakdown.</p>`:''}</div>`;
 
   const dq = runDataQuality();
   html += `<div class="card"><h3>Data Quality Snapshot</h3>${dqSummaryRow(dq)}
@@ -721,6 +733,22 @@ function viewDashboard(){
   return html;
 }
 function stat(label,val,warn){ return `<div class="stat"><div class="lbl">${esc(label)}</div><div class="val ${warn?'neg':''}">${val}</div></div>`; }
+// Dashboard drill-down: every member currently holding more than one active loan, each loan
+// still shown independently — never merged into a single member-level figure.
+function viewMultiLoanMembers(){
+  const activeLoans = DB.loans.filter(l=>l.status!=='Closed');
+  const memberIds = Array.from(new Set(activeLoans.map(l=>l.memberId))).filter(mid=>activeLoans.filter(l=>l.memberId===mid).length>1);
+  if(!memberIds.length){ alert('No members currently hold more than one active loan.'); return; }
+  const rows = memberIds.map(mid=>{
+    const loans = activeLoans.filter(l=>l.memberId===mid);
+    const totalOS = loans.reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
+    const totalDue = memberDueInfos(mid, todayStr()).reduce((s,d)=>s+d.totalDue,0);
+    return [esc(memberName(mid)), loans.length, rightCell(rupee(totalOS)), rightCell(totalDue>0.5?rupee(totalDue):'—'),
+      `<button class="btn small secondary" onclick="closeModal();viewMemberLoans('${mid}')">Loan IDs</button>`];
+  });
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Members with Multiple Loans</h3>
+    ${tbl(['Member','No. of Loans','Total O/S','Total Due',''], rows)}`);
+}
 function rightCell(s){ return '§R§'+s; }
 function tbl(headers, rows){
   let h = `<div class="tablewrap"><table><thead><tr>${headers.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`;
@@ -1826,14 +1854,38 @@ function runDataQuality(){
   DB.members.forEach(m=>{ if(!m.mobile) issues.push({sev:'amber', text:'Member '+m.name+' has no mobile number on file.'}); });
   if(!DB.profile.name) issues.push({sev:'red', text:'SHG Profile: name is not set.'});
   if(!DB.profile.banks || !DB.profile.banks.length) issues.push({sev:'amber', text:'No bank account recorded in SHG Profile.'});
-  // loan issues
-  DB.loans.forEach(l=>{ if(!l.interestRate && l.interestRate!==0) issues.push({sev:'amber', text:'Loan '+l.id+' has no interest rate set.'});
-    if(loanOutstanding(l.id).principal<0) issues.push({sev:'red', text:'Loan '+l.id+' shows negative outstanding — check repayments.'}); });
+  // loan issues — every check operates on one Loan ID at a time, never a member-level merge
+  const loanIdCounts = {};
+  const memberIdSetEarly = new Set(DB.members.map(m=>m.id));
+  DB.loans.forEach(l=>{
+    if(!l.memberId) issues.push({sev:'red', text:'Loan '+l.id+' has no Member ID linked to it.'});
+    else if(!memberIdSetEarly.has(l.memberId)) issues.push({sev:'red', text:'Loan '+l.id+' is linked to a member that no longer exists.'});
+    if(!l.principal || l.principal<=0) issues.push({sev:'red', text:'Loan '+l.id+' has no valid principal amount.'});
+    if(!l.disbursementDate || isNaN(new Date(l.disbursementDate+'T00:00:00').getTime())) issues.push({sev:'red', text:'Loan '+l.id+' has a missing or invalid disbursement date.'});
+    if(!l.interestRate && l.interestRate!==0) issues.push({sev:'amber', text:'Loan '+l.id+' has no interest rate set.'});
+    if(l.interestRate<0) issues.push({sev:'red', text:'Loan '+l.id+' has a negative interest rate.'});
+    if(!['Weekly','Fortnightly','Monthly'].includes(l.frequency||'Monthly')) issues.push({sev:'amber', text:'Loan '+l.id+' has an unrecognised repayment frequency.'});
+    if(!l.instalments || l.instalments<1) issues.push({sev:'red', text:'Loan '+l.id+' has an invalid number of instalments.'});
+    if(loanOutstanding(l.id).principal<0) issues.push({sev:'red', text:'Loan '+l.id+' shows negative outstanding — check repayments.'});
+    loanIdCounts[l.id] = (loanIdCounts[l.id]||0)+1;
+    // Cross-check: outstanding from the ledger must agree with outstanding derived from the
+    // loan's own schedule — these are two different views of the same data (item 16/17); if
+    // they ever disagree it signals a genuine bug rather than a normal data-entry issue.
+    const schedule = generateLoanSchedule(l.id);
+    const scheduleOutstanding = Math.max(0, Math.round((l.principal - schedule.reduce((s,r)=>s+r.principalPaid,0))*100)/100);
+    if(Math.abs(scheduleOutstanding - loanOutstanding(l.id).principal) > 1) issues.push({sev:'red', text:'Loan '+l.id+': ledger balance and repayment schedule disagree — data may need review.'});
+  });
+  Object.keys(loanIdCounts).forEach(id=>{ if(loanIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate Loan ID detected: '+id+' appears more than once.'}); });
   // orphan transactions: a loanId or memberId that no longer matches any real record
   const loanIdSet = new Set(DB.loans.map(l=>l.id)), memberIdSet = new Set(DB.members.map(m=>m.id));
   DB.transactions.forEach(t=>{
     if(t.loanId && !loanIdSet.has(t.loanId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references loan '+t.loanId+', which no longer exists.'});
     if(t.memberId && !memberIdSet.has(t.memberId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references a member that no longer exists.'});
+    // A repayment/interest transaction's memberId must match the loan it's tagged against.
+    if(t.loanId && t.memberId && (t.credit==='MEMBER_LOANS'||t.credit==='INTEREST_INCOME')){
+      const loan = DB.loans.find(l=>l.id===t.loanId);
+      if(loan && loan.memberId!==t.memberId) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' posts to loan '+t.loanId+' but that loan belongs to a different member.'});
+    }
   });
   // repayment posted against a loan that is now closed (the loan may have been closed after this posting)
   DB.transactions.filter(t=>!t.reversed && t.loanId && t.credit==='MEMBER_LOANS').forEach(t=>{
@@ -2126,15 +2178,20 @@ function exportCSV(kind){
 // mapping, and never exports silently over unresolved critical data-quality issues.
 function generateLokOSExport(kind){
   const issues = runDataQuality();
-  const red = issues.filter(i=>i.sev==='red').length;
-  if(red>0 && !confirm('There '+(red===1?'is 1 critical data-quality issue':'are '+red+' critical data-quality issues')+' right now. Exporting anyway is not recommended. Export with an authorised override?')){
+  const red = issues.filter(i=>i.sev==='red');
+  if(red.length>0){
+    openModal(`<button class="close" onclick="closeModal()">×</button><h3>Export Blocked</h3>
+      <div class="msg err">Export blocked — data quality issues require correction. ${red.length} critical issue${red.length>1?'s':''} must be resolved before a LokOS-ready export can be generated.</div>
+      ${tbl(['Issue'], red.map(i=>[esc(i.text)]))}
+      <div class="row" style="margin-top:10px"><button class="btn secondary" onclick="closeModal();go('dataquality')">Open Data Quality Check</button><button class="btn secondary" onclick="closeModal()">Close</button></div>`);
+    logAudit('LOKOS_EXPORT_BLOCKED', kind+' export blocked — '+red.length+' critical data-quality issue(s)');
     return;
   }
   const {headers, rows} = buildExportData(kind);
   const map = DB.lokosMapping[kind];
   const mappedHeaders = map ? headers.map(h=>{ const f = map.find(x=>x.internal===h); return f ? f.lokos : h; }) : headers;
   downloadFile(kind+'_lokos_export.csv', toCSV(mappedHeaders, rows));
-  logAudit('LOKOS_EXPORT', kind+' LokOS-mapped CSV exported'+(red>0?' (with '+red+' unresolved critical issue(s), authorised override)':''));
+  logAudit('LOKOS_EXPORT', kind+' LokOS-mapped CSV exported — data quality was clean');
 }
 
 /* ============================================================ MONTH-END CLOSING */
