@@ -4321,7 +4321,10 @@ function viewHelp(){
    what they already say. Any action a user takes on an AI suggestion still goes through the
    app's normal screens and validation — AI Suggestion → User Review → User Confirmation →
    Existing Validation Engine → Post/Save. Runs fully offline/local by default; an optional
-   API key (Settings) is for a future external AI connection only and is never required. */
+   API key (Settings) is for a future external AI connection only and is never required.
+   Bilingual: every AI-generated sentence is built through aiT(english, hindi) and follows the
+   app's existing EN/हिं toggle (DB.settings.language) — the same one used for the rest of the UI. */
+function aiT(en, hi){ return (DB.settings.language==='hi') ? hi : en; }
 function aiOverdueLoanRows(asOfDate){
   asOfDate = asOfDate || todayStr();
   const rows = [];
@@ -4330,7 +4333,7 @@ function aiOverdueLoanRows(asOfDate){
     const info = infos.find(i=>i.loan.id===loan.id);
     if(info && info.totalDue>0.5){
       const mem = DB.members.find(m=>m.id===loan.memberId);
-      rows.push(Object.assign({loan, member:mem, memberName: mem?mem.name:'(unknown member)'}, info));
+      rows.push(Object.assign({loan, member:mem, memberName: mem?mem.name:aiT('(unknown member)','(अज्ञात सदस्य)')}, info));
     }
   });
   return rows.sort((a,b)=>b.totalDue-a.totalDue);
@@ -4346,7 +4349,7 @@ function aiContext(){
   const active = activeMembers();
   return {
     asOf: todayStr(), ym,
-    shgName: DB.profile.name || 'This SHG',
+    shgName: DB.profile.name || aiT('This SHG','यह एसएचजी'),
     cash: accountBalance('CASH'), bank: accountBalance('BANK'), upi: accountBalance('UPI'),
     activeMemberCount: active.length, totalMemberCount: DB.members.length,
     totalSavings: active.reduce((s,m)=>s+memberSavingsBalance(m.id),0),
@@ -4365,40 +4368,40 @@ function aiHealthCards(){
   const loanHealth = c.overdue.length===0 ? 'green' : (c.overdue.length<=3?'amber':'red');
   const checklist = monthClosingChecklist(c.ym);
   const criticalFails = checklist.filter(x=>!x.ok && !x.warnOnly).length;
-  const monthEndStatus = criticalFails>0 ? 'Not Ready' : (checklist.some(x=>!x.ok)?'Attention Required':'Ready');
-  const gradingStatus = c.grading.gradePending ? 'Pending — data correction required' : ((c.grading.grade||'—')+' ('+c.grading.overall.toFixed(0)+'%)');
-  const lokosReadiness = c.dqRed>0 ? 'Upload Not Permitted' : (c.dqAmber>0?'Correction Recommended':'Ready for Upload');
+  const monthEndStatus = criticalFails>0 ? aiT('Not Ready','तैयार नहीं') : (checklist.some(x=>!x.ok)?aiT('Attention Required','ध्यान आवश्यक'):aiT('Ready','तैयार'));
+  const gradingStatus = c.grading.gradePending ? aiT('Pending — data correction required','लंबित — डेटा सुधार आवश्यक') : ((c.grading.grade||'—')+' ('+c.grading.overall.toFixed(0)+'%)');
+  const lokosReadiness = c.dqRed>0 ? aiT('Upload Not Permitted','अपलोड की अनुमति नहीं') : (c.dqAmber>0?aiT('Correction Recommended','सुधार की सलाह'):aiT('Ready for Upload','अपलोड के लिए तैयार'));
   const alerts = [];
-  if(c.cash<0) alerts.push('Cash balance is negative — review recent cash entries.');
-  if(c.bank<0) alerts.push('Bank balance is negative — review recent bank entries.');
-  if(c.tb.diff!==0) alerts.push('Trial Balance does not match (difference '+rupee(Math.abs(c.tb.diff))+'). This should not normally occur — check Data Quality.');
-  if(c.overdue.length>0) alerts.push(c.overdue.length+' loan(s) have overdue dues totalling '+rupee(c.overdueTotal)+'. See Loan Recovery Assistant.');
-  if(c.dqRed>0) alerts.push(c.dqRed+' critical data-quality issue(s) need attention before this SHG can be graded or its data exported.');
-  else if(c.dqAmber>0) alerts.push(c.dqAmber+' data-quality item(s) need attention (not critical).');
+  if(c.cash<0) alerts.push(aiT('Cash balance is negative — review recent cash entries.','नकद शेष ऋणात्मक है — हाल की नकद प्रविष्टियाँ जाँचें।'));
+  if(c.bank<0) alerts.push(aiT('Bank balance is negative — review recent bank entries.','बैंक शेष ऋणात्मक है — हाल की बैंक प्रविष्टियाँ जाँचें।'));
+  if(c.tb.diff!==0) alerts.push(aiT('Trial Balance does not match (difference '+rupee(Math.abs(c.tb.diff))+'). This should not normally occur — check Data Quality.','तलपट (Trial Balance) मेल नहीं खा रहा (अंतर '+rupee(Math.abs(c.tb.diff))+')। यह सामान्यतः नहीं होना चाहिए — डेटा गुणवत्ता जाँचें।'));
+  if(c.overdue.length>0) alerts.push(aiT(c.overdue.length+' loan(s) have overdue dues totalling '+rupee(c.overdueTotal)+'. See Loan Recovery Assistant.', c.overdue.length+' ऋण(ों) पर कुल '+rupee(c.overdueTotal)+' बकाया है। ऋण वसूली सहायक देखें।'));
+  if(c.dqRed>0) alerts.push(aiT(c.dqRed+' critical data-quality issue(s) need attention before this SHG can be graded or its data exported.', c.dqRed+' गंभीर डेटा-गुणवत्ता समस्याओं पर ध्यान देना आवश्यक है, तभी इस एसएचजी की ग्रेडिंग या डेटा निर्यात हो सकेगा।'));
+  else if(c.dqAmber>0) alerts.push(aiT(c.dqAmber+' data-quality item(s) need attention (not critical).', c.dqAmber+' डेटा-गुणवत्ता मद(ों) पर ध्यान देना है (गंभीर नहीं)।'));
   return {c, dataHealth, accountingHealth, loanHealth, monthEndStatus, gradingStatus, lokosReadiness, alerts, checklist};
 }
 function aiDot(sev){ return `<span class="dot ${sev}"></span>`; }
-function aiModuleBtn(route,label){ return `<button type="button" class="btn secondary small" style="margin:3px" onclick="go('${route}')">${label}</button>`; }
+function aiModuleBtn(route,labelEn,labelHi){ return `<button type="button" class="btn secondary small" style="margin:3px" onclick="go('${route}')">${aiT(labelEn,labelHi)}</button>`; }
 function aiCard(title, bodyHtml){ return `<div class="card"><h3>${esc(title)}</h3>${bodyHtml}</div>`; }
 function viewAIManager(){
   const h = aiHealthCards();
-  let html = `<div class="section-title"><h2>🤖 AI SHG Manager</h2></div>`;
-  html += `<div class="msg info">A read-only advisory layer. It reads and explains this SHG's own recorded data using the app's existing accounting, data-quality and grading engines — it never posts, edits, deletes or auto-approves any record. Every suggestion still needs your review and confirmation on the app's normal screens.</div>`;
-  html += aiCard('SHG Health at a Glance', `<div class="grid cols4">
-    ${stat('Data Quality', aiDot(h.dataHealth)+' '+(h.dataHealth==='green'?'Ready':h.dataHealth==='amber'?'Attention Required':'Error'))}
-    ${stat('Accounting', aiDot(h.accountingHealth)+' '+(h.accountingHealth==='green'?'Balanced':'Mismatch'))}
-    ${stat('Loans', aiDot(h.loanHealth)+' '+h.c.overdue.length+' overdue')}
-    ${stat('Month-End Status', h.monthEndStatus)}
-    ${stat('Grading (this month)', h.gradingStatus)}
-    ${stat('LokOS Readiness', h.lokosReadiness)}
+  let html = `<div class="section-title"><h2>🤖 ${aiT('AI SHG Manager','एआई एसएचजी प्रबंधक')}</h2></div>`;
+  html += `<div class="msg info">${aiT('A read-only advisory layer. It reads and explains this SHG\'s own recorded data using the app\'s existing accounting, data-quality and grading engines — it never posts, edits, deletes or auto-approves any record. Every suggestion still needs your review and confirmation on the app\'s normal screens.','यह केवल-पठन सलाहकार परत है। यह ऐप के मौजूदा लेखांकन, डेटा-गुणवत्ता और ग्रेडिंग इंजनों का उपयोग करके इस एसएचजी के अपने दर्ज डेटा को पढ़ती और समझाती है — यह कभी भी किसी रिकॉर्ड को स्वयं पोस्ट, संपादित, हटाती या स्वतः स्वीकृत नहीं करती। हर सुझाव पर आपकी समीक्षा और पुष्टि ऐप की सामान्य स्क्रीनों पर ही आवश्यक है।')}</div>`;
+  html += aiCard(aiT('SHG Health at a Glance','एक नज़र में एसएचजी स्वास्थ्य'), `<div class="grid cols4">
+    ${stat(aiT('Data Quality','डेटा गुणवत्ता'), aiDot(h.dataHealth)+' '+(h.dataHealth==='green'?aiT('Ready','तैयार'):h.dataHealth==='amber'?aiT('Attention Required','ध्यान आवश्यक'):aiT('Error','त्रुटि')))}
+    ${stat(aiT('Accounting','लेखांकन'), aiDot(h.accountingHealth)+' '+(h.accountingHealth==='green'?aiT('Balanced','संतुलित'):aiT('Mismatch','बेमेल')))}
+    ${stat(aiT('Loans','ऋण'), aiDot(h.loanHealth)+' '+h.c.overdue.length+' '+aiT('overdue','बकाया'))}
+    ${stat(aiT('Month-End Status','माह-अंत स्थिति'), h.monthEndStatus)}
+    ${stat(aiT('Grading (this month)','ग्रेडिंग (इस माह)'), h.gradingStatus)}
+    ${stat(aiT('LokOS Readiness','लोकओएस तैयारी'), h.lokosReadiness)}
   </div>`);
   html += h.alerts.length
-    ? aiCard('AI Alerts', h.alerts.map(a=>`<div class="msg amber" style="margin-bottom:6px">${esc(a)}</div>`).join(''))
-    : `<div class="msg ok">No AI alerts right now — everything checked looks normal.</div>`;
-  html += aiCard('AI Modules', `<div class="row" style="flex-wrap:wrap">
-    ${aiModuleBtn('aiask','💬 Ask AI')}${aiModuleBtn('aidaily','📅 Daily Review')}${aiModuleBtn('aidq','🔍 Data Quality Auditor')}
-    ${aiModuleBtn('airecovery','💰 Loan Recovery Assistant')}${aiModuleBtn('aimonthend','🔒 Month-End Accountant')}${aiModuleBtn('aigrading','★ Grading Assistant')}
-    ${aiModuleBtn('aibusiness','📈 SHG Business Adviser')}${aiModuleBtn('aireports','📝 Report Writer')}${aiModuleBtn('aitraining','🎓 Training Assistant')}
+    ? aiCard(aiT('AI Alerts','एआई अलर्ट'), h.alerts.map(a=>`<div class="msg amber" style="margin-bottom:6px">${esc(a)}</div>`).join(''))
+    : `<div class="msg ok">${aiT('No AI alerts right now — everything checked looks normal.','अभी कोई एआई अलर्ट नहीं — जाँची गई हर चीज़ सामान्य दिख रही है।')}</div>`;
+  html += aiCard(aiT('AI Modules','एआई मॉड्यूल'), `<div class="row" style="flex-wrap:wrap">
+    ${aiModuleBtn('aiask','💬 Ask AI','💬 एआई से पूछें')}${aiModuleBtn('aidaily','📅 Daily Review','📅 दैनिक समीक्षा')}${aiModuleBtn('aidq','🔍 Data Quality Auditor','🔍 डेटा गुणवत्ता ऑडिटर')}
+    ${aiModuleBtn('airecovery','💰 Loan Recovery Assistant','💰 ऋण वसूली सहायक')}${aiModuleBtn('aimonthend','🔒 Month-End Accountant','🔒 माह-अंत लेखाकार')}${aiModuleBtn('aigrading','★ Grading Assistant','★ ग्रेडिंग सहायक')}
+    ${aiModuleBtn('aibusiness','📈 SHG Business Adviser','📈 एसएचजी व्यवसाय सलाहकार')}${aiModuleBtn('aireports','📝 Report Writer','📝 रिपोर्ट लेखक')}${aiModuleBtn('aitraining','🎓 Training Assistant','🎓 प्रशिक्षण सहायक')}
   </div>`);
   return html;
 }
@@ -4406,110 +4409,122 @@ function viewAIManager(){
 /* ---------------- Ask AI (natural-language interface over the app's own data) ---------------- */
 function aiRenderResponse(r){
   let html = `<div style="margin-bottom:16px">`;
-  html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">ANSWER</div><div style="font-size:14px;margin-bottom:8px">${esc(r.answer)}</div>`;
-  if(r.figures && r.figures.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">FIGURES</div><ul style="margin:4px 0 8px 18px;font-size:13.5px">${r.figures.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
-  if(r.evidence && r.evidence.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">EVIDENCE</div><ul style="margin:4px 0 8px 18px;font-size:13.5px;color:var(--muted)">${r.evidence.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
-  if(r.observation) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">OBSERVATION</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.observation)}</div>`;
-  if(r.action) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">RECOMMENDED ACTION</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.action)}</div>`;
-  html += `<div style="font-size:11.5px;color:var(--muted)">Data status: ${esc(r.confidence||'Calculation-based, from this app\'s own stored records')} · as on ${fmtDate(todayStr())}</div>`;
+  html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('ANSWER','उत्तर')}</div><div style="font-size:14px;margin-bottom:8px">${esc(r.answer)}</div>`;
+  if(r.figures && r.figures.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('FIGURES','आँकड़े')}</div><ul style="margin:4px 0 8px 18px;font-size:13.5px">${r.figures.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
+  if(r.evidence && r.evidence.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('EVIDENCE','प्रमाण')}</div><ul style="margin:4px 0 8px 18px;font-size:13.5px;color:var(--muted)">${r.evidence.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
+  if(r.observation) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('OBSERVATION','अवलोकन')}</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.observation)}</div>`;
+  if(r.action) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('RECOMMENDED ACTION','अनुशंसित कार्रवाई')}</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.action)}</div>`;
+  html += `<div style="font-size:11.5px;color:var(--muted)">${aiT('Data status','डेटा स्थिति')}: ${esc(r.confidence||aiT('Calculation-based, from this app\'s own stored records','गणना-आधारित, इस ऐप के अपने संग्रहीत रिकॉर्ड से'))} · ${aiT('as on','दिनांक')} ${fmtDate(todayStr())}</div>`;
   html += `</div>`;
   return html;
 }
 function aiAsk(qRaw){
   const q = (qRaw||'').toLowerCase().trim();
   const c = aiContext();
-  const base = {confidence:'Data verified — calculated from this app\'s own stored records'};
-  if(!q) return Object.assign({answer:'Please type a question.'}, base, {confidence:'—'});
+  const base = {confidence:aiT('Data verified — calculated from this app\'s own stored records','डेटा सत्यापित — इस ऐप के अपने संग्रहीत रिकॉर्ड से गणना की गई')};
+  if(!q) return Object.assign({answer:aiT('Please type a question.','कृपया एक प्रश्न लिखें।')}, base, {confidence:'—'});
   const has = (...words)=>words.some(w=>q.includes(w));
 
-  if(has('cash') && !has('bank')) return Object.assign({}, base, {
-    answer:`${c.shgName} currently has ${rupee(c.cash)} in cash.`,
-    figures:['Cash in hand: '+rupee(c.cash)],
-    evidence:['From the Cash Book (accountBalance("CASH")) as on '+fmtDate(c.asOf)]});
-  if(has('bank balance','money in bank') || (has('bank') && has('balance','how much','money'))) return Object.assign({}, base, {
-    answer:`${c.shgName} currently has ${rupee(c.bank)} in the bank.`,
-    figures:['Bank balance: '+rupee(c.bank)],
-    evidence:['From the Bank Book (accountBalance("BANK")) as on '+fmtDate(c.asOf)]});
+  if(has('cash','नकद','कैश') && !has('bank','बैंक')) return Object.assign({}, base, {
+    answer: aiT(`${c.shgName} currently has ${rupee(c.cash)} in cash.`, `${c.shgName} के पास वर्तमान में ${rupee(c.cash)} नकद है।`),
+    figures:[aiT('Cash in hand: ','हाथ में नकद: ')+rupee(c.cash)],
+    evidence:[aiT('From the Cash Book (accountBalance("CASH")) as on ','कैश बुक से (accountBalance("CASH")) दिनांक ')+fmtDate(c.asOf)]});
+  if(has('bank balance','money in bank','बैंक बैलेंस','बैंक शेष') || (has('bank','बैंक') && has('balance','how much','money','शेष','कितना'))) return Object.assign({}, base, {
+    answer: aiT(`${c.shgName} currently has ${rupee(c.bank)} in the bank.`, `${c.shgName} के पास वर्तमान में बैंक में ${rupee(c.bank)} है।`),
+    figures:[aiT('Bank balance: ','बैंक शेष: ')+rupee(c.bank)],
+    evidence:[aiT('From the Bank Book (accountBalance("BANK")) as on ','बैंक बुक से (accountBalance("BANK")) दिनांक ')+fmtDate(c.asOf)]});
   if(has('upi')) return Object.assign({}, base, {
-    answer:`The UPI account balance is ${rupee(c.upi)}. UPI collections/payments are posted directly into the Bank account in this app, so this figure is normally zero unless a legacy UPI balance exists.`,
-    figures:['UPI balance: '+rupee(c.upi)]});
-  if(has('overdue','who has outstanding','outstanding loan') && has('loan','instalment','installment','repayment','due')) {
-    if(!c.overdue.length) return Object.assign({}, base, {answer:'No member currently has an overdue loan instalment.', figures:['Overdue loans: 0']});
+    answer: aiT(`The UPI account balance is ${rupee(c.upi)}. UPI collections/payments are posted directly into the Bank account in this app, so this figure is normally zero unless a legacy UPI balance exists.`, `यूपीआई खाते का शेष ${rupee(c.upi)} है। इस ऐप में यूपीआई संग्रह/भुगतान सीधे बैंक खाते में पोस्ट होते हैं, इसलिए यह आँकड़ा सामान्यतः शून्य रहता है, जब तक कोई पुराना यूपीआई शेष न हो।`),
+    figures:[aiT('UPI balance: ','यूपीआई शेष: ')+rupee(c.upi)]});
+  if((has('overdue','who has outstanding','outstanding loan','बकाया','अतिदेय') ) && has('loan','instalment','installment','repayment','due','ऋण','किस्त')) {
+    if(!c.overdue.length) return Object.assign({}, base, {answer:aiT('No member currently has an overdue loan instalment.','फिलहाल किसी भी सदस्य की ऋण किस्त बकाया नहीं है।'), figures:[aiT('Overdue loans: 0','बकाया ऋण: 0')]});
     const top = c.overdue.slice(0,10);
     return Object.assign({}, base, {
-      answer:`${c.overdue.length} loan(s) have an overdue amount, totalling ${rupee(c.overdueTotal)}.`,
-      figures: top.map(r=>r.memberName+' — Loan '+r.loan.id+': '+rupee(r.totalDue)+' due (Principal '+rupee(r.totalPrincipalDue)+' + Interest '+rupee(r.totalInterestDue)+')'),
-      evidence:['Calculated loan-wise via memberDueInfos(), the same function used in the Meeting module and Loan Register'],
-      observation: c.overdue.length>top.length ? ('Showing the top 10 of '+c.overdue.length+' — see Loan Recovery Assistant for the full list.') : undefined,
-      action:'Open the Loan Recovery Assistant for follow-up suggestions for each member.'});
+      answer: aiT(`${c.overdue.length} loan(s) have an overdue amount, totalling ${rupee(c.overdueTotal)}.`, `${c.overdue.length} ऋण(ों) पर बकाया राशि है, कुल ${rupee(c.overdueTotal)}।`),
+      figures: top.map(r=>r.memberName+' — '+aiT('Loan','ऋण')+' '+r.loan.id+': '+rupee(r.totalDue)+' '+aiT('due (Principal','बकाया (मूलधन')+' '+rupee(r.totalPrincipalDue)+' + '+aiT('Interest','ब्याज')+' '+rupee(r.totalInterestDue)+')'),
+      evidence:[aiT('Calculated loan-wise via memberDueInfos(), the same function used in the Meeting module and Loan Register','memberDueInfos() के माध्यम से ऋण-वार गणना की गई — वही फ़ंक्शन जो मीटिंग मॉड्यूल और ऋण रजिस्टर में उपयोग होता है')],
+      observation: c.overdue.length>top.length ? aiT('Showing the top 10 of '+c.overdue.length+' — see Loan Recovery Assistant for the full list.', 'कुल '+c.overdue.length+' में से शीर्ष 10 दिखाए गए — पूरी सूची के लिए ऋण वसूली सहायक देखें।') : undefined,
+      action: aiT('Open the Loan Recovery Assistant for follow-up suggestions for each member.','प्रत्येक सदस्य के लिए अनुवर्ती सुझावों हेतु ऋण वसूली सहायक खोलें।')});
   }
-  if(has('total loan','loan outstanding') || (has('loan') && has('shg','total','current'))) return Object.assign({}, base, {
-    answer:`Total outstanding on active member loans is ${rupee(c.totalLoanOutstanding)} across ${c.activeLoans.length} active loan(s).`,
-    figures:['Total loan outstanding: '+rupee(c.totalLoanOutstanding), 'Active loans: '+c.activeLoans.length],
-    evidence:['Sum of loanOutstanding(loanId).principal over every non-closed loan']});
-  if(has('savings') && has('total','how much')) return Object.assign({}, base, {
-    answer:`Total member savings held by the SHG is ${rupee(c.totalSavings)} across ${c.activeMemberCount} active member(s).`,
-    figures:['Total savings: '+rupee(c.totalSavings), 'Active members: '+c.activeMemberCount],
-    evidence:['Sum of memberSavingsBalance(id) for every active member']});
-  if(has('income') && has('month','this month')) {
+  if(has('total loan','loan outstanding','कुल ऋण','ऋण बकाया') || (has('loan','ऋण') && has('shg','total','current','कुल','वर्तमान'))) return Object.assign({}, base, {
+    answer: aiT(`Total outstanding on active member loans is ${rupee(c.totalLoanOutstanding)} across ${c.activeLoans.length} active loan(s).`, `सक्रिय सदस्य ऋणों पर कुल बकाया ${rupee(c.totalLoanOutstanding)} है, ${c.activeLoans.length} सक्रिय ऋण(ों) में।`),
+    figures:[aiT('Total loan outstanding: ','कुल ऋण बकाया: ')+rupee(c.totalLoanOutstanding), aiT('Active loans: ','सक्रिय ऋण: ')+c.activeLoans.length],
+    evidence:[aiT('Sum of loanOutstanding(loanId).principal over every non-closed loan','हर सक्रिय (बंद न हुए) ऋण पर loanOutstanding(loanId).principal का योग')]});
+  if(has('savings','बचत') && has('total','how much','कुल','कितनी')) return Object.assign({}, base, {
+    answer: aiT(`Total member savings held by the SHG is ${rupee(c.totalSavings)} across ${c.activeMemberCount} active member(s).`, `एसएचजी के पास कुल सदस्य बचत ${rupee(c.totalSavings)} है, ${c.activeMemberCount} सक्रिय सदस्य(ओं) में।`),
+    figures:[aiT('Total savings: ','कुल बचत: ')+rupee(c.totalSavings), aiT('Active members: ','सक्रिय सदस्य: ')+c.activeMemberCount],
+    evidence:[aiT('Sum of memberSavingsBalance(id) for every active member','हर सक्रिय सदस्य के लिए memberSavingsBalance(id) का योग')]});
+  if(has('income','आय') && has('month','this month','माह','इस माह')) {
     const from = c.ym+'-01', to = todayStr();
     const mIe = incomeExpenditure(from, to);
-    return Object.assign({}, base, {answer:`Income recorded so far this month (${c.ym}) is ${rupee(mIe.income)}, against expenditure of ${rupee(mIe.expenditure)}.`,
-      figures:['Income (month): '+rupee(mIe.income), 'Expenditure (month): '+rupee(mIe.expenditure), 'Surplus/(Deficit): '+rupee(mIe.surplus)],
-      evidence:['From incomeExpenditure(), the same function behind Financial Statements']});
+    return Object.assign({}, base, {answer: aiT(`Income recorded so far this month (${c.ym}) is ${rupee(mIe.income)}, against expenditure of ${rupee(mIe.expenditure)}.`, `इस माह (${c.ym}) अब तक दर्ज आय ${rupee(mIe.income)} है, जबकि व्यय ${rupee(mIe.expenditure)} है।`),
+      figures:[aiT('Income (month): ','आय (माह): ')+rupee(mIe.income), aiT('Expenditure (month): ','व्यय (माह): ')+rupee(mIe.expenditure), aiT('Surplus/(Deficit): ','अधिशेष/(घाटा): ')+rupee(mIe.surplus)],
+      evidence:[aiT('From incomeExpenditure(), the same function behind Financial Statements','incomeExpenditure() से, जो वित्तीय विवरण के पीछे भी वही फ़ंक्शन है')]});
   }
-  if(has('trial balance') && has('why','not match','mismatch','wrong','not matching','not balanced')) return Object.assign({}, base, {
-    answer: c.tb.diff===0 ? 'The Trial Balance is matched — Total Debit equals Total Credit.' : `The Trial Balance does not match by ${rupee(Math.abs(c.tb.diff))}. This should never happen since every voucher enforces equal debit and credit at the time of posting.`,
-    figures:['Total Debit: '+rupee(c.tb.totalDr), 'Total Credit: '+rupee(c.tb.totalCr), 'Difference: '+rupee(c.tb.diff)],
-    observation: c.tb.diff!==0 ? 'A mismatch usually points to a corrupted backup restore or a manually edited data file rather than normal data entry.' : undefined,
-    action: c.tb.diff!==0 ? 'Open Data Quality Check for the specific record(s) involved, or restore your last known-good backup.' : undefined});
-  if(has('transactions above') || (has('transaction') && has('10,000','10000','above','large'))) {
+  if(has('trial balance','तलपट') && has('why','not match','mismatch','wrong','not matching','not balanced','क्यों','मेल नहीं','बेमेल')) return Object.assign({}, base, {
+    answer: c.tb.diff===0 ? aiT('The Trial Balance is matched — Total Debit equals Total Credit.','तलपट (Trial Balance) मेल खा रहा है — कुल डेबिट, कुल क्रेडिट के बराबर है।') : aiT(`The Trial Balance does not match by ${rupee(Math.abs(c.tb.diff))}. This should never happen since every voucher enforces equal debit and credit at the time of posting.`, `तलपट (Trial Balance) ${rupee(Math.abs(c.tb.diff))} से मेल नहीं खा रहा। ऐसा कभी नहीं होना चाहिए, क्योंकि हर वाउचर पोस्ट करते समय डेबिट-क्रेडिट बराबर होना अनिवार्य है।`),
+    figures:[aiT('Total Debit: ','कुल डेबिट: ')+rupee(c.tb.totalDr), aiT('Total Credit: ','कुल क्रेडिट: ')+rupee(c.tb.totalCr), aiT('Difference: ','अंतर: ')+rupee(c.tb.diff)],
+    observation: c.tb.diff!==0 ? aiT('A mismatch usually points to a corrupted backup restore or a manually edited data file rather than normal data entry.','बेमेल आमतौर पर खराब बैकअप पुनर्स्थापना या मैन्युअल रूप से संपादित डेटा फ़ाइल की ओर इशारा करता है, सामान्य डेटा प्रविष्टि की ओर नहीं।') : undefined,
+    action: c.tb.diff!==0 ? aiT('Open Data Quality Check for the specific record(s) involved, or restore your last known-good backup.','संबंधित रिकॉर्ड(ों) के लिए डेटा गुणवत्ता जाँच खोलें, या अपना अंतिम सही बैकअप पुनर्स्थापित करें।') : undefined});
+  if(has('transactions above','बड़े लेनदेन') || (has('transaction','लेनदेन') && has('10,000','10000','above','large','से अधिक'))) {
     const big = DB.transactions.filter(t=>!t.reversed && t.amount>10000).sort((a,b)=>b.amount-a.amount).slice(0,15);
-    return Object.assign({}, base, {answer: big.length? (big.length+' transaction(s) above ₹10,000 found.') : 'No transaction above ₹10,000 was found.',
+    return Object.assign({}, base, {answer: big.length? aiT(big.length+' transaction(s) above ₹10,000 found.', '₹10,000 से अधिक के '+big.length+' लेनदेन मिले।') : aiT('No transaction above ₹10,000 was found.','₹10,000 से अधिक का कोई लेनदेन नहीं मिला।'),
       figures: big.map(t=>fmtDate(t.date)+' — '+t.type+': '+rupee(t.amount)+' ('+t.voucherNo+')')});
   }
-  if(has('not paid','have not paid','who has not paid') && has('month','this month')) {
+  if(has('not paid','have not paid','who has not paid','जमा नहीं','जिन्होंने जमा नहीं') && has('month','this month','माह','इस माह')) {
     const from = c.ym+'-01', to = todayStr();
     const paidIds = new Set(DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').map(t=>t.memberId));
     const notPaid = activeMembers().filter(m=>!paidIds.has(m.id));
-    return Object.assign({}, base, {answer: notPaid.length? (notPaid.length+' active member(s) have not made a savings entry this month ('+c.ym+').') : 'Every active member has made a savings entry this month.',
+    return Object.assign({}, base, {answer: notPaid.length? aiT(notPaid.length+' active member(s) have not made a savings entry this month ('+c.ym+').', c.ym+' में '+notPaid.length+' सक्रिय सदस्य(ओं) ने अभी तक बचत प्रविष्टि नहीं की है।') : aiT('Every active member has made a savings entry this month.','हर सक्रिय सदस्य ने इस माह बचत प्रविष्टि कर दी है।'),
       figures: notPaid.map(m=>m.name)});
   }
-  if(has('bank manager','summary for the bank')) return Object.assign({}, base, {
-    answer:`Here is a quick summary for a bank manager briefing: Members ${c.activeMemberCount}, Total Savings ${rupee(c.totalSavings)}, Loan Outstanding ${rupee(c.totalLoanOutstanding)}, Cash ${rupee(c.cash)}, Bank ${rupee(c.bank)}, CIF Outstanding ${rupee(c.cifOutstanding)}.`,
-    action:'Use AI Report Writer → "Bank Manager Briefing" for a printable version.'});
-  if(has('financial position','explain the financial')) return Object.assign({}, base, {
-    answer:`${c.shgName} holds ${rupee(c.cash+c.bank)} in cash+bank, has lent out ${rupee(c.totalLoanOutstanding)} to members (against ${rupee(c.totalSavings)} in member savings), and carries ${rupee(c.cifOutstanding)} of outstanding CIF liability. Total Corpus (own funds) is ${rupee(c.corpus.total)}.`,
-    figures:['Cash+Bank: '+rupee(c.cash+c.bank), 'Loan Outstanding: '+rupee(c.totalLoanOutstanding), 'Savings: '+rupee(c.totalSavings), 'CIF Outstanding: '+rupee(c.cifOutstanding), 'Total Corpus: '+rupee(c.corpus.total)],
-    evidence:['calculateCorpus() cross-checked by two independent formulas — see the Corpus screen']});
-  if(has('what data is missing','what is missing','data missing')) {
-    if(!c.dq.length) return Object.assign({}, base, {answer:'No missing or inconsistent data was found by the Data Quality engine.'});
-    return Object.assign({}, base, {answer:c.dq.length+' data item(s) need attention ('+c.dqRed+' critical, '+c.dqAmber+' warning).',
-      figures:c.dq.slice(0,10).map(i=>'['+i.sev.toUpperCase()+'] '+i.text), action:'Open Data Quality Auditor for the full list with suggested corrections.'});
+  if(has('bank manager','summary for the bank','बैंक मैनेजर')) return Object.assign({}, base, {
+    answer: aiT(`Here is a quick summary for a bank manager briefing: Members ${c.activeMemberCount}, Total Savings ${rupee(c.totalSavings)}, Loan Outstanding ${rupee(c.totalLoanOutstanding)}, Cash ${rupee(c.cash)}, Bank ${rupee(c.bank)}, CIF Outstanding ${rupee(c.cifOutstanding)}.`, `बैंक मैनेजर के लिए संक्षिप्त सारांश: सदस्य ${c.activeMemberCount}, कुल बचत ${rupee(c.totalSavings)}, ऋण बकाया ${rupee(c.totalLoanOutstanding)}, नकद ${rupee(c.cash)}, बैंक ${rupee(c.bank)}, सीआईएफ बकाया ${rupee(c.cifOutstanding)}।`),
+    action: aiT('Use AI Report Writer → "Bank Manager Briefing" for a printable version.','मुद्रण योग्य संस्करण हेतु एआई रिपोर्ट लेखक → "बैंक मैनेजर ब्रीफिंग" का उपयोग करें।')});
+  if(has('financial position','explain the financial','वित्तीय स्थिति')) return Object.assign({}, base, {
+    answer: aiT(`${c.shgName} holds ${rupee(c.cash+c.bank)} in cash+bank, has lent out ${rupee(c.totalLoanOutstanding)} to members (against ${rupee(c.totalSavings)} in member savings), and carries ${rupee(c.cifOutstanding)} of outstanding CIF liability. Total Corpus (own funds) is ${rupee(c.corpus.total)}.`, `${c.shgName} के पास नकद+बैंक में ${rupee(c.cash+c.bank)} है, सदस्यों को ${rupee(c.totalLoanOutstanding)} ऋण दिया गया है (सदस्य बचत ${rupee(c.totalSavings)} की तुलना में), और ${rupee(c.cifOutstanding)} सीआईएफ देयता बकाया है। कुल कॉर्पस (अपनी निधि) ${rupee(c.corpus.total)} है।`),
+    figures:[aiT('Cash+Bank: ','नकद+बैंक: ')+rupee(c.cash+c.bank), aiT('Loan Outstanding: ','ऋण बकाया: ')+rupee(c.totalLoanOutstanding), aiT('Savings: ','बचत: ')+rupee(c.totalSavings), aiT('CIF Outstanding: ','सीआईएफ बकाया: ')+rupee(c.cifOutstanding), aiT('Total Corpus: ','कुल कॉर्पस: ')+rupee(c.corpus.total)],
+    evidence:[aiT('calculateCorpus() cross-checked by two independent formulas — see the Corpus screen','calculateCorpus() दो स्वतंत्र सूत्रों से क्रॉस-चेक किया गया — कॉर्पस स्क्रीन देखें')]});
+  if(has('what data is missing','what is missing','data missing','डेटा गायब','क्या डेटा कमी')) {
+    if(!c.dq.length) return Object.assign({}, base, {answer:aiT('No missing or inconsistent data was found by the Data Quality engine.','डेटा गुणवत्ता इंजन को कोई गायब या असंगत डेटा नहीं मिला।')});
+    return Object.assign({}, base, {answer:aiT(c.dq.length+' data item(s) need attention ('+c.dqRed+' critical, '+c.dqAmber+' warning).', c.dq.length+' डेटा मद(ों) पर ध्यान देना है ('+c.dqRed+' गंभीर, '+c.dqAmber+' चेतावनी)।'),
+      figures:c.dq.slice(0,10).map(i=>'['+i.sev.toUpperCase()+'] '+i.text), action:aiT('Open Data Quality Auditor for the full list with suggested corrections.','सुझाए गए सुधारों सहित पूरी सूची के लिए डेटा गुणवत्ता ऑडिटर खोलें।')});
   }
-  if(has('graded this month','can this shg be graded','ready for grading')) return Object.assign({}, base, {
-    answer: c.grading.gradePending ? 'Not yet — grading is Pending because critical data-quality issues exist. Resolve them first.' : `Yes. This month\'s calculated grade is ${c.grading.grade} (${c.grading.overall.toFixed(1)}%).`,
-    figures:['Critical data-quality issues: '+c.dqRed],
-    action:'See the Grading Assistant for the indicator-wise breakdown.'});
+  if(has('graded this month','can this shg be graded','ready for grading','ग्रेड','ग्रेडिंग')) return Object.assign({}, base, {
+    answer: c.grading.gradePending ? aiT('Not yet — grading is Pending because critical data-quality issues exist. Resolve them first.','अभी नहीं — गंभीर डेटा-गुणवत्ता समस्याओं के कारण ग्रेडिंग लंबित है। पहले उन्हें ठीक करें।') : aiT(`Yes. This month's calculated grade is ${c.grading.grade} (${c.grading.overall.toFixed(1)}%).`, `हाँ। इस माह की गणना की गई ग्रेड ${c.grading.grade} (${c.grading.overall.toFixed(1)}%) है।`),
+    figures:[aiT('Critical data-quality issues: ','गंभीर डेटा-गुणवत्ता समस्याएँ: ')+c.dqRed],
+    action: aiT('See the Grading Assistant for the indicator-wise breakdown.','संकेतक-वार विवरण के लिए ग्रेडिंग सहायक देखें।')});
   return Object.assign({}, base, {
-    answer:'I don\'t have a ready answer for that yet using this app\'s current rules. Try asking about cash, bank, savings, loan outstanding, overdue members, income/expenditure, Trial Balance, or grading — or open the relevant screen from the left menu.',
+    answer: aiT('I don\'t have a ready answer for that yet using this app\'s current rules. Try asking about cash, bank, savings, loan outstanding, overdue members, income/expenditure, Trial Balance, or grading — or open the relevant screen from the left menu.','इस ऐप के मौजूदा नियमों के साथ मेरे पास इसका तैयार उत्तर नहीं है। नकद, बैंक, बचत, ऋण बकाया, बकाया सदस्यों, आय/व्यय, तलपट या ग्रेडिंग के बारे में पूछकर देखें — या बाईं मेनू से संबंधित स्क्रीन खोलें।'),
     confidence:'—'});
 }
 function viewAIAsk(){
-  let html = `<div class="section-title"><h2>💬 Ask AI</h2></div>`;
-  html += `<div class="msg info">Ask a plain-language question about this SHG's own recorded data. Answers are calculated only from this app's stored records and functions — nothing is invented.</div>`;
+  let html = `<div class="section-title"><h2>💬 ${aiT('Ask AI','एआई से पूछें')}</h2></div>`;
+  html += `<div class="msg info">${aiT('Ask a plain-language question about this SHG\'s own recorded data. Answers are calculated only from this app\'s stored records and functions — nothing is invented.','इस एसएचजी के अपने दर्ज डेटा के बारे में सरल भाषा में प्रश्न पूछें। उत्तर केवल इस ऐप के संग्रहीत रिकॉर्ड और फ़ंक्शनों से गणना किए जाते हैं — कुछ भी गढ़ा नहीं जाता।')}</div>`;
   html += `<div class="card"><form onsubmit="return aiAskSubmit(event)">
-    <div class="row"><div class="field" style="flex:3"><input name="q" id="aiAskInput" placeholder="e.g. Who has overdue loans?" autocomplete="off"></div>
-    <button class="btn" type="submit">Ask</button>${aiVoiceButtonsHTML()}</div>
+    <div class="row"><div class="field" style="flex:3"><input name="q" id="aiAskInput" placeholder="${aiT('e.g. Who has overdue loans?','जैसे: किसका ऋण बकाया है?')}" autocomplete="off"></div>
+    <button class="btn" type="submit">${aiT('Ask','पूछें')}</button>${aiVoiceButtonsHTML()}</div>
   </form></div>`;
   if(AI_CHAT.length){
-    html += `<div class="card"><h3>Conversation</h3>`;
+    html += `<div class="card"><h3>${aiT('Conversation','बातचीत')}</h3>`;
     AI_CHAT.slice().reverse().forEach(c=>{
-      html += `<div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--line)"><div style="font-weight:600;color:var(--navy-2);font-size:13px">You asked</div><div style="font-size:13.5px;margin-bottom:8px">${esc(c.q)}</div>${aiRenderResponse(c.r)}</div>`;
+      html += `<div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--line)"><div style="font-weight:600;color:var(--navy-2);font-size:13px">${aiT('You asked','आपने पूछा')}</div><div style="font-size:13.5px;margin-bottom:8px">${esc(c.q)}</div>${aiRenderResponse(c.r)}</div>`;
     });
     html += `</div>`;
   }
-  html += aiCard('Try asking…', `<div class="row" style="flex-wrap:wrap">${['How much cash does the SHG have?','Who has outstanding loans?','Which members have overdue instalments?','What was the income this month?','What is the total savings?','Why is the Trial Balance not matching?','Which members have not paid this month?','Explain the financial position of this SHG.','What data is missing?','Can this SHG be graded this month?'].map(t=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiAskQuick('${esc(t).replace(/'/g,"\\'")}')">${esc(t)}</button>`).join('')}</div>`);
+  const quick = [
+    ['How much cash does the SHG have?','एसएचजी के पास कितना नकद है?'],
+    ['Who has outstanding loans?','किसका ऋण बकाया है?'],
+    ['Which members have overdue instalments?','किन सदस्यों की किस्तें बकाया हैं?'],
+    ['What was the income this month?','इस माह की आय कितनी थी?'],
+    ['What is the total savings?','कुल बचत कितनी है?'],
+    ['Why is the Trial Balance not matching?','तलपट मेल क्यों नहीं खा रहा?'],
+    ['Which members have not paid this month?','इस माह किन सदस्यों ने जमा नहीं किया?'],
+    ['Explain the financial position of this SHG.','इस एसएचजी की वित्तीय स्थिति समझाएँ।'],
+    ['What data is missing?','कौन सा डेटा गायब है?'],
+    ['Can this SHG be graded this month?','क्या इस एसएचजी की इस माह ग्रेडिंग हो सकती है?']
+  ];
+  html += aiCard(aiT('Try asking…','यह पूछ कर देखें…'), `<div class="row" style="flex-wrap:wrap">${quick.map(([en,hi])=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiAskQuick('${esc(en).replace(/'/g,"\\'")}')">${esc(aiT(en,hi))}</button>`).join('')}</div>`);
   return html;
 }
 function aiAskSubmit(ev){
@@ -4530,10 +4545,10 @@ function aiVoiceAvailable(){ return !!(typeof window!=='undefined' && (window.Sp
 function aiSpeechSynthAvailable(){ return !!(typeof window!=='undefined' && window.speechSynthesis); }
 function aiVoiceButtonsHTML(){
   if(!aiVoiceAvailable()) return '';
-  return `<button type="button" class="btn secondary" title="Speak your question" onclick="aiVoiceStart()">🎤</button>`;
+  return `<button type="button" class="btn secondary" title="${aiT('Speak your question','अपना प्रश्न बोलें')}" onclick="aiVoiceStart()">🎤</button>`;
 }
 function aiVoiceStart(){
-  if(!aiVoiceAvailable()){ flash('info','Voice input is not supported in this browser. Please type your question instead.'); render(); return; }
+  if(!aiVoiceAvailable()){ flash('info', aiT('Voice input is not supported in this browser. Please type your question instead.','इस ब्राउज़र में वॉइस इनपुट समर्थित नहीं है। कृपया अपना प्रश्न टाइप करें।')); render(); return; }
   try{
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
@@ -4547,9 +4562,9 @@ function aiVoiceStart(){
       render();
       if(aiSpeechSynthAvailable()) aiSpeak(r.answer);
     };
-    rec.onerror = function(){ flash('error','Could not capture voice input. Please type your question instead.'); render(); };
+    rec.onerror = function(){ flash('error', aiT('Could not capture voice input. Please type your question instead.','वॉइस इनपुट प्राप्त नहीं हो सका। कृपया अपना प्रश्न टाइप करें।')); render(); };
     rec.start();
-  }catch(e){ flash('error','Voice input is unavailable right now. Please type your question instead.'); render(); }
+  }catch(e){ flash('error', aiT('Voice input is unavailable right now. Please type your question instead.','वॉइस इनपुट फिलहाल उपलब्ध नहीं है। कृपया अपना प्रश्न टाइप करें।')); render(); }
 }
 function aiSpeak(text){
   if(!aiSpeechSynthAvailable() || !text) return;
@@ -4557,23 +4572,23 @@ function aiSpeak(text){
 }
 
 /* ---------------- AI Data Quality Auditor (narrates the existing runDataQuality() findings) ---------------- */
-function aiSeverityLabel(sev){ return sev==='red' ? 'Critical' : 'Medium'; }
+function aiSeverityLabel(sev){ return sev==='red' ? aiT('Critical','गंभीर') : aiT('Medium','मध्यम'); }
 function viewAIDataQuality(){
   const issues = runDataQuality();
-  let html = `<div class="section-title"><h2>🔍 AI Data Quality Auditor</h2></div>`;
-  html += `<div class="msg info">This narrates the same checks used by Data Quality Check (left menu) in Problem → Evidence → Why it matters → Suggested correction format. It never silently corrects anything — you make every fix yourself on the relevant screen.</div>`;
-  if(!issues.length){ html += `<div class="msg ok">No issues found — this SHG's records currently pass every automated check.</div>`; return html; }
+  let html = `<div class="section-title"><h2>🔍 ${aiT('AI Data Quality Auditor','एआई डेटा गुणवत्ता ऑडिटर')}</h2></div>`;
+  html += `<div class="msg info">${aiT('This narrates the same checks used by Data Quality Check (left menu) in Problem → Evidence → Why it matters → Suggested correction format. It never silently corrects anything — you make every fix yourself on the relevant screen.','यह डेटा गुणवत्ता जाँच (बाईं मेनू) में उपयोग की गई उन्हीं जाँचों को समस्या → प्रमाण → महत्व → सुझाया गया सुधार प्रारूप में बताता है। यह चुपचाप कभी कुछ ठीक नहीं करता — हर सुधार आप स्वयं संबंधित स्क्रीन पर करते हैं।')}</div>`;
+  if(!issues.length){ html += `<div class="msg ok">${aiT('No issues found — this SHG\'s records currently pass every automated check.','कोई समस्या नहीं मिली — इस एसएचजी के रिकॉर्ड फिलहाल हर स्वचालित जाँच में सही पाए गए हैं।')}</div>`; return html; }
   const bySev = {red:issues.filter(i=>i.sev==='red'), amber:issues.filter(i=>i.sev==='amber')};
-  html += aiCard('Summary', `${bySev.red.length} Critical, ${bySev.amber.length} Medium/attention item(s).`);
+  html += aiCard(aiT('Summary','सारांश'), `${bySev.red.length} ${aiT('Critical','गंभीर')}, ${bySev.amber.length} ${aiT('Medium/attention item(s).','मध्यम/ध्यान देने योग्य मद(ें)।')}`);
   ['red','amber'].forEach(sev=>{
     if(!bySev[sev].length) return;
     html += `<div class="card"><h3>${aiSeverityLabel(sev)}</h3>`;
     bySev[sev].forEach(i=>{
       html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)">
-        <div><b>Problem:</b> ${esc(i.text)}</div>
-        <div class="hint"><b>Evidence:</b> Detected by the app's Data Quality engine from your stored records as on ${fmtDate(todayStr())}.</div>
-        <div class="hint"><b>Why it matters:</b> ${sev==='red' ? 'This can make Trial Balance, Grading or LokOS export unreliable until corrected.' : 'This can reduce record quality and grading, though it is not urgent.'}</div>
-        <div class="hint"><b>Suggested action:</b> Open the relevant screen (Members, Loans, Transactions, Profile, or Trial Balance) and correct the underlying record — the AI cannot make this change for you.</div>
+        <div><b>${aiT('Problem','समस्या')}:</b> ${esc(i.text)}</div>
+        <div class="hint"><b>${aiT('Evidence','प्रमाण')}:</b> ${aiT('Detected by the app\'s Data Quality engine from your stored records as on','ऐप के डेटा गुणवत्ता इंजन द्वारा आपके संग्रहीत रिकॉर्ड से दिनांक')} ${fmtDate(todayStr())}।</div>
+        <div class="hint"><b>${aiT('Why it matters','यह क्यों महत्वपूर्ण है')}:</b> ${sev==='red' ? aiT('This can make Trial Balance, Grading or LokOS export unreliable until corrected.','जब तक ठीक न किया जाए, यह तलपट, ग्रेडिंग या लोकओएस निर्यात को अविश्वसनीय बना सकता है।') : aiT('This can reduce record quality and grading, though it is not urgent.','यह रिकॉर्ड की गुणवत्ता और ग्रेडिंग को कम कर सकता है, हालाँकि यह तत्काल नहीं है।')}</div>
+        <div class="hint"><b>${aiT('Suggested action','सुझाई गई कार्रवाई')}:</b> ${aiT('Open the relevant screen (Members, Loans, Transactions, Profile, or Trial Balance) and correct the underlying record — the AI cannot make this change for you.','संबंधित स्क्रीन (सदस्य, ऋण, लेनदेन, प्रोफ़ाइल, या तलपट) खोलें और मूल रिकॉर्ड ठीक करें — एआई यह बदलाव आपके लिए नहीं कर सकता।')}</div>
       </div>`;
     });
     html += `</div>`;
@@ -4584,44 +4599,44 @@ function viewAIDataQuality(){
 /* ---------------- AI Daily Review ---------------- */
 function viewAIDailyReview(){
   const c = aiContext();
-  let html = `<div class="section-title"><h2>📅 AI Daily Review</h2></div>`;
-  html += `<div class="msg info">A snapshot of today's position from this app's own ledgers. The colours below are advisory only and never change the official SHG Grading.</div>`;
+  let html = `<div class="section-title"><h2>📅 ${aiT('AI Daily Review','एआई दैनिक समीक्षा')}</h2></div>`;
+  html += `<div class="msg info">${aiT('A snapshot of today\'s position from this app\'s own ledgers. The colours below are advisory only and never change the official SHG Grading.','ऐप की अपनी बहियों से आज की स्थिति का सारांश। नीचे दिए गए रंग केवल सलाहकार हैं और आधिकारिक एसएचजी ग्रेडिंग को कभी नहीं बदलते।')}</div>`;
   const overall = c.dqRed>0 ? 'red' : (c.overdue.length>0 || c.dqAmber>0 ? 'amber' : 'green');
-  html += `<div class="msg ${overall==='green'?'ok':(overall==='amber'?'amber':'err')}"><b>${overall==='green'?'Green — Normal':overall==='amber'?'Amber — Attention Required':'Red — Immediate Action'}</b></div>`;
-  html += aiCard('Accounting', `<div class="grid cols4">
-    ${stat('Cash Position', rupee(c.cash))}${stat('Bank Position', rupee(c.bank))}${stat('UPI Position', rupee(c.upi))}
-    ${stat('Trial Balance', c.tb.diff===0?'Matched':'Mismatch '+rupee(Math.abs(c.tb.diff)), c.tb.diff!==0)}
+  html += `<div class="msg ${overall==='green'?'ok':(overall==='amber'?'amber':'err')}"><b>${overall==='green'?aiT('Green — Normal','हरा — सामान्य'):overall==='amber'?aiT('Amber — Attention Required','पीला — ध्यान आवश्यक'):aiT('Red — Immediate Action','लाल — तत्काल कार्रवाई')}</b></div>`;
+  html += aiCard(aiT('Accounting','लेखांकन'), `<div class="grid cols4">
+    ${stat(aiT('Cash Position','नकद स्थिति'), rupee(c.cash))}${stat(aiT('Bank Position','बैंक स्थिति'), rupee(c.bank))}${stat(aiT('UPI Position','यूपीआई स्थिति'), rupee(c.upi))}
+    ${stat(aiT('Trial Balance','तलपट'), c.tb.diff===0?aiT('Matched','मेल खाया'):aiT('Mismatch ','बेमेल ')+rupee(Math.abs(c.tb.diff)), c.tb.diff!==0)}
   </div>`);
   const recentTxns = DB.transactions.filter(t=>!t.reversed).slice(-10).reverse();
-  html += aiCard('Recent Activity (last 10 postings)', recentTxns.length ? tbl(['Date','Type','Amount'], recentTxns.map(t=>[fmtDate(t.date), t.type, rightCell(rupee(t.amount))])) : '<p class="hint">No transactions recorded yet.</p>');
-  html += aiCard('Loans', `<div class="grid cols4">
-    ${stat('Active Loans', c.activeLoans.length)}${stat('Total Outstanding', rupee(c.totalLoanOutstanding))}
-    ${stat('Overdue Loans', c.overdue.length, c.overdue.length>0)}${stat('Overdue Amount', rupee(c.overdueTotal), c.overdueTotal>0)}
+  html += aiCard(aiT('Recent Activity (last 10 postings)','हाल की गतिविधि (अंतिम 10 प्रविष्टियाँ)'), recentTxns.length ? tbl([aiT('Date','दिनांक'),aiT('Type','प्रकार'),aiT('Amount','राशि')], recentTxns.map(t=>[fmtDate(t.date), t.type, rightCell(rupee(t.amount))])) : `<p class="hint">${aiT('No transactions recorded yet.','अभी तक कोई लेनदेन दर्ज नहीं हुआ।')}</p>`);
+  html += aiCard(aiT('Loans','ऋण'), `<div class="grid cols4">
+    ${stat(aiT('Active Loans','सक्रिय ऋण'), c.activeLoans.length)}${stat(aiT('Total Outstanding','कुल बकाया'), rupee(c.totalLoanOutstanding))}
+    ${stat(aiT('Overdue Loans','बकाया ऋण'), c.overdue.length, c.overdue.length>0)}${stat(aiT('Overdue Amount','बकाया राशि'), rupee(c.overdueTotal), c.overdueTotal>0)}
   </div>`);
-  html += aiCard('Data Quality', `<div class="grid cols4">${stat('Critical', c.dqRed, c.dqRed>0)}${stat('Attention', c.dqAmber, c.dqAmber>0)}</div>`);
+  html += aiCard(aiT('Data Quality','डेटा गुणवत्ता'), `<div class="grid cols4">${stat(aiT('Critical','गंभीर'), c.dqRed, c.dqRed>0)}${stat(aiT('Attention','ध्यान'), c.dqAmber, c.dqAmber>0)}</div>`);
   return html;
 }
 
 /* ---------------- AI Loan Recovery Assistant ---------------- */
 function aiRecoverySuggestion(row){
   const s = [];
-  if(row.arrears>0.5) s.push('Discuss repayment difficulty with the member — arrears of '+rupee(row.arrears)+' have built up.');
-  else s.push('Follow up on this instalment before it becomes arrears.');
-  s.push('Verify the repayment record with the member at the next meeting.');
-  s.push('Follow up through the Vitta Sakhi / bookkeeper if the member cannot attend.');
+  if(row.arrears>0.5) s.push(aiT('Discuss repayment difficulty with the member — arrears of '+rupee(row.arrears)+' have built up.','सदस्य से चुकौती की कठिनाई पर चर्चा करें — '+rupee(row.arrears)+' का बकाया जमा हो गया है।'));
+  else s.push(aiT('Follow up on this instalment before it becomes arrears.','यह किस्त बकाया बनने से पहले अनुवर्ती कार्रवाई करें।'));
+  s.push(aiT('Verify the repayment record with the member at the next meeting.','अगली बैठक में सदस्य के साथ चुकौती रिकॉर्ड सत्यापित करें।'));
+  s.push(aiT('Follow up through the Vitta Sakhi / bookkeeper if the member cannot attend.','यदि सदस्य उपस्थित नहीं हो सकते तो वित्त सखी/बहीखाता प्रबंधक के माध्यम से अनुवर्ती कार्रवाई करें।'));
   return s;
 }
 function viewAILoanRecovery(){
   const rows = aiOverdueLoanRows();
-  let html = `<div class="section-title"><h2>💰 AI Loan Recovery Assistant</h2></div>`;
-  html += `<div class="msg info">Suggestions only — the AI never contacts members, changes loan terms, waives interest, or alters accounting records. Every figure below comes from the same memberDueInfos() function used in the Meeting module.</div>`;
-  if(!rows.length){ html += `<div class="msg ok">No member currently has an overdue loan instalment.</div>`; return html; }
-  html += aiCard('Overdue Loans ('+rows.length+', totalling '+rupee(rows.reduce((s,r)=>s+r.totalDue,0))+')',
-    tbl(['Loan ID','Member','Purpose','Principal O/S','Principal Due','Interest Due','Arrears','Total Due'],
+  let html = `<div class="section-title"><h2>💰 ${aiT('AI Loan Recovery Assistant','एआई ऋण वसूली सहायक')}</h2></div>`;
+  html += `<div class="msg info">${aiT('Suggestions only — the AI never contacts members, changes loan terms, waives interest, or alters accounting records. Every figure below comes from the same memberDueInfos() function used in the Meeting module.','केवल सुझाव — एआई कभी सदस्यों से संपर्क नहीं करता, ऋण शर्तें नहीं बदलता, ब्याज माफ नहीं करता, या लेखांकन रिकॉर्ड नहीं बदलता। नीचे हर आँकड़ा उसी memberDueInfos() फ़ंक्शन से आता है जो मीटिंग मॉड्यूल में उपयोग होता है।')}</div>`;
+  if(!rows.length){ html += `<div class="msg ok">${aiT('No member currently has an overdue loan instalment.','फिलहाल किसी भी सदस्य की ऋण किस्त बकाया नहीं है।')}</div>`; return html; }
+  html += aiCard(aiT('Overdue Loans','बकाया ऋण')+' ('+rows.length+', '+aiT('totalling','कुल')+' '+rupee(rows.reduce((s,r)=>s+r.totalDue,0))+')',
+    tbl([aiT('Loan ID','ऋण आईडी'),aiT('Member','सदस्य'),aiT('Purpose','उद्देश्य'),aiT('Principal O/S','मूलधन बकाया'),aiT('Principal Due','मूलधन देय'),aiT('Interest Due','ब्याज देय'),aiT('Arrears','बकाया'),aiT('Total Due','कुल देय')],
       rows.map(r=>[r.loan.id, esc(r.memberName), esc(r.loan.purpose||''), rightCell(rupee(r.outstanding)), rightCell(rupee(r.totalPrincipalDue)), rightCell(rupee(r.totalInterestDue)), rightCell(rupee(r.arrears)), rightCell('<b>'+rupee(r.totalDue)+'</b>')])));
-  html += `<div class="card"><h3>Suggested Follow-up</h3>`;
+  html += `<div class="card"><h3>${aiT('Suggested Follow-up','सुझाई गई अनुवर्ती कार्रवाई')}</h3>`;
   rows.forEach(r=>{
-    html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)"><b>${esc(r.memberName)} — Loan ${r.loan.id}</b> (${rupee(r.totalDue)} due)
+    html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)"><b>${esc(r.memberName)} — ${aiT('Loan','ऋण')} ${r.loan.id}</b> (${rupee(r.totalDue)} ${aiT('due','देय')})
       <ul style="margin:4px 0 0 18px;font-size:13.5px">${aiRecoverySuggestion(r).map(s=>`<li>${esc(s)}</li>`).join('')}</ul></div>`;
   });
   html += `</div>`;
@@ -4633,13 +4648,13 @@ function viewAIMonthEnd(){
   const ym = monthKey(todayStr());
   const checklist = monthClosingChecklist(ym);
   const criticalFails = checklist.filter(x=>!x.ok && !x.warnOnly);
-  const status = criticalFails.length>0 ? 'Not Ready' : (checklist.some(x=>!x.ok) ? 'Attention Required' : 'Ready');
-  let html = `<div class="section-title"><h2>🔒 AI Month-End Accountant</h2></div>`;
-  html += `<div class="msg info">This reviews the same checklist used by Month-End Closing (left menu) for ${ym}. The AI never closes the month itself — use Month-End Closing to actually close it.</div>`;
-  html += `<div class="msg ${status==='Ready'?'ok':(status==='Attention Required'?'amber':'err')}"><b>MONTH-END STATUS — ${status}</b></div>`;
-  html += aiCard('Checklist', tbl(['Item','Status','Detail'], checklist.map(x=>[x.label, x.ok?badge('OK','green'):badge(x.warnOnly?'Note':'Issue', x.warnOnly?'amber':'red'), esc(x.detail)])));
-  if(criticalFails.length) html += `<div class="msg amber">${criticalFails.length} unresolved critical item(s) must be corrected (or an authorised override recorded) before closing.</div>`;
-  html += `<div class="row"><button class="btn secondary" onclick="go('closing')">Open Month-End Closing</button></div>`;
+  const status = criticalFails.length>0 ? aiT('Not Ready','तैयार नहीं') : (checklist.some(x=>!x.ok) ? aiT('Attention Required','ध्यान आवश्यक') : aiT('Ready','तैयार'));
+  let html = `<div class="section-title"><h2>🔒 ${aiT('AI Month-End Accountant','एआई माह-अंत लेखाकार')}</h2></div>`;
+  html += `<div class="msg info">${aiT('This reviews the same checklist used by Month-End Closing (left menu) for','यह माह-अंत समापन (बाईं मेनू) में उपयोग की गई उसी जाँच-सूची की समीक्षा करता है, माह')} ${ym}। ${aiT('The AI never closes the month itself — use Month-End Closing to actually close it.','एआई कभी स्वयं माह बंद नहीं करता — वास्तव में माह बंद करने के लिए माह-अंत समापन का उपयोग करें।')}</div>`;
+  html += `<div class="msg ${status===aiT('Ready','तैयार')?'ok':(status===aiT('Attention Required','ध्यान आवश्यक')?'amber':'err')}"><b>${aiT('MONTH-END STATUS','माह-अंत स्थिति')} — ${status}</b></div>`;
+  html += aiCard(aiT('Checklist','जाँच-सूची'), tbl([aiT('Item','मद'),aiT('Status','स्थिति'),aiT('Detail','विवरण')], checklist.map(x=>[x.label, x.ok?badge(aiT('OK','ठीक'),'green'):badge(x.warnOnly?aiT('Note','टिप्पणी'):aiT('Issue','समस्या'), x.warnOnly?'amber':'red'), esc(x.detail)])));
+  if(criticalFails.length) html += `<div class="msg amber">${aiT(criticalFails.length+' unresolved critical item(s) must be corrected (or an authorised override recorded) before closing.', criticalFails.length+' अनसुलझी गंभीर मद(ों) को बंद करने से पहले ठीक करना होगा (या अधिकृत ओवरराइड दर्ज करना होगा)।')}</div>`;
+  html += `<div class="row"><button class="btn secondary" onclick="go('closing')">${aiT('Open Month-End Closing','माह-अंत समापन खोलें')}</button></div>`;
   return html;
 }
 
@@ -4649,143 +4664,159 @@ function viewAIGrading(){
   const g = computeGrading(ym);
   const prevYm = (()=>{ const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-2,1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })();
   const prev = DB.grading.history[prevYm];
-  let html = `<div class="section-title"><h2>★ AI Grading Assistant</h2></div>`;
-  html += `<div class="msg info">This explains the score already calculated by the app's own configurable Local Grading Framework (Settings → Grading Framework Version: ${esc(DB.grading.ruleVersion)}). It never changes the score or grade — see SHG Grading (left menu) for the official NABARD-format assessment.</div>`;
-  html += `<div class="msg ${g.gradePending?'err':'ok'}"><b>${g.gradePending ? 'Grade Pending — data correction required' : ('Current Grade: '+g.grade+' ('+g.overall.toFixed(1)+'%)')}</b></div>`;
-  html += aiCard('Indicator-wise Breakdown', tbl(['Indicator','Value','Status'], g.indicators.map(i=>[i.label, i.value.toFixed(1)+'%', i.value>=80?badge('Green','green'):i.value>=50?badge('Amber','amber'):badge('Red','red')])));
+  let html = `<div class="section-title"><h2>★ ${aiT('AI Grading Assistant','एआई ग्रेडिंग सहायक')}</h2></div>`;
+  html += `<div class="msg info">${aiT('This explains the score already calculated by the app\'s own configurable Local Grading Framework (Settings → Grading Framework Version:','यह ऐप के अपने कॉन्फ़िगर करने योग्य स्थानीय ग्रेडिंग ढाँचे (सेटिंग्स → ग्रेडिंग ढाँचा संस्करण:')} ${esc(DB.grading.ruleVersion)})। ${aiT('It never changes the score or grade — see SHG Grading (left menu) for the official NABARD-format assessment.','यह कभी स्कोर या ग्रेड नहीं बदलता — आधिकारिक नाबार्ड-प्रारूप आकलन के लिए एसएचजी ग्रेडिंग (बाईं मेनू) देखें।')}</div>`;
+  html += `<div class="msg ${g.gradePending?'err':'ok'}"><b>${g.gradePending ? aiT('Grade Pending — data correction required','ग्रेड लंबित — डेटा सुधार आवश्यक') : (aiT('Current Grade: ','वर्तमान ग्रेड: ')+g.grade+' ('+g.overall.toFixed(1)+'%)')}</b></div>`;
+  html += aiCard(aiT('Indicator-wise Breakdown','संकेतक-वार विवरण'), tbl([aiT('Indicator','संकेतक'),aiT('Value','मूल्य'),aiT('Status','स्थिति')], g.indicators.map(i=>[i.label, i.value.toFixed(1)+'%', i.value>=80?badge(aiT('Green','हरा'),'green'):i.value>=50?badge(aiT('Amber','पीला'),'amber'):badge(aiT('Red','लाल'),'red')])));
   const weak = g.indicators.filter(i=>i.value<80).sort((a,b)=>a.value-b.value);
   if(weak.length){
-    html += aiCard('Reasons for Deductions / Suggested Corrective Action', weak.map(i=>{
+    html += aiCard(aiT('Reasons for Deductions / Suggested Corrective Action','कटौती के कारण / सुझाई गई सुधारात्मक कार्रवाई'), weak.map(i=>{
       const actions = {
-        'Meeting Regularity':'Hold meetings as per the scheduled frequency and record every meeting in the app.',
-        'Attendance':'Encourage fuller attendance; record attendance for every member at every meeting.',
-        'Savings Regularity':'Follow up with members who have not made their regular savings this month.',
-        'Loan Recovery':'Review overdue member loans — see the Loan Recovery Assistant.'
+        'Meeting Regularity': aiT('Hold meetings as per the scheduled frequency and record every meeting in the app.','निर्धारित आवृत्ति के अनुसार बैठकें करें और ऐप में हर बैठक दर्ज करें।'),
+        'Attendance': aiT('Encourage fuller attendance; record attendance for every member at every meeting.','अधिक उपस्थिति को प्रोत्साहित करें; हर बैठक में हर सदस्य की उपस्थिति दर्ज करें।'),
+        'Savings Regularity': aiT('Follow up with members who have not made their regular savings this month.','उन सदस्यों से संपर्क करें जिन्होंने इस माह नियमित बचत नहीं की है।'),
+        'Loan Recovery': aiT('Review overdue member loans — see the Loan Recovery Assistant.','बकाया सदस्य ऋणों की समीक्षा करें — ऋण वसूली सहायक देखें।')
       };
-      return `<div style="margin-bottom:6px"><b>${esc(i.label)}</b> — ${i.value.toFixed(1)}%: ${esc(actions[i.label]||'Review the underlying records for this indicator.')}</div>`;
+      return `<div style="margin-bottom:6px"><b>${esc(i.label)}</b> — ${i.value.toFixed(1)}%: ${esc(actions[i.label]||aiT('Review the underlying records for this indicator.','इस संकेतक के मूल रिकॉर्ड की समीक्षा करें।'))}</div>`;
     }).join(''));
   }
   if(prev){
     const change = g.overall - prev.overall;
-    html += aiCard('Comparison with Previous Month ('+prevYm+')', `Previous: ${prev.gradePending?'Pending':prev.grade} (${prev.overall.toFixed(1)}%) → Current: ${g.gradePending?'Pending':g.grade} (${g.overall.toFixed(1)}%) — ${change>0?'improved by '+change.toFixed(1)+' points':change<0?'declined by '+Math.abs(change).toFixed(1)+' points':'unchanged'}.`);
+    html += aiCard(aiT('Comparison with Previous Month (','पिछले माह से तुलना (')+prevYm+')', aiT('Previous: ','पिछला: ')+(prev.gradePending?aiT('Pending','लंबित'):prev.grade)+' ('+prev.overall.toFixed(1)+'%) → '+aiT('Current: ','वर्तमान: ')+(g.gradePending?aiT('Pending','लंबित'):g.grade)+' ('+g.overall.toFixed(1)+'%) — '+(change>0?aiT('improved by ','सुधार हुआ ')+change.toFixed(1)+aiT(' points','अंक'):change<0?aiT('declined by ','गिरावट आई ')+Math.abs(change).toFixed(1)+aiT(' points','अंक'):aiT('unchanged','अपरिवर्तित'))+'।');
   } else {
-    html += `<div class="msg info">No saved grade snapshot found for ${prevYm} to compare against (a snapshot is saved when that month is closed).</div>`;
+    html += `<div class="msg info">${aiT('No saved grade snapshot found for '+prevYm+' to compare against (a snapshot is saved when that month is closed).', prevYm+' के लिए तुलना हेतु कोई सहेजा गया ग्रेड स्नैपशॉट नहीं मिला (स्नैपशॉट तब सहेजा जाता है जब वह माह बंद किया जाता है)।')}</div>`;
   }
-  html += `<div class="row"><button class="btn secondary" onclick="go('grading')">Open SHG Grading</button></div>`;
+  html += `<div class="row"><button class="btn secondary" onclick="go('grading')">${aiT('Open SHG Grading','एसएचजी ग्रेडिंग खोलें')}</button></div>`;
   return html;
 }
 
 /* ---------------- AI SHG Business Adviser (uses only data actually tracked by this app) ---------------- */
 function viewAIBusiness(){
   const c = aiContext();
-  let html = `<div class="section-title"><h2>📈 AI SHG Business Adviser</h2></div>`;
-  html += `<div class="msg info">Observations are calculated only from data this app actually tracks (savings, loans, cash flow, corpus). This app does not track member-level enterprise sales, purchases, stock or debtors, so those figures are shown as "Data not available" rather than estimated.</div>`;
+  let html = `<div class="section-title"><h2>📈 ${aiT('AI SHG Business Adviser','एआई एसएचजी व्यवसाय सलाहकार')}</h2></div>`;
+  html += `<div class="msg info">${aiT('Observations are calculated only from data this app actually tracks (savings, loans, cash flow, corpus). This app does not track member-level enterprise sales, purchases, stock or debtors, so those figures are shown as "Data not available" rather than estimated.','अवलोकन केवल उस डेटा से गणना किए जाते हैं जो यह ऐप वास्तव में ट्रैक करता है (बचत, ऋण, नकदी प्रवाह, कॉर्पस)। यह ऐप सदस्य-स्तरीय उद्यम बिक्री, खरीद, स्टॉक या देनदार ट्रैक नहीं करता, इसलिए उन आँकड़ों को अनुमानित करने के बजाय "डेटा उपलब्ध नहीं" दिखाया जाता है।')}</div>`;
   const loanToCorpus = c.corpus.total>0 ? (c.totalLoanOutstanding/c.corpus.total*100) : null;
   const savingsToLoan = c.totalLoanOutstanding>0 ? (c.totalSavings/c.totalLoanOutstanding*100) : null;
-  html += aiCard('Observations', `
-    <div style="margin-bottom:8px"><b>Loan burden vs. own funds:</b> ${loanToCorpus===null?'Data not available (Corpus is zero).':`Loans outstanding are ${loanToCorpus.toFixed(0)}% of Total Corpus (${rupee(c.totalLoanOutstanding)} of ${rupee(c.corpus.total)}).`}
-    ${loanToCorpus!==null && loanToCorpus>150 ? '<br><i>Possible implication:</i> The SHG has lent out considerably more than its own funds, relying heavily on CIF/bank borrowings.<br><i>Suggested action:</i> Review the repayment pace on outstanding loans and future borrowing plans.' : ''}</div>
-    <div style="margin-bottom:8px"><b>Savings coverage of loans:</b> ${savingsToLoan===null?'No loans currently outstanding.':`Member savings cover ${savingsToLoan.toFixed(0)}% of the loan book.`}</div>
-    <div style="margin-bottom:8px"><b>Cash flow (this financial year):</b> Income ${rupee(c.ie.income)}, Expenditure ${rupee(c.ie.expenditure)}, Surplus/(Deficit) ${rupee(c.ie.surplus)}.
-    ${c.ie.surplus<0?'<br><i>Possible implication:</i> Expenditure has exceeded income this year.<br><i>Suggested action:</i> Review meeting/administrative expenses against income sources (interest, fines).':''}</div>
-    <div><b>Sales / Purchases / Stock / Debtors / Creditors:</b> Data not available — this app does not currently track member enterprise-level business transactions.</div>
+  html += aiCard(aiT('Observations','अवलोकन'), `
+    <div style="margin-bottom:8px"><b>${aiT('Loan burden vs. own funds:','अपनी निधि की तुलना में ऋण भार:')}</b> ${loanToCorpus===null?aiT('Data not available (Corpus is zero).','डेटा उपलब्ध नहीं (कॉर्पस शून्य है)।'):aiT(`Loans outstanding are ${loanToCorpus.toFixed(0)}% of Total Corpus (${rupee(c.totalLoanOutstanding)} of ${rupee(c.corpus.total)}).`, `बकाया ऋण कुल कॉर्पस का ${loanToCorpus.toFixed(0)}% है (${rupee(c.corpus.total)} में से ${rupee(c.totalLoanOutstanding)})।`)}
+    ${loanToCorpus!==null && loanToCorpus>150 ? '<br><i>'+aiT('Possible implication:','संभावित प्रभाव:')+'</i> '+aiT('The SHG has lent out considerably more than its own funds, relying heavily on CIF/bank borrowings.','एसएचजी ने अपनी निधि से काफी अधिक ऋण दिया है, जो सीआईएफ/बैंक उधार पर बहुत अधिक निर्भर है।')+'<br><i>'+aiT('Suggested action:','सुझाई गई कार्रवाई:')+'</i> '+aiT('Review the repayment pace on outstanding loans and future borrowing plans.','बकाया ऋणों की चुकौती गति और भविष्य की उधार योजनाओं की समीक्षा करें।') : ''}</div>
+    <div style="margin-bottom:8px"><b>${aiT('Savings coverage of loans:','ऋणों की बचत कवरेज:')}</b> ${savingsToLoan===null?aiT('No loans currently outstanding.','फिलहाल कोई ऋण बकाया नहीं है।'):aiT(`Member savings cover ${savingsToLoan.toFixed(0)}% of the loan book.`, `सदस्य बचत ऋण पुस्तिका का ${savingsToLoan.toFixed(0)}% कवर करती है।`)}</div>
+    <div style="margin-bottom:8px"><b>${aiT('Cash flow (this financial year):','नकदी प्रवाह (इस वित्तीय वर्ष):')}</b> ${aiT('Income','आय')} ${rupee(c.ie.income)}, ${aiT('Expenditure','व्यय')} ${rupee(c.ie.expenditure)}, ${aiT('Surplus/(Deficit)','अधिशेष/(घाटा)')} ${rupee(c.ie.surplus)}।
+    ${c.ie.surplus<0?'<br><i>'+aiT('Possible implication:','संभावित प्रभाव:')+'</i> '+aiT('Expenditure has exceeded income this year.','इस वर्ष व्यय आय से अधिक हो गया है।')+'<br><i>'+aiT('Suggested action:','सुझाई गई कार्रवाई:')+'</i> '+aiT('Review meeting/administrative expenses against income sources (interest, fines).','आय स्रोतों (ब्याज, जुर्माना) की तुलना में बैठक/प्रशासनिक व्यय की समीक्षा करें।'):''}</div>
+    <div><b>${aiT('Sales / Purchases / Stock / Debtors / Creditors:','बिक्री / खरीद / स्टॉक / देनदार / लेनदार:')}</b> ${aiT('Data not available — this app does not currently track member enterprise-level business transactions.','डेटा उपलब्ध नहीं — यह ऐप फिलहाल सदस्य उद्यम-स्तरीय व्यावसायिक लेनदेन ट्रैक नहीं करता।')}</div>
   `);
-  html += `<div class="msg info" style="margin-top:4px">These are calculated observations, not financial advice. Please confirm with SHG office-bearers before acting.</div>`;
+  html += `<div class="msg info" style="margin-top:4px">${aiT('These are calculated observations, not financial advice. Please confirm with SHG office-bearers before acting.','ये गणना किए गए अवलोकन हैं, वित्तीय सलाह नहीं। कार्रवाई करने से पहले कृपया एसएचजी पदाधिकारियों से पुष्टि करें।')}</div>`;
   return html;
 }
 
 /* ---------------- AI Report Writer ---------------- */
 const AI_REPORT_TYPES = [
-  {id:'summary', label:'SHG Financial Summary'},
-  {id:'loanoutstanding', label:'Loan Outstanding Report'},
-  {id:'loanrecovery', label:'Loan Recovery Report'},
-  {id:'dataquality', label:'Data Quality Report'},
-  {id:'monthend', label:'Month-End Report'},
-  {id:'bankmanager', label:'Bank Manager Briefing'}
+  {id:'summary', en:'SHG Financial Summary', hi:'एसएचजी वित्तीय सारांश'},
+  {id:'loanoutstanding', en:'Loan Outstanding Report', hi:'ऋण बकाया रिपोर्ट'},
+  {id:'loanrecovery', en:'Loan Recovery Report', hi:'ऋण वसूली रिपोर्ट'},
+  {id:'dataquality', en:'Data Quality Report', hi:'डेटा गुणवत्ता रिपोर्ट'},
+  {id:'monthend', en:'Month-End Report', hi:'माह-अंत रिपोर्ट'},
+  {id:'bankmanager', en:'Bank Manager Briefing', hi:'बैंक मैनेजर ब्रीफिंग'}
 ];
 function aiGenerateReport(type){
   const c = aiContext();
-  const lines = [(c.shgName)+' — '+(AI_REPORT_TYPES.find(t=>t.id===type)||{label:type}).label, 'Generated on '+fmtDate(todayStr()), ''];
+  const rt = AI_REPORT_TYPES.find(t=>t.id===type) || {en:type, hi:type};
+  const lines = [(c.shgName)+' — '+aiT(rt.en,rt.hi), aiT('Generated on ','जनरेट किया गया: ')+fmtDate(todayStr()), ''];
   if(type==='summary'){
-    lines.push('Active Members: '+c.activeMemberCount, 'Total Savings: '+rupee(c.totalSavings), 'Loan Outstanding: '+rupee(c.totalLoanOutstanding),
-      'Cash: '+rupee(c.cash), 'Bank: '+rupee(c.bank), 'CIF Outstanding: '+rupee(c.cifOutstanding), 'Total Corpus: '+rupee(c.corpus.total),
-      'Trial Balance: '+(c.tb.diff===0?'Matched':'Mismatch '+rupee(Math.abs(c.tb.diff))));
+    lines.push(aiT('Active Members: ','सक्रिय सदस्य: ')+c.activeMemberCount, aiT('Total Savings: ','कुल बचत: ')+rupee(c.totalSavings), aiT('Loan Outstanding: ','ऋण बकाया: ')+rupee(c.totalLoanOutstanding),
+      aiT('Cash: ','नकद: ')+rupee(c.cash), aiT('Bank: ','बैंक: ')+rupee(c.bank), aiT('CIF Outstanding: ','सीआईएफ बकाया: ')+rupee(c.cifOutstanding), aiT('Total Corpus: ','कुल कॉर्पस: ')+rupee(c.corpus.total),
+      aiT('Trial Balance: ','तलपट: ')+(c.tb.diff===0?aiT('Matched','मेल खाया'):aiT('Mismatch ','बेमेल ')+rupee(Math.abs(c.tb.diff))));
   } else if(type==='loanoutstanding'){
-    c.activeLoans.forEach(l=>lines.push(l.id+' — '+(DB.members.find(m=>m.id===l.memberId)||{}).name+': '+rupee(loanOutstanding(l.id).principal)+' outstanding'));
-    lines.push('', 'Total: '+rupee(c.totalLoanOutstanding));
+    c.activeLoans.forEach(l=>lines.push(l.id+' — '+(DB.members.find(m=>m.id===l.memberId)||{}).name+': '+rupee(loanOutstanding(l.id).principal)+' '+aiT('outstanding','बकाया')));
+    lines.push('', aiT('Total: ','कुल: ')+rupee(c.totalLoanOutstanding));
   } else if(type==='loanrecovery'){
-    if(!c.overdue.length) lines.push('No overdue loans.');
-    c.overdue.forEach(r=>lines.push(r.memberName+' — Loan '+r.loan.id+': '+rupee(r.totalDue)+' due (Arrears '+rupee(r.arrears)+')'));
+    if(!c.overdue.length) lines.push(aiT('No overdue loans.','कोई बकाया ऋण नहीं।'));
+    c.overdue.forEach(r=>lines.push(r.memberName+' — '+aiT('Loan','ऋण')+' '+r.loan.id+': '+rupee(r.totalDue)+' '+aiT('due (Arrears ','देय (बकाया ')+rupee(r.arrears)+')'));
   } else if(type==='dataquality'){
-    if(!c.dq.length) lines.push('No data-quality issues found.');
+    if(!c.dq.length) lines.push(aiT('No data-quality issues found.','कोई डेटा-गुणवत्ता समस्या नहीं मिली।'));
     c.dq.forEach(i=>lines.push('['+i.sev.toUpperCase()+'] '+i.text));
   } else if(type==='monthend'){
     monthClosingChecklist(c.ym).forEach(x=>lines.push((x.ok?'[OK] ':'[ISSUE] ')+x.label+' — '+x.detail));
   } else if(type==='bankmanager'){
-    lines.push('Members: '+c.activeMemberCount, 'Total Savings: '+rupee(c.totalSavings), 'Loan Outstanding: '+rupee(c.totalLoanOutstanding),
-      'Cash: '+rupee(c.cash), 'Bank: '+rupee(c.bank), 'CIF Outstanding: '+rupee(c.cifOutstanding),
-      'Trial Balance: '+(c.tb.diff===0?'Matched':'Mismatch'), 'Grading (this month): '+(c.grading.gradePending?'Pending':c.grading.grade));
+    lines.push(aiT('Members: ','सदस्य: ')+c.activeMemberCount, aiT('Total Savings: ','कुल बचत: ')+rupee(c.totalSavings), aiT('Loan Outstanding: ','ऋण बकाया: ')+rupee(c.totalLoanOutstanding),
+      aiT('Cash: ','नकद: ')+rupee(c.cash), aiT('Bank: ','बैंक: ')+rupee(c.bank), aiT('CIF Outstanding: ','सीआईएफ बकाया: ')+rupee(c.cifOutstanding),
+      aiT('Trial Balance: ','तलपट: ')+(c.tb.diff===0?aiT('Matched','मेल खाया'):aiT('Mismatch','बेमेल')), aiT('Grading (this month): ','ग्रेडिंग (इस माह): ')+(c.grading.gradePending?aiT('Pending','लंबित'):c.grading.grade));
   }
   return lines.join('\n');
 }
 function viewAIReports(){
   const u = (window.__aiReportUI = window.__aiReportUI || {type:'summary'});
-  let html = `<div class="section-title"><h2>📝 AI Report Writer</h2></div>`;
-  html += `<div class="msg info">Reports are assembled only from this app's own stored data. Preview, then print or copy.</div>`;
-  html += `<div class="card"><div class="field"><label>Report</label><select onchange="window.__aiReportUI.type=this.value; render()">${AI_REPORT_TYPES.map(t=>`<option value="${t.id}" ${u.type===t.id?'selected':''}>${esc(t.label)}</option>`).join('')}</select></div></div>`;
+  let html = `<div class="section-title"><h2>📝 ${aiT('AI Report Writer','एआई रिपोर्ट लेखक')}</h2></div>`;
+  html += `<div class="msg info">${aiT('Reports are assembled only from this app\'s own stored data. Preview, then print or copy.','रिपोर्ट केवल इस ऐप के अपने संग्रहीत डेटा से तैयार की जाती हैं। पूर्वावलोकन करें, फिर प्रिंट या कॉपी करें।')}</div>`;
+  html += `<div class="card"><div class="field"><label>${aiT('Report','रिपोर्ट')}</label><select onchange="window.__aiReportUI.type=this.value; render()">${AI_REPORT_TYPES.map(t=>`<option value="${t.id}" ${u.type===t.id?'selected':''}>${esc(aiT(t.en,t.hi))}</option>`).join('')}</select></div></div>`;
   const text = aiGenerateReport(u.type);
   window.__aiReportText = text;
-  html += `<div class="card"><h3>Preview</h3><pre style="white-space:pre-wrap;font-family:inherit;font-size:13.5px">${esc(text)}</pre>
-    <div class="row"><button class="btn secondary" onclick="window.print()">Print</button><button class="btn secondary" onclick="aiShareReport()">Share</button></div></div>`;
+  html += `<div class="card"><h3>${aiT('Preview','पूर्वावलोकन')}</h3><pre style="white-space:pre-wrap;font-family:inherit;font-size:13.5px">${esc(text)}</pre>
+    <div class="row"><button class="btn secondary" onclick="window.print()">${aiT('Print','प्रिंट')}</button><button class="btn secondary" onclick="aiShareReport()">${aiT('Share','साझा करें')}</button></div></div>`;
   return html;
 }
-function aiShareReport(){ shareText((DB.profile.name||'SHG')+' — AI Report', window.__aiReportText||''); }
+function aiShareReport(){ shareText((DB.profile.name||'SHG')+' — '+aiT('AI Report','एआई रिपोर्ट'), window.__aiReportText||''); }
 
 /* ---------------- AI Training Assistant ---------------- */
 const AI_TRAINING_KB = [
-  {kw:['gross profit'], a:'Gross Profit = Sales − Cost of Goods Sold. It shows what a business earns from its core trading activity before overheads. Example: an SHG member sells ₹10,000 of goods that cost her ₹7,000 to buy/make — her Gross Profit is ₹3,000.'},
-  {kw:['loan outstanding'], a:'Loan Outstanding is the principal amount a member still owes on a loan, after subtracting all principal she has repaid so far. Example: she borrowed ₹10,000 and has repaid ₹4,000 principal — her Loan Outstanding is ₹6,000.'},
-  {kw:['debtor holding period','debtor'], a:'Debtor Holding Period shows, on average, how many days it takes to collect cash from credit sales. A longer period means more of the business\'s money is tied up in unpaid customer bills.'},
-  {kw:['trial balance'], a:'A Trial Balance lists every account\'s Debit and Credit balance. Because every transaction is recorded as an equal Debit and Credit (double-entry), Total Debit must always equal Total Credit — if it doesn\'t, something was recorded incorrectly.'},
-  {kw:['cash flow'], a:'Cash Flow is the movement of actual cash in and out of the SHG — savings collected, loans disbursed, repayments received, expenses paid. It is different from profit, since profit can include amounts not yet received or paid in cash.'},
-  {kw:['shg example','give an shg example'], a:'Example: An SHG collects ₹100 savings from 10 members (₹1,000), lends ₹5,000 to one member for a shop, and that member repays ₹500 principal + ₹50 interest at the next meeting — the ₹50 interest becomes SHG income.'},
-  {kw:['quiz','10 quiz','practical exercise'], a:'Try this: 1) What is the double-entry rule? 2) What increases Cash but not Bank? 3) What is Loan Outstanding? 4) Why must Trial Balance balance? 5) What is Corpus? — check your answers against the Help & Training section.'}
+  {kw:['gross profit','सकल लाभ'], en:'Gross Profit = Sales − Cost of Goods Sold. It shows what a business earns from its core trading activity before overheads. Example: an SHG member sells ₹10,000 of goods that cost her ₹7,000 to buy/make — her Gross Profit is ₹3,000.',
+    hi:'सकल लाभ = बिक्री − बेचे गए माल की लागत। यह दिखाता है कि व्यवसाय अपनी मुख्य व्यापारिक गतिविधि से ओवरहेड्स से पहले क्या कमाता है। उदाहरण: एक एसएचजी सदस्य ₹10,000 का माल बेचती है जिसे खरीदने/बनाने में उसे ₹7,000 खर्च हुए — उसका सकल लाभ ₹3,000 है।'},
+  {kw:['loan outstanding','ऋण बकाया'], en:'Loan Outstanding is the principal amount a member still owes on a loan, after subtracting all principal she has repaid so far. Example: she borrowed ₹10,000 and has repaid ₹4,000 principal — her Loan Outstanding is ₹6,000.',
+    hi:'ऋण बकाया वह मूलधन राशि है जो एक सदस्य पर अभी भी बकाया है, अब तक चुकाए गए सभी मूलधन को घटाने के बाद। उदाहरण: उसने ₹10,000 उधार लिया और ₹4,000 मूलधन चुकाया — उसका ऋण बकाया ₹6,000 है।'},
+  {kw:['debtor holding period','debtor','देनदार'], en:'Debtor Holding Period shows, on average, how many days it takes to collect cash from credit sales. A longer period means more of the business\'s money is tied up in unpaid customer bills.',
+    hi:'देनदार धारण अवधि दिखाती है कि उधार बिक्री से नकद वसूलने में औसतन कितने दिन लगते हैं। लंबी अवधि का मतलब है कि व्यवसाय का अधिक पैसा अवैतनिक ग्राहक बिलों में फँसा है।'},
+  {kw:['trial balance','तलपट'], en:'A Trial Balance lists every account\'s Debit and Credit balance. Because every transaction is recorded as an equal Debit and Credit (double-entry), Total Debit must always equal Total Credit — if it doesn\'t, something was recorded incorrectly.',
+    hi:'तलपट (Trial Balance) हर खाते का डेबिट और क्रेडिट शेष सूचीबद्ध करता है। चूँकि हर लेनदेन बराबर डेबिट और क्रेडिट (दोहरी-प्रविष्टि) के रूप में दर्ज होता है, कुल डेबिट हमेशा कुल क्रेडिट के बराबर होना चाहिए — यदि नहीं, तो कुछ गलत दर्ज हुआ है।'},
+  {kw:['cash flow','नकदी प्रवाह'], en:'Cash Flow is the movement of actual cash in and out of the SHG — savings collected, loans disbursed, repayments received, expenses paid. It is different from profit, since profit can include amounts not yet received or paid in cash.',
+    hi:'नकदी प्रवाह एसएचजी में और बाहर वास्तविक नकद की गति है — एकत्रित बचत, वितरित ऋण, प्राप्त चुकौती, भुगतान किए गए व्यय। यह लाभ से अलग है, क्योंकि लाभ में वे राशियाँ भी शामिल हो सकती हैं जो अभी नकद में प्राप्त या भुगतान नहीं हुई हैं।'},
+  {kw:['shg example','give an shg example','उदाहरण'], en:'Example: An SHG collects ₹100 savings from 10 members (₹1,000), lends ₹5,000 to one member for a shop, and that member repays ₹500 principal + ₹50 interest at the next meeting — the ₹50 interest becomes SHG income.',
+    hi:'उदाहरण: एक एसएचजी 10 सदस्यों से ₹100 बचत एकत्र करता है (₹1,000), एक सदस्य को दुकान के लिए ₹5,000 उधार देता है, और वह सदस्य अगली बैठक में ₹500 मूलधन + ₹50 ब्याज चुकाता है — ₹50 ब्याज एसएचजी की आय बन जाता है।'},
+  {kw:['quiz','10 quiz','practical exercise','प्रश्नोत्तरी'], en:'Try this: 1) What is the double-entry rule? 2) What increases Cash but not Bank? 3) What is Loan Outstanding? 4) Why must Trial Balance balance? 5) What is Corpus? — check your answers against the Help & Training section.',
+    hi:'यह आज़माएँ: 1) दोहरी-प्रविष्टि नियम क्या है? 2) क्या नकद बढ़ाता है पर बैंक नहीं? 3) ऋण बकाया क्या है? 4) तलपट का संतुलित होना क्यों ज़रूरी है? 5) कॉर्पस क्या है? — अपने उत्तर सहायता व प्रशिक्षण अनुभाग से जाँचें।'}
 ];
 function aiTrainingAsk(q){
   const ql = (q||'').toLowerCase();
   const hit = AI_TRAINING_KB.find(e=>e.kw.some(k=>ql.includes(k)));
-  return hit ? hit.a : null;
+  return hit ? aiT(hit.en, hit.hi) : null;
 }
 function viewAITraining(){
-  let html = `<div class="section-title"><h2>🎓 AI Training Assistant</h2></div>`;
-  html += `<div class="msg info">Simple explanations and practical SHG examples for members, Vitta Sakhis, bank managers and officials — offline, rule-based.</div>`;
+  let html = `<div class="section-title"><h2>🎓 ${aiT('AI Training Assistant','एआई प्रशिक्षण सहायक')}</h2></div>`;
+  html += `<div class="msg info">${aiT('Simple explanations and practical SHG examples for members, Vitta Sakhis, bank managers and officials — offline, rule-based.','सदस्यों, वित्त सखियों, बैंक मैनेजरों और अधिकारियों के लिए सरल स्पष्टीकरण और व्यावहारिक एसएचजी उदाहरण — ऑफ़लाइन, नियम-आधारित।')}</div>`;
   html += `<div class="card"><form onsubmit="return aiTrainingSubmit(event)">
-    <div class="field"><label>Ask a training question</label><input name="q" id="aiTrainingInput" placeholder="e.g. Explain gross profit simply." autocomplete="off"></div>
-    <button class="btn" type="submit">Ask</button>
+    <div class="field"><label>${aiT('Ask a training question','एक प्रशिक्षण प्रश्न पूछें')}</label><input name="q" id="aiTrainingInput" placeholder="${aiT('e.g. Explain gross profit simply.','जैसे: सकल लाभ सरल भाषा में समझाएँ।')}" autocomplete="off"></div>
+    <button class="btn" type="submit">${aiT('Ask','पूछें')}</button>
   </form></div>`;
   if(window.__aiTrainingChat && window.__aiTrainingChat.length){
-    html += `<div class="card"><h3>Conversation</h3>`;
+    html += `<div class="card"><h3>${aiT('Conversation','बातचीत')}</h3>`;
     window.__aiTrainingChat.slice().reverse().forEach(c=>{
-      html += `<div style="margin-bottom:12px"><div style="font-weight:600;color:var(--navy-2);font-size:13px">You asked</div><div style="font-size:13.5px;margin-bottom:6px">${esc(c.q)}</div>
-        <div style="font-weight:600;color:var(--muted);font-size:12px">Training Assistant</div><div style="font-size:13.5px">${esc(c.a)}</div></div>`;
+      html += `<div style="margin-bottom:12px"><div style="font-weight:600;color:var(--navy-2);font-size:13px">${aiT('You asked','आपने पूछा')}</div><div style="font-size:13.5px;margin-bottom:6px">${esc(c.q)}</div>
+        <div style="font-weight:600;color:var(--muted);font-size:12px">${aiT('Training Assistant','प्रशिक्षण सहायक')}</div><div style="font-size:13.5px">${esc(c.a)}</div></div>`;
     });
     html += `</div>`;
   }
-  html += aiCard('Try asking…', `<div class="row" style="flex-wrap:wrap">${['Explain gross profit simply.','Explain loan outstanding.','Explain Trial Balance.','Explain cash flow.','Give an SHG example.','Create 10 quiz questions.'].map(t=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiTrainingQuick('${esc(t).replace(/'/g,"\\'")}')">${esc(t)}</button>`).join('')}</div>`);
+  const quick = [
+    ['Explain gross profit simply.','सकल लाभ सरल भाषा में समझाएँ।'],
+    ['Explain loan outstanding.','ऋण बकाया समझाएँ।'],
+    ['Explain Trial Balance.','तलपट समझाएँ।'],
+    ['Explain cash flow.','नकदी प्रवाह समझाएँ।'],
+    ['Give an SHG example.','एक एसएचजी उदाहरण दें।'],
+    ['Create 10 quiz questions.','10 प्रश्नोत्तरी प्रश्न बनाएँ।']
+  ];
+  html += aiCard(aiT('Try asking…','यह पूछ कर देखें…'), `<div class="row" style="flex-wrap:wrap">${quick.map(([en,hi])=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiTrainingQuick('${esc(en).replace(/'/g,"\\'")}')">${esc(aiT(en,hi))}</button>`).join('')}</div>`);
   return html;
 }
 function aiTrainingSubmit(ev){
   ev.preventDefault();
   const inp = document.getElementById('aiTrainingInput');
   const q = inp.value; if(!q.trim()) return false;
-  const a = aiTrainingAsk(q) || 'I don\'t have a ready answer for that yet. Try one of the suggested questions below, or rephrase using a simple accounting term.';
+  const a = aiTrainingAsk(q) || aiT('I don\'t have a ready answer for that yet. Try one of the suggested questions below, or rephrase using a simple accounting term.','इसका मेरे पास अभी तैयार उत्तर नहीं है। नीचे दिए गए सुझाए गए प्रश्नों में से कोई आज़माएँ, या किसी सरल लेखांकन शब्द का उपयोग करके फिर से पूछें।');
   window.__aiTrainingChat = window.__aiTrainingChat || [];
   window.__aiTrainingChat.push({q,a});
   ROUTE='aitraining'; render();
   return false;
 }
 function aiTrainingQuick(q){
-  const a = aiTrainingAsk(q) || 'I don\'t have a ready answer for that yet.';
+  const a = aiTrainingAsk(q) || aiT('I don\'t have a ready answer for that yet.','इसका मेरे पास अभी तैयार उत्तर नहीं है।');
   window.__aiTrainingChat = window.__aiTrainingChat || [];
   window.__aiTrainingChat.push({q,a});
   render();
