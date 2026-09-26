@@ -343,6 +343,7 @@ let FLASH = null;
 let DEMO_MODE = false; // true only while seedDemoDataCore() is generating sample records
 let HELP_CHAT = []; // in-memory only, not persisted — Help Assistant conversation for this session
 let AI_CHAT = []; // in-memory only, not persisted — "Ask AI" (AI SHG Manager) conversation for this session
+let AI_EXTERNAL_CONSENTED = false; // in-memory only, resets every session/reload — explicit consent is asked again each time External AI is (re)selected
 
 /* ---------------- Persistence ---------------- */
 function freshDB(){
@@ -366,7 +367,7 @@ function freshDB(){
     lokosMapping: defaultLokosMapping(),
     loanDoseEligibility: defaultDoseEligibility(),
     settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en',
-      aiApiProvider:'', aiApiKey:'' },
+      aiMode:'local', aiApiProvider:'', aiApiEndpoint:'', aiApiKey:'' },
     seq:1
   };
 }
@@ -404,8 +405,13 @@ function loadDB(){
       if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
       if(!DB.revolvingFund) DB.revolvingFund = [];
       if(!DB.bankLoans) DB.bankLoans = [];
+      if(DB.settings.aiMode===undefined) DB.settings.aiMode = 'local';
       if(DB.settings.aiApiProvider===undefined) DB.settings.aiApiProvider = '';
+      if(DB.settings.aiApiEndpoint===undefined) DB.settings.aiApiEndpoint = '';
       if(DB.settings.aiApiKey===undefined) DB.settings.aiApiKey = '';
+      // Never let a corrupted/old value strand the app in a mode it can't actually run —
+      // External AI always requires a mode flag AND a configured endpoint+key, checked together
+      // by aiExternalConfigured(); an incomplete configuration simply behaves as Local.
       // Migrate CIF records saved before CIF became a proper loan sub-ledger: give any entry
       // missing an id/status/interestMethod one, without touching amounts or existing postings.
       if(DB.cif && DB.cif.length){
@@ -592,7 +598,14 @@ function generateLoanSchedule(loanId, asOfDate){
   const n = Math.max(1, loan.instalments||1);
   const method = loan.interestMethod || 'flat';
   const principalPerInst = Math.round((loan.principal/n)*100)/100;
-  const totalFlatInterest = Math.round(loan.principal*(loan.interestRate||0)/100 * (n/12)*100)/100;
+  const freq = loan.frequency || 'Monthly';
+  // Flat interest must be pro-rated by the loan's ACTUAL repayment frequency, never assumed to
+  // be monthly: n instalments at a Weekly frequency span n/52 of a year, not n/12. Getting this
+  // wrong understates weekly/fortnightly flat-interest loans' total interest (fewer notional
+  // "months" than instalments actually collected), so periodsPerYear must be computed before,
+  // and used in, totalFlatInterest — not just in the reducing-balance branch below.
+  const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
+  const totalFlatInterest = Math.round(loan.principal*(loan.interestRate||0)/100 * (n/periodsPerYear)*100)/100;
   // Actual repayments against this loan, oldest first, split into principal and interest legs.
   const repayTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.credit==='MEMBER_LOANS').sort((a,b)=>a.date<b.date?-1:1);
   const interestTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.credit==='INTEREST_INCOME').sort((a,b)=>a.date<b.date?-1:1);
@@ -600,8 +613,6 @@ function generateLoanSchedule(loanId, asOfDate){
   let interestPool = interestTx.reduce((s,t)=>s+t.amount,0);
   let runningOutstanding = loan.principal;
   const schedule = [];
-  const freq = loan.frequency || 'Monthly';
-  const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
   for(let i=1;i<=n;i++){
     const dueDate = addPeriod(loan.disbursementDate, i, freq);
     const principalDue = (i===n) ? Math.round((loan.principal - principalPerInst*(n-1))*100)/100 : principalPerInst;
@@ -1773,6 +1784,14 @@ function showMeetingConfirmation(){
 // pass. The meeting record is only saved if every posting succeeds.
 function confirmPostMeeting(){
   const p = PENDING_MEETING_PLAN; if(!p) return;
+  // True all-or-nothing posting: snapshot every structure this pass can mutate BEFORE doing
+  // anything, so that if postTxn() throws partway through (e.g. a period was closed in another
+  // tab between validation and confirmation), the catch block below can restore DB to EXACTLY
+  // its pre-posting state — no half-posted meeting, no orphaned transactions, no stray audit
+  // entries, and no ID sequence drift. Transactions and loans are only ever appended (push), so
+  // truncating back to their original length removes exactly what this attempt added; the audit
+  // log is prepended (unshift), so it is restored by reassigning the whole array back.
+  const snapshot = { txnLen: DB.transactions.length, auditLog: DB.auditLog.slice(), loansLen: DB.loans.length, seq: DB.seq };
   const meetingId = nextId('MTG');
   try{
     p.memberEntries.forEach(r=>{
@@ -1819,7 +1838,12 @@ function confirmPostMeeting(){
     flash('ok', msg);
     ROUTE='meetings'; render();
   }catch(e){
-    flash('error', 'Posting failed: '+e.message+' — no part of this meeting was saved.');
+    // Roll back to the exact pre-posting snapshot — nothing from this attempt survives.
+    DB.transactions.length = snapshot.txnLen;
+    DB.auditLog = snapshot.auditLog;
+    DB.loans.length = snapshot.loansLen;
+    DB.seq = snapshot.seq;
+    flash('error', 'Posting failed: '+e.message+' — no part of this meeting was saved (all changes rolled back).');
     closeModal(); render();
   }
 }
@@ -4250,22 +4274,43 @@ function viewSettings(){
     <button class="btn" type="submit">Save</button>
   </form></div>`;
 
-  html += `<div class="card"><h3>AI SHG Manager — Status</h3>
-    <p class="hint">AI Status: <b>${aiStatusLabel()}</b>. The AI SHG Manager always answers from this app's own stored data and calculation functions — it never invents figures and never posts, edits or deletes an accounting record itself. An API key is optional and is used only if you later connect an external AI service for richer natural-language answers; it is stored only in this browser's local storage, never hard-coded in the app file.</p>
+  html += `<div class="card"><h3>AI SHG Manager — AI Mode</h3>
+    <p class="hint">AI Status: <b>${esc(aiStatusLabel())}</b>. In <b>Local / Offline</b> mode (the default), the AI SHG Manager answers entirely from this app's own stored data and calculation functions on this device — no data leaves it, no internet is required, and nothing ever breaks if no API is configured. <b>External AI</b> is strictly optional and, if you turn it on, is used only to phrase richer natural-language explanations — it is never used for accounting, validation, grading, loan calculations or LokOS preparation, all of which always come from this app's own engine. If External AI is selected but unreachable, misconfigured or fails for any reason, the app automatically falls back to Local AI and says so.</p>
     <form onsubmit="return saveAISettings(event)">
-      <div class="row">
-        <div class="field"><label>AI API Provider (optional)</label><input name="aiApiProvider" value="${esc(DB.settings.aiApiProvider||'')}" placeholder="e.g. none / OpenAI / Azure — leave blank for Local mode"></div>
-        <div class="field"><label>AI API Key (optional)</label><input type="password" name="aiApiKey" value="${esc(DB.settings.aiApiKey||'')}" placeholder="Leave blank to keep using Local (offline, rule-based) mode" autocomplete="off"></div>
+      <div class="field"><label>AI Mode</label><select name="aiMode" onchange="document.getElementById('aiExternalFields').style.display=this.value==='external'?'':'none'">
+        <option value="local" ${DB.settings.aiMode!=='external'?'selected':''}>Local / Offline — Default</option>
+        <option value="external" ${DB.settings.aiMode==='external'?'selected':''}>External AI — Optional</option>
+      </select></div>
+      <div id="aiExternalFields" style="display:${DB.settings.aiMode==='external'?'':'none'}">
+        <div class="row">
+          <div class="field"><label>Provider Name (label only)</label><input name="aiApiProvider" value="${esc(DB.settings.aiApiProvider||'')}" placeholder="e.g. OpenAI / Azure / your own service"></div>
+          <div class="field"><label>API Endpoint URL</label><input name="aiApiEndpoint" value="${esc(DB.settings.aiApiEndpoint||'')}" placeholder="https://your-ai-provider.example/endpoint"></div>
+        </div>
+        <div class="field"><label>API Key</label><input type="password" name="aiApiKey" value="${esc(DB.settings.aiApiKey||'')}" placeholder="Stored only in this browser's local storage — never hard-coded in this file" autocomplete="off"></div>
+        <p class="hint">Only minimum, non-identifying figures (balances, counts, totals) are ever sent to this endpoint — never Aadhaar numbers, mobile numbers, bank account numbers, addresses or member names. You will be asked to confirm this once per session before the first External AI request.</p>
       </div>
       <button class="btn" type="submit">Save</button>
-      ${DB.settings.aiApiKey?'<button type="button" class="btn secondary" onclick="clearAIKey()">Clear Key / Use Local Mode</button>':''}
+      ${(DB.settings.aiApiKey||DB.settings.aiMode==='external')?'<button type="button" class="btn secondary" onclick="clearAIKey()">Reset to Local Mode</button>':''}
     </form>
   </div>`;
   return html;
 }
-function aiStatusLabel(){ return (DB.settings.aiApiKey && DB.settings.aiApiProvider) ? 'API Connected ('+esc(DB.settings.aiApiProvider)+')' : 'Local (offline, rule-based — no data leaves this device)'; }
-function saveAISettings(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.settings.aiApiProvider=(f.get('aiApiProvider')||'').trim(); DB.settings.aiApiKey=(f.get('aiApiKey')||'').trim(); flash('ok','AI settings saved.'); render(); return false; }
-function clearAIKey(){ DB.settings.aiApiProvider=''; DB.settings.aiApiKey=''; flash('ok','AI API key cleared. AI SHG Manager is back to Local mode.'); render(); }
+function aiExternalConfigured(){ return DB.settings.aiMode==='external' && !!(DB.settings.aiApiEndpoint||'').trim() && !!(DB.settings.aiApiKey||'').trim(); }
+function aiStatusLabel(){
+  if(DB.settings.aiMode!=='external') return aiT('Local (offline, rule-based — no data leaves this device)','लोकल (ऑफ़लाइन, नियम-आधारित — कोई डेटा इस डिवाइस से बाहर नहीं जाता)');
+  if(aiExternalConfigured()) return aiT('External AI configured (','बाहरी एआई कॉन्फ़िगर किया गया (')+esc(DB.settings.aiApiProvider||DB.settings.aiApiEndpoint)+') — '+aiT('falls back to Local automatically if unreachable','अनुपलब्ध होने पर स्वतः लोकल पर वापस आ जाता है');
+  return aiT('External AI selected but not fully configured (endpoint/key missing) — using Local for now','बाहरी एआई चयनित है पर पूरी तरह कॉन्फ़िगर नहीं (एंडपॉइंट/कुंजी अनुपलब्ध) — फिलहाल लोकल का उपयोग');
+}
+function saveAISettings(ev){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  DB.settings.aiMode = (f.get('aiMode')==='external') ? 'external' : 'local';
+  DB.settings.aiApiProvider=(f.get('aiApiProvider')||'').trim();
+  DB.settings.aiApiEndpoint=(f.get('aiApiEndpoint')||'').trim();
+  DB.settings.aiApiKey=(f.get('aiApiKey')||'').trim();
+  if(DB.settings.aiMode==='local') AI_EXTERNAL_CONSENTED = false; // re-ask if External is turned on again later
+  flash('ok','AI settings saved.'); render(); return false;
+}
+function clearAIKey(){ DB.settings.aiMode='local'; DB.settings.aiApiProvider=''; DB.settings.aiApiEndpoint=''; DB.settings.aiApiKey=''; AI_EXTERNAL_CONSENTED=false; flash('ok','AI SHG Manager reset to Local mode.'); render(); }
 function saveUserSettings(ev){ ev.preventDefault(); const f=new FormData(ev.target); Object.assign(DB.settings, Object.fromEntries(f.entries())); flash('ok','Saved.'); render(); return false; }
 function saveOpening(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -4409,7 +4454,8 @@ function viewAIManager(){
 /* ---------------- Ask AI (natural-language interface over the app's own data) ---------------- */
 function aiRenderResponse(r){
   let html = `<div style="margin-bottom:16px">`;
-  html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('ANSWER','उत्तर')}</div><div style="font-size:14px;margin-bottom:8px">${esc(r.answer)}</div>`;
+  if(r.note) html += `<div class="msg amber" style="margin-bottom:8px;font-size:13px">${esc(r.note)}</div>`;
+  html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('ANSWER','उत्तर')}</div><div style="font-size:14px;margin-bottom:8px">${esc(r.answer)}${r.source==='external'?' '+badge(aiT('External AI','बाहरी एआई'),'grey'):''}</div>`;
   if(r.figures && r.figures.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('FIGURES','आँकड़े')}</div><ul style="margin:4px 0 8px 18px;font-size:13.5px">${r.figures.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
   if(r.evidence && r.evidence.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('EVIDENCE','प्रमाण')}</div><ul style="margin:4px 0 8px 18px;font-size:13.5px;color:var(--muted)">${r.evidence.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
   if(r.observation) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">${aiT('OBSERVATION','अवलोकन')}</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.observation)}</div>`;
@@ -4532,13 +4578,94 @@ function aiAskSubmit(ev){
   const inp = document.getElementById('aiAskInput');
   const q = inp.value;
   if(!q.trim()) return false;
-  const r = aiAsk(q);
-  AI_CHAT.push({q, r});
-  ROUTE='aiask'; render();
+  aiAskProcess(q);
   setTimeout(()=>{ const el=document.getElementById('aiAskInput'); if(el) el.focus(); },0);
   return false;
 }
-function aiAskQuick(q){ AI_CHAT.push({q, r: aiAsk(q)}); render(); }
+function aiAskQuick(q){ aiAskProcess(q); }
+// Every question is answered from Local AI immediately (this never depends on a network call),
+// so the app always has a real, data-verified answer on screen straight away. Only if External
+// AI is selected AND fully configured does it then try to enrich that same entry with a richer
+// natural-language phrasing — asking for one-time consent first, and silently keeping the Local
+// answer (with a plain fallback notice) if the external call fails for any reason at all.
+function aiAskProcess(q){
+  const entry = {q, r: aiAsk(q)};
+  entry.r.source = 'local';
+  AI_CHAT.push(entry);
+  ROUTE='aiask'; render();
+  if(aiExternalConfigured()){
+    // Once the user has consented earlier in this session, every later question should go
+    // straight to External AI (still only ever enriching the Local answer already shown above) —
+    // only the FIRST request of the session needs to pause for the one-time consent prompt.
+    if(AI_EXTERNAL_CONSENTED) aiTryExternal(q, entry);
+    else aiShowExternalConsent(()=>{ AI_EXTERNAL_CONSENTED = true; aiTryExternal(q, entry); });
+  }
+}
+/* ---------------- External AI (strictly optional; Local AI above already answered every question) ---------------- */
+// Deliberately excludes member names, mobile numbers, bank account numbers, addresses and any
+// other identifying detail — only aggregate balances/counts/totals already computed by the
+// app's own accounting engine are ever sent, and only when External AI is explicitly configured.
+function aiMinimalContext(c){
+  return {
+    cash: c.cash, bank: c.bank, upi: c.upi,
+    activeMemberCount: c.activeMemberCount, totalSavings: c.totalSavings,
+    activeLoanCount: c.activeLoans.length, totalLoanOutstanding: c.totalLoanOutstanding,
+    overdueLoanCount: c.overdue.length, overdueTotal: c.overdueTotal,
+    cifOutstanding: c.cifOutstanding, trialBalanceDiff: c.tb.diff,
+    dataQualityCritical: c.dqRed, dataQualityWarnings: c.dqAmber,
+    gradingStatus: c.grading.gradePending ? 'Pending' : c.grading.grade
+  };
+}
+function aiShowExternalConsent(onAccept){
+  window.__aiConsentAccept = onAccept;
+  openModal(`<button class="close" onclick="aiConsentRespond(false)">×</button><h3>${aiT('External AI — Consent Required','बाहरी एआई — सहमति आवश्यक')}</h3>
+    <p>${aiT('External AI is optional. Selected SHG information may be sent to the chosen AI provider. Review and confirm before continuing.','बाहरी एआई वैकल्पिक है। चुनी गई एसएचजी जानकारी चयनित एआई प्रदाता को भेजी जा सकती है। जारी रखने से पहले समीक्षा करें और पुष्टि करें।')}</p>
+    <p class="hint">${aiT('Only minimum, non-identifying figures (balances, counts, totals) are sent — never Aadhaar numbers, mobile numbers, bank account numbers, addresses or member names.','केवल न्यूनतम, गैर-पहचान वाले आँकड़े (शेष, गणना, कुल) भेजे जाते हैं — कभी भी आधार नंबर, मोबाइल नंबर, बैंक खाता नंबर, पते या सदस्य नाम नहीं।')}</p>
+    <div class="row" style="margin-top:10px"><button class="btn" onclick="aiConsentRespond(true)">${aiT('I Understand, Continue','मैं समझता/समझती हूँ, जारी रखें')}</button><button class="btn secondary" onclick="aiConsentRespond(false)">${aiT('Cancel — Use Local AI','रद्द करें — लोकल एआई का उपयोग करें')}</button></div>`);
+}
+function aiConsentRespond(accepted){
+  closeModal();
+  const onAccept = window.__aiConsentAccept; window.__aiConsentAccept = null;
+  if(accepted && onAccept) onAccept();
+  else render();
+}
+// Generic REST hook: POSTs {prompt, context} with the configured API key as a Bearer token, and
+// accepts a few common response shapes (a plain {answer}/{text} field, or an OpenAI-style
+// choices[0] payload). Any failure — bad response, timeout, network error, malformed body —
+// rejects, and the caller (aiTryExternal) always falls back to the Local answer already on
+// screen; External AI can enrich a response but can never replace or block the Local one.
+function callExternalAI(promptText, contextObj){
+  const ctrl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+  const timeoutId = ctrl ? setTimeout(()=>ctrl.abort(), 15000) : null;
+  return fetch(DB.settings.aiApiEndpoint, {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+DB.settings.aiApiKey},
+    body: JSON.stringify({prompt:promptText, context:contextObj}),
+    signal: ctrl ? ctrl.signal : undefined
+  }).then(res=>{
+    if(timeoutId) clearTimeout(timeoutId);
+    if(!res.ok) throw new Error('External AI provider returned HTTP '+res.status);
+    return res.json();
+  }).then(data=>{
+    const text = data && (data.answer || data.text || (data.choices && data.choices[0] && (data.choices[0].message ? data.choices[0].message.content : data.choices[0].text)));
+    if(!text) throw new Error('External AI provider returned an unexpected response.');
+    return text;
+  }).catch(e=>{
+    if(timeoutId) clearTimeout(timeoutId);
+    throw e;
+  });
+}
+function aiTryExternal(q, entry){
+  const c = aiContext();
+  callExternalAI(q, aiMinimalContext(c)).then(text=>{
+    entry.r = Object.assign({}, entry.r, {answer:text, source:'external',
+      confidence: aiT('AI interpretation — phrased by the configured External AI provider, using only the minimal aggregate figures above; the underlying figures still come only from this app\'s own accounting engine.','एआई व्याख्या — कॉन्फ़िगर किए गए बाहरी एआई प्रदाता द्वारा, केवल ऊपर दिए गए न्यूनतम समग्र आँकड़ों के आधार पर तैयार; मूल आँकड़े केवल इस ऐप के अपने लेखांकन इंजन से आते हैं।')});
+    render();
+  }).catch(e=>{
+    entry.r = Object.assign({}, entry.r, {source:'local', note: aiT('External AI is unavailable. Continuing with Local AI.','बाहरी एआई उपलब्ध नहीं है। लोकल एआई से जारी है।')});
+    render();
+  });
+}
 
 /* ---------------- Voice Assistant (graceful fallback to text if unsupported) ---------------- */
 function aiVoiceAvailable(){ return !!(typeof window!=='undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)); }
