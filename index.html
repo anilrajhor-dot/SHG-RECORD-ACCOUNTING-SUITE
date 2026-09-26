@@ -2459,7 +2459,7 @@ function txnForm(){
     <div class="hint" id="txnAccountWarning" style="display:none;color:var(--red)">Debit and credit accounts must be different — please choose two different heads.</div>
     <div class="row">
       <div class="field"><label>Amount ₹ *</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
-      <div class="field"><label>Member (optional)</label><select name="memberId" id="txnMember" onchange="guardTxnLoanField()"><option value="">—</option>${DB.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Member (optional)</label><select name="memberId" id="txnMember" onchange="guardTxnLoanField()"><option value="">—</option>${DB.members.filter(m=>m.status!=='Deleted').map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
     </div>
     <div class="field" id="txnLoanField" style="display:none"><label>Loan ID *</label><select name="loanId" id="txnLoanId"></select>
       <div class="hint">Required when the credit account is Member Loans or Interest Income — a repayment must always be attributed to one specific loan.</div></div>
@@ -3375,33 +3375,47 @@ function mcpUI(){
 }
 function mcpRow(memberId){
   const u = mcpUI();
-  if(!u.rows[memberId]) u.rows[memberId] = { activity:'Farm & Allied', purpose:'', amount:0, priority:0, term:24 };
+  if(!u.rows[memberId]) u.rows[memberId] = { activity:'Farm & Allied', purpose:'', amount:0, priority:0, term:24,
+    annualIncome:0, annualExpenditure:0, instalment:0 };
   return u.rows[memberId];
 }
 function updateMcpField(field,val){ mcpUI()[field] = val; render(); }
+const MCP_NUMERIC_FIELDS = ['amount','term','priority','annualIncome','annualExpenditure','instalment'];
 function updateMcpRow(memberId, field, val){
   const r = mcpRow(memberId);
-  r[field] = (field==='amount'||field==='term'||field==='priority') ? (parseFloat(val)||0) : val;
+  r[field] = MCP_NUMERIC_FIELDS.includes(field) ? (parseFloat(val)||0) : val;
   render();
 }
 const MCP_ACTIVITIES = ['Farm & Allied','Non-Farm/Micro-Enterprise','Consumption/Emergency','Housing','Education','Health','Livestock','Other'];
+// Proposed Instalment is what the member expects to pay per month toward this proposed loan; the
+// yearly repayment obligation (instalment × 12) is weighed against the activity's own projected
+// yearly income and expenditure to give a Surplus/(Deficit) — the standard repayment-capacity
+// check behind a Micro Credit Plan, mirroring loan-appraisal practice elsewhere in this app.
 function computeMCP(){
   const u = mcpUI();
   const rows = activeMembers().map(m=>{
     const r = mcpRow(m.id);
+    const annualIncome = r.annualIncome||0, annualExpenditure = r.annualExpenditure||0, instalment = r.instalment||0;
+    const annualInstalment = Math.round(instalment*12*100)/100;
+    const surplus = Math.round((annualIncome-annualExpenditure-annualInstalment)*100)/100;
     return { memberId:m.id, name:m.name, existingOutstanding: memberLoanOutstanding(m.id), savingsBalance: memberSavingsBalance(m.id),
-      activity:r.activity, purpose:r.purpose, priority:r.priority||0, amount:r.amount||0, term:r.term||0 };
+      activity:r.activity, purpose:r.purpose, priority:r.priority||0, amount:r.amount||0, term:r.term||0,
+      annualIncome, annualExpenditure, instalment, annualInstalment, surplus };
   });
   const total = Math.round(rows.reduce((s,r)=>s+r.amount,0)*100)/100;
+  const totalAnnualIncome = Math.round(rows.reduce((s,r)=>s+r.annualIncome,0)*100)/100;
+  const totalAnnualExpenditure = Math.round(rows.reduce((s,r)=>s+r.annualExpenditure,0)*100)/100;
+  const totalSurplus = Math.round(rows.reduce((s,r)=>s+r.surplus,0)*100)/100;
   const corpus = calculateCorpus();
-  return { from:u.from, to:u.to, rows, total, corpus };
+  return { from:u.from, to:u.to, rows, total, totalAnnualIncome, totalAnnualExpenditure, totalSurplus, corpus };
 }
 function saveMCP(){
   const g = computeMCP();
   if(!g.rows.length){ flash('error','Add at least one member before saving a Micro Credit Plan.'); render(); return; }
   const id = nextId('MCP');
-  DB.mcp.history.push({ id, from:g.from, to:g.to, total:g.total, savedAt: nowStamp(), savedBy: DB.settings.currentUserName,
-    rows: g.rows.map(r=>({memberId:r.memberId, name:r.name, activity:r.activity, purpose:r.purpose, priority:r.priority, amount:r.amount, term:r.term, existingOutstanding:r.existingOutstanding, savingsBalance:r.savingsBalance})) });
+  DB.mcp.history.push({ id, from:g.from, to:g.to, total:g.total, totalAnnualIncome:g.totalAnnualIncome, totalAnnualExpenditure:g.totalAnnualExpenditure, totalSurplus:g.totalSurplus, savedAt: nowStamp(), savedBy: DB.settings.currentUserName,
+    rows: g.rows.map(r=>({memberId:r.memberId, name:r.name, activity:r.activity, purpose:r.purpose, priority:r.priority, amount:r.amount, term:r.term, existingOutstanding:r.existingOutstanding, savingsBalance:r.savingsBalance,
+      annualIncome:r.annualIncome, annualExpenditure:r.annualExpenditure, instalment:r.instalment, annualInstalment:r.annualInstalment, surplus:r.surplus})) });
   saveDB();
   logAudit('MCP_SAVED', 'Micro Credit Plan '+id+' ('+g.from+' to '+g.to+'): total credit demand '+rupee(g.total));
   flash('ok','Micro Credit Plan saved to history.');
@@ -3422,6 +3436,7 @@ function viewMCP(){
 
   html += `<div class="card"><div class="tablewrap"><table><thead><tr>
       <th>Member</th><th>Existing Loan O/S</th><th>Savings Balance</th><th>Activity</th><th>Purpose</th><th>Priority</th><th>Proposed Amount ₹</th><th>Term (months)</th>
+      <th>Yearly Income ₹ (Proposed Activity)</th><th>Yearly Expenditure ₹ (Proposed Activity)</th><th>Proposed Instalment ₹/month</th><th>Surplus/(Deficit) ₹/year</th>
     </tr></thead><tbody>
     ${g.rows.map(r=>`<tr>
       <td>${esc(r.name)}</td>
@@ -3432,9 +3447,14 @@ function viewMCP(){
       <td><input class="no-print" type="number" min="0" step="1" value="${r.priority}" style="width:60px" onchange="updateMcpRow('${r.memberId}','priority',this.value)"><span class="print-only">${r.priority}</span></td>
       <td><input class="no-print" type="number" min="0" step="500" value="${r.amount}" style="width:100px" onchange="updateMcpRow('${r.memberId}','amount',this.value)"><span class="print-only">${rupee(r.amount)}</span></td>
       <td><input class="no-print" type="number" min="0" step="1" value="${r.term}" style="width:70px" onchange="updateMcpRow('${r.memberId}','term',this.value)"><span class="print-only">${r.term}</span></td>
+      <td><input class="no-print" type="number" min="0" step="500" value="${r.annualIncome}" style="width:110px" onchange="updateMcpRow('${r.memberId}','annualIncome',this.value)"><span class="print-only">${rupee(r.annualIncome)}</span></td>
+      <td><input class="no-print" type="number" min="0" step="500" value="${r.annualExpenditure}" style="width:110px" onchange="updateMcpRow('${r.memberId}','annualExpenditure',this.value)"><span class="print-only">${rupee(r.annualExpenditure)}</span></td>
+      <td><input class="no-print" type="number" min="0" step="100" value="${r.instalment}" style="width:100px" onchange="updateMcpRow('${r.memberId}','instalment',this.value)"><span class="print-only">${rupee(r.instalment)}</span></td>
+      <td class="num">${r.surplus<0?badge('('+rupee(Math.abs(r.surplus))+')','red'):rupee(r.surplus)}</td>
     </tr>`).join('')}
-    <tr><td colspan="6"><b>Total Proposed Credit Demand</b></td><td class="num"><b>${rupee(g.total)}</b></td><td></td></tr>
+    <tr><td colspan="6"><b>Total</b></td><td class="num"><b>${rupee(g.total)}</b></td><td></td><td class="num"><b>${rupee(g.totalAnnualIncome)}</b></td><td class="num"><b>${rupee(g.totalAnnualExpenditure)}</b></td><td></td><td class="num"><b>${g.totalSurplus<0?('('+rupee(Math.abs(g.totalSurplus))+')'):rupee(g.totalSurplus)}</b></td></tr>
     </tbody></table></div>
+    <p class="hint no-print" style="margin-top:8px">Surplus/(Deficit) = Yearly Income − Yearly Expenditure − (Proposed Instalment × 12) for that member's proposed activity — a quick repayment-capacity check, same idea as a loan appraisal. A bracketed figure in red is a projected deficit: the proposed instalment may be too high for what the activity is expected to yield, so review the amount/term before finalising.</p>
   </div>`;
 
   html += `<div class="card"><h3>Reference</h3><div class="grid cols2">
@@ -3458,8 +3478,11 @@ function viewMCPHistoryEntry(id){
   if(!h) return;
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Micro Credit Plan — ${fmtDate(h.from)} to ${fmtDate(h.to)}</h3>
     <p class="hint">Saved ${fmtDate((h.savedAt||'').slice(0,10))} by ${esc(h.savedBy||'—')}</p>
-    ${tbl(['Member','Activity','Purpose','Priority','Amount','Term (months)'], h.rows.map(r=>[esc(r.name), esc(r.activity), esc(r.purpose||'—'), r.priority, rightCell(rupee(r.amount)), r.term]))}
-    <p style="margin-top:8px"><b>Total: ${rupee(h.total)}</b></p>`);
+    ${tbl(['Member','Activity','Purpose','Priority','Amount','Term (months)','Yearly Income','Yearly Expenditure','Instalment/month','Surplus/(Deficit)/yr'],
+      h.rows.map(r=>[esc(r.name), esc(r.activity), esc(r.purpose||'—'), r.priority, rightCell(rupee(r.amount)), r.term,
+        rightCell(rupee(r.annualIncome||0)), rightCell(rupee(r.annualExpenditure||0)), rightCell(rupee(r.instalment||0)),
+        rightCell((r.surplus||0)<0?('('+rupee(Math.abs(r.surplus))+')'):rupee(r.surplus||0))]))}
+    <p style="margin-top:8px"><b>Total Credit Demand: ${rupee(h.total)}</b>${h.totalSurplus!=null?(' · Total Surplus/(Deficit): '+((h.totalSurplus<0)?('('+rupee(Math.abs(h.totalSurplus))+')'):rupee(h.totalSurplus))):''}</p>`);
 }
 
 /* ============================================================ BANK LOAN APPLICATION (CCL / Term Loan) */
@@ -3990,7 +4013,7 @@ function viewRegisters(){
       ${w.period==='year'?`<div class="field"><label>Year</label><input type="number" min="2000" max="2100" value="${w.year}" onchange="updateRegField('year', this.value)"></div>`:''}
       ${w.period==='custom'?`<div class="field"><label>From</label><input type="date" value="${w.from}" onchange="updateRegField('from', this.value)"></div>
         <div class="field"><label>To</label><input type="date" value="${w.to}" onchange="updateRegField('to', this.value)"></div>`:''}
-      ${w.register==='passbook'?`<div class="field"><label>Member</label><select onchange="updateRegField('passMember', this.value)">${DB.members.map(m=>`<option value="${m.id}" ${w.passMember===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div>`:''}
+      ${w.register==='passbook'?`<div class="field"><label>Member</label><select onchange="updateRegField('passMember', this.value)">${DB.members.map(m=>`<option value="${m.id}" ${w.passMember===m.id?'selected':''}>${esc(m.name)}${m.status==='Deleted'?' (Deleted — kept for reference)':''}</option>`).join('')}</select></div>`:''}
     </div>
     <button class="btn" style="margin-top:8px" onclick="window.print()">🖨 Print this Register</button>
     <p class="hint" style="margin-top:6px">Print uses the browser's own Print dialog (Ctrl/Cmd+P also works) — choose "Save as PDF" there for a soft copy, or print directly for a hard copy for record.</p>
@@ -4048,7 +4071,7 @@ function viewRegisters(){
 /* ============================================================ MEMBER STATEMENT */
 function viewMemberStatement(){
   let html = `<div class="section-title"><h2>Member Statement</h2></div>`;
-  html += `<div class="card"><label>Select Member</label><select id="msMember" onchange="render()" style="max-width:340px">${DB.members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>`;
+  html += `<div class="card"><label>Select Member</label><select id="msMember" onchange="render()" style="max-width:340px">${DB.members.map(m=>`<option value="${m.id}">${esc(m.name)}${m.status==='Deleted'?' (Deleted — kept for reference)':''}</option>`).join('')}</select></div>`;
   if(!DB.members.length){ html += `<div class="card"><div class="empty">No members yet.</div></div>`; return html; }
   const sel = document.getElementById && document.getElementById('msMember') ? document.getElementById('msMember').value : DB.members[0].id;
   const m = DB.members.find(x=>x.id===sel) || DB.members[0];
