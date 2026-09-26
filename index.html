@@ -142,6 +142,7 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
 ::-webkit-scrollbar{height:9px;width:9px;}
 ::-webkit-scrollbar-thumb{background:#c5d0da;border-radius:5px;}
 .printhead{display:none;}
+.print-only{display:none;}
 @media print{
   #sidebar,#sidebarScrim,#topbar,footer.byline,.no-print{display:none !important;}
   #main{margin-left:0 !important;}
@@ -150,6 +151,7 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
   .card{box-shadow:none;border:1px solid #999;break-inside:avoid;}
   .printhead{display:block;margin-bottom:10px;}
   .printhead h2{margin:0 0 2px 0;}
+  .print-only{display:inline;}
   a{color:inherit;text-decoration:none;}
 }
 </style>
@@ -359,6 +361,7 @@ function freshDB(){
     closedPeriods:[],
     auditLog:[],
     grading:{ ruleVersion:'2026.1', history:{}, nabardHistory:[] },
+    mcp:{ history:[] },
     lokosMapping: defaultLokosMapping(),
     loanDoseEligibility: defaultDoseEligibility(),
     settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en' },
@@ -393,6 +396,8 @@ function loadDB(){
       DB = JSON.parse(raw);
       if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]};
       if(!DB.grading.nabardHistory) DB.grading.nabardHistory = [];
+      if(!DB.mcp) DB.mcp = {history:[]};
+      if(!DB.mcp.history) DB.mcp.history = [];
       if(!DB.lokosMapping) DB.lokosMapping = defaultLokosMapping();
       if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
       if(!DB.revolvingFund) DB.revolvingFund = [];
@@ -741,6 +746,7 @@ const NAV = [
   {id:'grading', label:'SHG Grading', icon:'★'},
   {id:'lokos', label:'LokOS Readiness & Export', icon:'⇪'},
   {grp:'Bank Linkage'},
+  {id:'mcp', label:'Micro Credit Plan (MCP)', icon:'📋'},
   {id:'bankapp', label:'Bank Loan Application', icon:'🏦'},
   {id:'bankloan', label:'Bank Loan to SHG', icon:'🏛'},
   {id:'closing', label:'Month-End Closing', icon:'🔒'},
@@ -782,7 +788,7 @@ function render(){
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'), upibook: ()=>viewBook('UPI','UPI Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
-      lokos: viewLokos, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement,
+      lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement,
       backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI
     }[ROUTE] || viewDashboard)();
   }catch(e){
@@ -3266,6 +3272,112 @@ function updateLokosMapping(kind, idx, val){
   if(DB.lokosMapping[kind] && DB.lokosMapping[kind][idx]){ DB.lokosMapping[kind][idx].lokos = val; saveDB(); }
 }
 
+/* ============================================================ MICRO CREDIT PLAN (MCP) */
+// A Micro Credit Plan is the member-wise credit-need assessment an SHG prepares in its own
+// meeting — purpose, priority and proposed amount each member wants to borrow for the ensuing
+// period — consolidated into the SHG's total credit demand for bank credit-linkage (and, at a
+// VO/CLF, rolled up further). This is a locally structured planning tool following common
+// DAY-NRLM MCP practice, not one single fixed government proforma. Existing loan outstanding and
+// savings balance are auto-filled from the same central functions used everywhere else in the
+// app; only the proposed purpose/activity/amount/priority needs entering by the SHG.
+let MCP_UI = null;
+function mcpUI(){
+  if(!MCP_UI){
+    const from = todayStr();
+    const toD = new Date(from+'T00:00:00'); toD.setFullYear(toD.getFullYear()+1);
+    MCP_UI = { from, to: toD.toISOString().slice(0,10), rows:{} };
+  }
+  return MCP_UI;
+}
+function mcpRow(memberId){
+  const u = mcpUI();
+  if(!u.rows[memberId]) u.rows[memberId] = { activity:'Farm & Allied', purpose:'', amount:0, priority:0, term:24 };
+  return u.rows[memberId];
+}
+function updateMcpField(field,val){ mcpUI()[field] = val; render(); }
+function updateMcpRow(memberId, field, val){
+  const r = mcpRow(memberId);
+  r[field] = (field==='amount'||field==='term'||field==='priority') ? (parseFloat(val)||0) : val;
+  render();
+}
+const MCP_ACTIVITIES = ['Farm & Allied','Non-Farm/Micro-Enterprise','Consumption/Emergency','Housing','Education','Health','Livestock','Other'];
+function computeMCP(){
+  const u = mcpUI();
+  const rows = activeMembers().map(m=>{
+    const r = mcpRow(m.id);
+    return { memberId:m.id, name:m.name, existingOutstanding: memberLoanOutstanding(m.id), savingsBalance: memberSavingsBalance(m.id),
+      activity:r.activity, purpose:r.purpose, priority:r.priority||0, amount:r.amount||0, term:r.term||0 };
+  });
+  const total = Math.round(rows.reduce((s,r)=>s+r.amount,0)*100)/100;
+  const corpus = calculateCorpus();
+  return { from:u.from, to:u.to, rows, total, corpus };
+}
+function saveMCP(){
+  const g = computeMCP();
+  if(!g.rows.length){ flash('error','Add at least one member before saving a Micro Credit Plan.'); render(); return; }
+  const id = nextId('MCP');
+  DB.mcp.history.push({ id, from:g.from, to:g.to, total:g.total, savedAt: nowStamp(), savedBy: DB.settings.currentUserName,
+    rows: g.rows.map(r=>({memberId:r.memberId, name:r.name, activity:r.activity, purpose:r.purpose, priority:r.priority, amount:r.amount, term:r.term, existingOutstanding:r.existingOutstanding, savingsBalance:r.savingsBalance})) });
+  saveDB();
+  logAudit('MCP_SAVED', 'Micro Credit Plan '+id+' ('+g.from+' to '+g.to+'): total credit demand '+rupee(g.total));
+  flash('ok','Micro Credit Plan saved to history.');
+  render();
+}
+function viewMCP(){
+  const u = mcpUI();
+  const g = computeMCP();
+  let html = `<div class="section-title no-print"><h2>Micro Credit Plan (MCP)</h2></div>`;
+  html += `<div class="msg info no-print">Member-wise credit requirement identified in the SHG's own meeting — purpose, priority and proposed amount for the ensuing period — consolidated here into the SHG's total credit demand for bank linkage. This is a locally structured planning tool following common DAY-NRLM MCP practice, not one single fixed government proforma; existing loan outstanding and savings balance are auto-filled from your records.</div>`;
+  html += `<div class="card no-print"><div class="row">
+    <div class="field"><label>Plan Period From</label><input type="date" value="${u.from}" onchange="updateMcpField('from', this.value)"></div>
+    <div class="field"><label>Plan Period To</label><input type="date" value="${u.to}" onchange="updateMcpField('to', this.value)"></div>
+  </div></div>`;
+  html += `<div class="printhead"><h2>${esc(DB.profile.name||'SHG')}</h2><p>Micro Credit Plan — ${fmtDate(g.from)} to ${fmtDate(g.to)}</p></div>`;
+
+  if(!g.rows.length){ html += `<div class="card"><div class="empty">No active members yet.</div></div>`; return html; }
+
+  html += `<div class="card"><div class="tablewrap"><table><thead><tr>
+      <th>Member</th><th>Existing Loan O/S</th><th>Savings Balance</th><th>Activity</th><th>Purpose</th><th>Priority</th><th>Proposed Amount ₹</th><th>Term (months)</th>
+    </tr></thead><tbody>
+    ${g.rows.map(r=>`<tr>
+      <td>${esc(r.name)}</td>
+      <td class="num">${rupee(r.existingOutstanding)}</td>
+      <td class="num">${rupee(r.savingsBalance)}</td>
+      <td><select class="no-print" onchange="updateMcpRow('${r.memberId}','activity',this.value)">${MCP_ACTIVITIES.map(a=>`<option ${r.activity===a?'selected':''}>${a}</option>`).join('')}</select><span class="print-only">${esc(r.activity)}</span></td>
+      <td><input class="no-print" value="${esc(r.purpose)}" style="width:160px" onchange="updateMcpRow('${r.memberId}','purpose',this.value)"><span class="print-only">${esc(r.purpose||'—')}</span></td>
+      <td><input class="no-print" type="number" min="0" step="1" value="${r.priority}" style="width:60px" onchange="updateMcpRow('${r.memberId}','priority',this.value)"><span class="print-only">${r.priority}</span></td>
+      <td><input class="no-print" type="number" min="0" step="500" value="${r.amount}" style="width:100px" onchange="updateMcpRow('${r.memberId}','amount',this.value)"><span class="print-only">${rupee(r.amount)}</span></td>
+      <td><input class="no-print" type="number" min="0" step="1" value="${r.term}" style="width:70px" onchange="updateMcpRow('${r.memberId}','term',this.value)"><span class="print-only">${r.term}</span></td>
+    </tr>`).join('')}
+    <tr><td colspan="6"><b>Total Proposed Credit Demand</b></td><td class="num"><b>${rupee(g.total)}</b></td><td></td></tr>
+    </tbody></table></div>
+  </div>`;
+
+  html += `<div class="card"><h3>Reference</h3><div class="grid cols2">
+      ${stat('Total Corpus (excl. CIF/borrowings)', rupee(g.corpus.total))}
+      ${stat('Total Proposed Credit Demand (this MCP)', rupee(g.total))}
+    </div>
+    <p class="hint no-print" style="margin-top:8px">Compare this demand against the SHG's dose-wise indicative bank eligibility on Bank Loan Application — <a style="cursor:pointer" onclick="go('bankapp')">open Bank Loan Application →</a></p>
+  </div>`;
+
+  html += `<div class="card no-print"><button class="btn" onclick="saveMCP()">Save this Micro Credit Plan to History</button> <button class="btn secondary" onclick="window.print()">🖨 Print</button></div>`;
+
+  const hist = (DB.mcp.history||[]).slice().reverse();
+  html += `<div class="card no-print"><h3>Micro Credit Plan History</h3>`;
+  html += hist.length ? tbl(['Saved On','Period','Members Covered','Total Demand',''], hist.map(h=>[fmtDate((h.savedAt||'').slice(0,10)), fmtDate(h.from)+' to '+fmtDate(h.to), h.rows.length, rupee(h.total),
+    `<a style="cursor:pointer" onclick="viewMCPHistoryEntry('${h.id}')">View</a>`])) : `<div class="empty">No Micro Credit Plan saved yet.</div>`;
+  html += `</div>`;
+  return html;
+}
+function viewMCPHistoryEntry(id){
+  const h = DB.mcp.history.find(x=>x.id===id);
+  if(!h) return;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Micro Credit Plan — ${fmtDate(h.from)} to ${fmtDate(h.to)}</h3>
+    <p class="hint">Saved ${fmtDate((h.savedAt||'').slice(0,10))} by ${esc(h.savedBy||'—')}</p>
+    ${tbl(['Member','Activity','Purpose','Priority','Amount','Term (months)'], h.rows.map(r=>[esc(r.name), esc(r.activity), esc(r.purpose||'—'), r.priority, rightCell(rupee(r.amount)), r.term]))}
+    <p style="margin-top:8px"><b>Total: ${rupee(h.total)}</b></p>`);
+}
+
 /* ============================================================ BANK LOAN APPLICATION (CCL / Term Loan) */
 // Drafts a bank loan application for progressive SHG-Bank credit linkage ("doses"). The
 // eligible-amount formula (corpus × a configurable multiple, subject to a floor) is a locally
@@ -3283,6 +3395,18 @@ function viewBankLoanApplication(){
   const corpus = calculateCorpus();
   let html = `<div class="section-title"><h2>Bank Loan Application (CCL / Term Loan)</h2></div>`;
   html += `<div class="msg info">This drafts a loan application letter for progressive SHG-Bank credit linkage. The dose-wise eligibility multiples below are a <b>configurable local default</b> reflecting common DAY-NRLM SHG-Bank Linkage practice — not an official RBI/NABARD figure fixed by this app. Verify current norms with your bank and SRLM, and adjust the table below if needed.</div>`;
+  {
+    const mcpLatest = (DB.mcp.history||[]).slice().reverse()[0];
+    if(mcpLatest){
+      html += `<div class="card"><h3>Latest Micro Credit Plan</h3><div class="grid cols3">
+        ${stat('Period', fmtDate(mcpLatest.from)+' to '+fmtDate(mcpLatest.to))}
+        ${stat('Members Covered', mcpLatest.rows.length)}
+        ${stat('Total Credit Demand', rupee(mcpLatest.total))}
+      </div><p class="hint" style="margin-top:6px"><a style="cursor:pointer" onclick="go('mcp')">Open Micro Credit Plan →</a></p></div>`;
+    } else {
+      html += `<div class="msg info">No Micro Credit Plan saved yet. <a style="cursor:pointer" onclick="go('mcp')">Prepare one</a> to consolidate member-wise credit needs before applying.</div>`;
+    }
+  }
   html += `<div class="card"><h3>Current Corpus</h3><div class="grid cols4">
     ${stat('Member Savings', rupee(corpus.savings))}
     ${stat('Capital Fund', rupee(corpus.capitalFund))}
@@ -3958,6 +4082,7 @@ function restoreBackup(){
       const data = JSON.parse(e.target.result);
       if(!data.members || !data.transactions) throw new Error('This does not look like a valid backup file.');
       DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]}; if(!DB.grading.nabardHistory) DB.grading.nabardHistory=[];
+      if(!DB.mcp) DB.mcp = {history:[]}; if(!DB.mcp.history) DB.mcp.history=[];
       logAudit('BACKUP_RESTORE','Data restored from backup file');
       flash('ok','Backup restored.'); render();
     }catch(err){ alert('Restore failed: '+err.message); }
