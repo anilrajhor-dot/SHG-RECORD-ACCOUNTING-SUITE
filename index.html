@@ -346,7 +346,7 @@ function freshDB(){
     expenseCategories: DEFAULT_EXPENSE_CATS.slice(),
     closedPeriods:[],
     auditLog:[],
-    grading:{ ruleVersion:'2026.1', history:{}, nabard:{} },
+    grading:{ ruleVersion:'2026.1', history:{}, nabardHistory:[] },
     lokosMapping: defaultLokosMapping(),
     loanDoseEligibility: defaultDoseEligibility(),
     settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en' },
@@ -379,8 +379,8 @@ function loadDB(){
     const raw = localStorage.getItem(LS_KEY);
     if(raw){
       DB = JSON.parse(raw);
-      if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabard:{}};
-      if(!DB.grading.nabard) DB.grading.nabard = {};
+      if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]};
+      if(!DB.grading.nabardHistory) DB.grading.nabardHistory = [];
       if(!DB.lokosMapping) DB.lokosMapping = defaultLokosMapping();
       if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
       if(!DB.revolvingFund) DB.revolvingFund = [];
@@ -634,14 +634,36 @@ function calculateCashBalance(){ return accountBalance('CASH'); }
 // Central corpus calculation — the SHG's own internal fund base (member savings, accumulated
 // surplus/Capital Fund, and CIF), used both in the Balance Sheet's Notes to Accounts and in
 // the Bank Loan Application generator's eligibility calculation, so the two always agree.
+// Corpus = the SHG's own/owned funds — Members Savings + Capital Fund (SHG Fund + cumulative
+// surplus, which already carries fines/penalties and other receipts such as donations/grants
+// posted to FINE_INCOME/OTHER_INCOME through the Income & Expenditure Account) + Revolving
+// Fund. CIF, Bank Term Loan, Bank Cash Credit and Other Liabilities are BORROWED funds and are
+// deliberately excluded from Corpus, even though CIF is itself re-lent to members.
+// A second, independent formula — Total Assets minus Borrowings — is computed alongside it as
+// a cross-check: because the ledger is double-entry (Assets = Liabilities + Capital + Surplus
+// by construction), the two must always tally exactly; if they ever don't, that is itself a
+// sign of a posting error worth investigating via Data Quality.
 function calculateCorpus(){
   const savings = DB.members.reduce((s,m)=>s+memberSavingsBalance(m.id),0);
   const fund = accountBalance('SHG_FUND');
   const cumulativeSurplus = incomeExpenditure('1900-01-01', todayStr()).surplus;
   const capitalFund = Math.round((fund+cumulativeSurplus)*100)/100;
-  const cif = accountBalance('CIF');
   const revolvingFund = accountBalance('REVOLVING_FUND');
-  return { savings, capitalFund, cif, revolvingFund, total: Math.round((savings+capitalFund+cif+revolvingFund)*100)/100 };
+  const cif = accountBalance('CIF'); // kept for callers (e.g. Balance Sheet) that show CIF as its own liability line — not part of `total` below.
+  // Shown for visibility only (per request) — fines/penalties and other receipts are already
+  // inside cumulativeSurplus/capitalFund above via the Income & Expenditure Account, so this is
+  // a breakout for display, never added a second time into `total`.
+  const otherReceipts = Math.round((accountBalance('FINE_INCOME')+accountBalance('OTHER_INCOME'))*100)/100;
+  const total = Math.round((savings+capitalFund+revolvingFund)*100)/100;
+
+  const totalAssets = Math.round((accountBalance('CASH')+accountBalance('BANK')+accountBalance('UPI')+accountBalance('MEMBER_LOANS')+accountBalance('OTHER_ASSETS'))*100)/100;
+  const bankTL = accountBalance('BANK_TL'), bankCC = accountBalance('BANK_CC'), otherLiab = accountBalance('OTHER_LIABILITIES');
+  const borrowings = Math.round((cif+bankTL+bankCC+otherLiab)*100)/100;
+  const totalAssetsLessBorrowings = Math.round((totalAssets-borrowings)*100)/100;
+
+  return { savings, capitalFund, revolvingFund, cif, otherReceipts, total,
+    totalAssets, borrowings, bankTL, bankCC, otherLiab, totalAssetsLessBorrowings,
+    tallies: Math.abs(total-totalAssetsLessBorrowings) < 0.5 };
 }
 function calculateBankBalance(){ return accountBalance('BANK'); }
 // Dedicated Corpus screen — calculateCorpus() is the single source of truth already used by
@@ -650,15 +672,25 @@ function calculateBankBalance(){ return accountBalance('BANK'); }
 function viewCorpus(){
   const c = calculateCorpus();
   let html = `<div class="section-title"><h2>SHG Corpus</h2></div>`;
-  html += `<div class="msg info">Corpus is calculated automatically from existing records — it is not entered separately anywhere. The same total is used in the Balance Sheet Notes to Accounts and in the Bank Loan Application's eligibility calculation, so there is only one corpus figure across the whole application.</div>`;
-  html += `<div class="card"><div class="grid cols3">
+  html += `<div class="msg info">Corpus (the SHG's own/owned funds) is calculated automatically from existing records — it is not entered separately anywhere, and the same figure is used in the Bank Loan Application's eligibility calculation. CIF, Bank Term Loan/Cash Credit and Other Liabilities are <b>borrowed</b> funds and are excluded from Corpus, even though CIF is itself re-lent to members.</div>`;
+  html += `<div class="card"><h3>Formula A — Components of Corpus</h3><div class="grid cols3">
     ${stat('Members Savings', rupee(c.savings))}
     ${stat('Capital Fund (SHG Fund + Cumulative Surplus)', rupee(c.capitalFund))}
-    ${stat('CIF Outstanding', rupee(c.cif))}
     ${stat('Revolving Fund', rupee(c.revolvingFund))}
+    ${stat('— of which Fines/Penalties + Other Receipts (donations, grants, etc.)', rupee(c.otherReceipts))}
     ${stat('Total Corpus', '<b>'+rupee(c.total)+'</b>')}
   </div>
-  <p class="hint" style="margin-top:10px">Total Corpus = Members Savings + Capital Fund + CIF + Revolving Fund, all as on today. Capital Fund = SHG Fund (opening capital) + cumulative surplus from the Income &amp; Expenditure Account since inception.</p>
+  <p class="hint" style="margin-top:10px">Total Corpus = Members Savings + Capital Fund + Revolving Fund. Capital Fund = SHG Fund (opening capital) + cumulative surplus from the Income &amp; Expenditure Account since inception — which already includes fines/penalties and other receipts (donations, grants, membership fee etc. posted as Other Income); the line above breaks that portion out for visibility only, it is not added again.</p>
+  </div>`;
+  html += `<div class="card"><h3>Formula B — Total Assets minus Borrowings</h3><div class="grid cols3">
+    ${stat('Total Assets (Cash+Bank+UPI+Loans to Members+Other Assets)', rupee(c.totalAssets))}
+    ${stat('Less: Borrowings (CIF + Bank TL + Bank CC + Other Liabilities)', rupee(c.borrowings))}
+    ${stat('Total Assets − Borrowings', '<b>'+rupee(c.totalAssetsLessBorrowings)+'</b>')}
+  </div>
+  <p class="hint" style="margin-top:6px">CIF ${rupee(c.cif)} + Bank Term Loan ${rupee(c.bankTL)} + Bank Cash Credit ${rupee(c.bankCC)} + Other Liabilities ${rupee(c.otherLiab)} = Borrowings ${rupee(c.borrowings)}.</p>
+  ${c.tallies
+    ? `<div class="msg ok" style="margin-top:10px">Both formulas tally: ${rupee(c.total)} = ${rupee(c.totalAssetsLessBorrowings)}. This is guaranteed by double-entry construction (Assets = Liabilities + Capital + Surplus) — if they ever differ, it signals a posting error worth checking in Data Quality.</div>`
+    : `<div class="msg err" style="margin-top:10px">Formula A (${rupee(c.total)}) and Formula B (${rupee(c.totalAssetsLessBorrowings)}) do not tally — this should never happen in a correctly posted ledger. Please run Data Quality Check and Trial Balance to locate the discrepancy.</div>`}
   </div>`;
   return html;
 }
@@ -892,6 +924,9 @@ function viewProfile(){
       <div class="field"><label>Formation Date</label><input type="date" name="formationDate" value="${esc(p.formationDate)}"></div>
       <div class="field"><label>Meeting Day</label><select name="meetingDay">${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d=>`<option ${p.meetingDay===d?'selected':''}>${d}</option>`).join('')}</select></div>
       <div class="field"><label>Meeting Frequency</label><select name="meetingFrequency">${['Weekly','Fortnightly','Monthly'].map(d=>`<option ${p.meetingFrequency===d?'selected':''}>${d}</option>`).join('')}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Compulsory Savings per Member per Cycle ₹ <span class="hint">(as per SHG's own rule — used for NABARD-format grading)</span></label><input type="number" min="0" step="1" name="compulsorySavingAmount" value="${p.compulsorySavingAmount||0}"></div>
     </div>
     <div class="row">
       <div class="field"><label>President</label><input name="president" value="${esc(p.president)}"></div>
@@ -2845,77 +2880,143 @@ function computeGrading(ym){
   return { ym, indicators, overall, grade, gradePending,
     dqStatus, dqRed, dqAmber, exceptions: dqRed, ruleVersion: DB.grading.ruleVersion };
 }
-/* ---------------- NABARD-format SHG Grading (additive — does not replace the configurable
-   Local Grading Framework above). This reproduces the parameter SET commonly used across the
-   SHG-Bank Linkage Programme for grading before Cash Credit Limit (group size/homogeneity,
-   meeting & attendance regularity, savings & internal-lending regularity, loan recovery,
-   book-keeping, leadership rotation, conflict resolution, group norms). Several of these
-   parameters (homogeneity, leadership rotation, conflict resolution, group norms, purpose-wise
-   loan utilisation) cannot be derived from transaction data — they require an assessor's
-   judgement — so those remain manual inputs, clearly marked, while everything the app already
-   records is filled in automatically from the same central functions used elsewhere
-   (computeGrading, runDataQuality). This is explicitly NOT presented as the official NABARD
-   grading proforma — exact parameters/weights/cut-offs vary by bank and SRLM. */
-const NABARD_GRADING_PARAMS = [
-  {key:'groupSize', label:'Group Size (10–20 members)', auto:true},
-  {key:'meetingRegularity', label:'Regularity of Meetings', auto:true},
-  {key:'attendance', label:'Attendance in Meetings', auto:true},
-  {key:'savingsRegularity', label:'Regularity of Savings', auto:true},
-  {key:'internalLending', label:'Internal Lending / Utilisation of Corpus', auto:true},
-  {key:'loanRecovery', label:'Loan Repayment / Recovery Rate', auto:true},
-  {key:'bookKeeping', label:'Maintenance of Books & Records', auto:true},
-  {key:'homogeneity', label:'Homogeneity of Group Members', auto:false},
-  {key:'leadershipRotation', label:'Rotation of Leadership', auto:false},
-  {key:'conflictResolution', label:'Resolution of Internal Conflicts', auto:false},
-  {key:'groupNorms', label:'Adherence to Group Rules / Norms', auto:false},
-  {key:'loanUtilisation', label:'Purpose-wise Utilisation of Loans', auto:false}
-];
-function computeNabardGrading(ym){
-  const g = computeGrading(ym);
-  const ind = {}; g.indicators.forEach(i=>ind[i.key]=i.value);
-  const totalMembers = activeMembers().length;
-  const groupSizeScore = totalMembers===0 ? 0 : (totalMembers>=10 ? 100 : Math.round(totalMembers/10*100));
-  const membersWithLoan = new Set(DB.loans.map(l=>l.memberId)).size;
-  const internalLending = totalMembers ? Math.min(100, Math.round(membersWithLoan/totalMembers*100)) : 0;
-  const dq = runDataQuality();
-  const dqRed = dq.filter(i=>i.sev==='red').length, dqAmber = dq.filter(i=>i.sev==='amber').length;
-  const bookKeeping = dqRed>0 ? 40 : (dqAmber>0 ? 70 : 100);
-  const manual = (DB.grading.nabard[ym] && DB.grading.nabard[ym].manual) || {};
-  const params = NABARD_GRADING_PARAMS.map(p=>{
-    let value;
-    if(p.key==='groupSize') value = groupSizeScore;
-    else if(p.key==='meetingRegularity') value = ind.meetings;
-    else if(p.key==='attendance') value = ind.attendance;
-    else if(p.key==='savingsRegularity') value = ind.savings;
-    else if(p.key==='internalLending') value = internalLending;
-    else if(p.key==='loanRecovery') value = ind.recovery;
-    else if(p.key==='bookKeeping') value = bookKeeping;
-    else value = (manual[p.key]!=null) ? manual[p.key] : null;
-    return Object.assign({}, p, {value});
-  });
-  const scored = params.filter(p=>p.value!=null);
-  const overall = scored.length ? scored.reduce((s,p)=>s+p.value,0)/scored.length : 0;
-  const grade = scored.length < params.length ? null : (overall>=80?'A':(overall>=60?'B':(overall>=40?'C':'D')));
-  return { ym, params, overall, grade, scoredCount:scored.length, totalCount:params.length, ruleVersion: DB.grading.ruleVersion };
+/* ---------------- Official NABARD SHG Grading — Format 1 (Fresh Linkage) & Format 2 (Repeat
+   Linkage), reproduced exactly (indicators, allotted marks, formulas and grade bands) from the
+   proforma supplied by the user. This is additive — it does not replace the configurable Local
+   Grading Framework above. Everything the app already records is auto-filled from the same
+   central functions used elsewhere (ledger, generateLoanSchedule, runDataQuality); a small
+   number of items the proforma itself requires an assessor to physically verify — Resolution
+   Book / Individual Pass Book upkeep, interest-servicing timing and overdrawing occasions on a
+   Cash Credit account — remain manual, clearly marked, and are never guessed. */
+const NABARD_FORMATS = {
+  fresh: { label:'Format 1 — SHG Grading Format for Fresh Linkage',
+    meetingHoldMarks:10, attendanceMarks:10, savingsMarks:10,
+    velocityMarks:20, velocityBands:[{min:1.5,marks:20},{min:1.0,marks:15},{min:0.5,marks:10},{min:0.2,marks:5},{min:0,marks:0}],
+    repaymentMarks:20,
+    recordKeeping:{resolutionBook:4,cashBook:8,savingsLedger:4,loanLedger:4,generalLedger:6,passBook:4},
+    ccOps:null },
+  repeat: { label:'Format 2 — SHG Grading Format for Repeat Linkage',
+    meetingHoldMarks:5, attendanceMarks:5, savingsMarks:10,
+    velocityMarks:10, velocityBands:[{min:1.5,marks:10},{min:1.0,marks:7},{min:0.5,marks:5},{min:0.2,marks:2},{min:0,marks:0}],
+    repaymentMarks:15,
+    recordKeeping:{resolutionBook:4,cashBook:8,savingsLedger:4,loanLedger:4,generalLedger:6,passBook:4},
+    ccOps:{transactionsMarks:10, interestServicingMarks:10, overdrawingMarks:5} }
+};
+const NABARD_RECORD_LABELS = {resolutionBook:'Meeting Resolution Book', cashBook:'Cash Book', savingsLedger:'Savings Ledger', loanLedger:'Loan Ledger', generalLedger:'General Ledger', passBook:'Individual Pass Book'};
+const NABARD_RECORD_AUTO = {resolutionBook:false, cashBook:true, savingsLedger:true, loanLedger:true, generalLedger:true, passBook:false}; // digital books the app itself keeps up to date are auto-scored full marks; the two physical/manual items need an assessor's confirmation
+function nabardSixMonthsAgo(dateStr){ const d=new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()-6); return d.toISOString().slice(0,10); }
+function nabardPeriodMonths(from,to){ const days=(new Date(to+'T00:00:00')-new Date(from+'T00:00:00'))/86400000; return Math.max(1, Math.round(days/30.44)); }
+let NABARD_UI = null;
+function nabardUI(){
+  if(!NABARD_UI){ const to = todayStr(); NABARD_UI = { format:'fresh', from: nabardSixMonthsAgo(to), to,
+    recordKeeping:{resolutionBook:null, passBook:null}, ccTier:{interestServicing:null, overdrawing:null} }; }
+  return NABARD_UI;
 }
-function saveNabardManual(ev, ym){
-  ev.preventDefault();
-  const f = new FormData(ev.target);
-  if(!DB.grading.nabard) DB.grading.nabard = {};
-  const manual = (DB.grading.nabard[ym] && DB.grading.nabard[ym].manual) || {};
-  NABARD_GRADING_PARAMS.filter(p=>!p.auto).forEach(p=>{
-    const raw = f.get('m_'+p.key);
-    if(raw!=null && raw!==''){
-      let v = parseFloat(raw); if(isNaN(v)) return; if(v<0) v=0; if(v>100) v=100;
-      manual[p.key] = v;
+function updateNabardUIField(field, val){ const u = nabardUI(); u[field] = val; render(); }
+function updateNabardRecord(key, val){ const u = nabardUI(); u.recordKeeping[key] = val===''?null:parseFloat(val); render(); }
+function updateNabardCCTier(key, val){ const u = nabardUI(); u.ccTier[key] = val===''?null:val; render(); }
+function computeNabardOfficialGrading(){
+  const u = nabardUI();
+  const cfg = NABARD_FORMATS[u.format];
+  const from = u.from, to = u.to;
+
+  // 1. Regularity of Meetings
+  const meetings = DB.meetings.filter(mt=>mt.date>=from && mt.date<=to);
+  const freq = DB.profile.meetingFrequency||'Monthly';
+  const months = nabardPeriodMonths(from,to);
+  const perMonth = freq==='Weekly'?4.33:(freq==='Fortnightly'?2.17:1);
+  const meetingsRequired = Math.max(1, Math.round(months*perMonth));
+  const meetingsHeld = meetings.length;
+  const meetingHoldScore = Math.round(Math.min(cfg.meetingHoldMarks, (meetingsHeld/meetingsRequired)*cfg.meetingHoldMarks)*100)/100;
+
+  const totalMembers = activeMembers().length || 1;
+  const avgAttended = meetings.length ? meetings.reduce((s,mt)=>s+(mt.present||0),0)/meetings.length : 0;
+  const attendanceScore = Math.round(Math.min(cfg.attendanceMarks, (avgAttended/totalMembers)*cfg.attendanceMarks)*100)/100;
+
+  // 2. Regularity of Savings
+  const savingsDeposited = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').reduce((s,t)=>s+t.amount,0);
+  const compulsory = parseFloat(DB.profile.compulsorySavingAmount)||0;
+  const savingsRequired = Math.round(compulsory*meetingsRequired*totalMembers*100)/100;
+  const savingsNA = savingsRequired<=0;
+  const savingsScore = savingsNA ? null : Math.round(Math.min(cfg.savingsMarks, (savingsDeposited/savingsRequired)*cfg.savingsMarks)*100)/100;
+
+  // 3. Velocity of Lending to members from Group Corpus = Amount lent / Average Group Corpus
+  const lent = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
+  const avgCorpus = calculateCorpus().total; // approximated as current corpus — a precise period-average needs corpus snapshots at from/to, not currently retained
+  const velocity = avgCorpus>0 ? lent/avgCorpus : 0;
+  let velocityScore = 0;
+  for(const band of cfg.velocityBands){ if(velocity>=band.min){ velocityScore = band.marks; break; } }
+
+  // 4. Regularity in Repayment of loan by members = Recovery against Demand
+  let demand=0;
+  DB.loans.forEach(l=>{ generateLoanSchedule(l.id, to).filter(s=>s.dueDate>=from && s.dueDate<=to).forEach(s=>{ demand += s.principalDue; }); });
+  demand = Math.round(demand*100)/100;
+  const recovery = Math.round(DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0)*100)/100;
+  const repaymentNA = demand<=0;
+  const repaymentScore = repaymentNA ? cfg.repaymentMarks : Math.round(Math.min(cfg.repaymentMarks, (recovery/demand)*cfg.repaymentMarks)*100)/100;
+
+  // 5. Updated Record Keeping
+  const dq = runDataQuality();
+  const dqRed = dq.filter(i=>i.sev==='red').length;
+  const recordRows = Object.keys(cfg.recordKeeping).map(key=>{
+    const allotted = cfg.recordKeeping[key];
+    let earned, status;
+    if(NABARD_RECORD_AUTO[key]){
+      earned = dqRed>0 ? allotted/2 : allotted; status = dqRed>0 ? 'Maintained, but not up to date (Data Quality issues open)' : 'Maintained up to date (kept automatically by this app)';
+    } else {
+      const manualVal = u.recordKeeping[key];
+      earned = manualVal==null ? null : (manualVal>=1?allotted:(manualVal>=0.5?allotted/2:0));
+      status = manualVal==null ? 'Not yet assessed' : (manualVal>=1?'Maintained up to date':(manualVal>=0.5?'Maintained, but not up to date':'Not maintained'));
     }
+    return {key, label:NABARD_RECORD_LABELS[key], allotted, earned, auto:NABARD_RECORD_AUTO[key], status};
   });
-  DB.grading.nabard[ym] = { manual, savedAt: nowStamp() };
+  const recordAssessedAll = recordRows.every(r=>r.earned!=null);
+  const recordScore = recordRows.reduce((s,r)=>s+(r.earned||0),0);
+  const recordTotal = Object.values(cfg.recordKeeping).reduce((s,v)=>s+v,0);
+
+  // 6. Operations in Cash Credit/Term Loan A/c and Credit history (Repeat Linkage only)
+  let ccOps = null;
+  if(cfg.ccOps){
+    const ccLoan = DB.bankLoans.find(b=>b.type==='CC');
+    const ccFrom = nabardSixMonthsAgo===undefined?from:from; // uses the same period as selected
+    let txnCount = null;
+    if(ccLoan){
+      txnCount = DB.transactions.filter(t=>!t.reversed && t.bankLoanId===ccLoan.id && t.date>=from && t.date<=to).length;
+    }
+    const txnScore = txnCount==null ? null : (txnCount>=12?cfg.ccOps.transactionsMarks:(txnCount>=6?Math.round(cfg.ccOps.transactionsMarks*0.6):0));
+    const interestTierMap = {within1:cfg.ccOps.interestServicingMarks, within2:Math.round(cfg.ccOps.interestServicingMarks*0.6), after2:0};
+    const overdrawTierMap = {never:cfg.ccOps.overdrawingMarks, two:Math.round(cfg.ccOps.overdrawingMarks*0.6), more:0};
+    const interestScore = u.ccTier.interestServicing ? interestTierMap[u.ccTier.interestServicing] : null;
+    const overdrawScore = u.ccTier.overdrawing ? overdrawTierMap[u.ccTier.overdrawing] : null;
+    ccOps = { hasCC: !!ccLoan, txnCount, txnScore, interestScore, overdrawScore,
+      total: (txnScore||0)+(interestScore||0)+(overdrawScore||0),
+      allAssessed: txnScore!=null && interestScore!=null && overdrawScore!=null };
+  }
+
+  const pendingParts = [];
+  if(savingsNA) pendingParts.push('Set a Compulsory Savings amount in SHG Profile to score Regularity of Savings');
+  if(!recordAssessedAll) pendingParts.push('Confirm Resolution Book & Individual Pass Book status below');
+  if(ccOps && !ccOps.allAssessed) pendingParts.push('Confirm Cash Credit operations details below');
+
+  const overall = Math.round((meetingHoldScore+attendanceScore+(savingsScore||0)+velocityScore+repaymentScore+recordScore+(ccOps?ccOps.total:0))*100)/100;
+  const grade = pendingParts.length ? null : (overall>=80?'A':(overall>=70?'B':(overall>=60?'C':'D')));
+
+  return { format:u.format, cfg, from, to, months, meetingsRequired, meetingsHeld, meetingHoldScore, attendanceScore, avgAttended, totalMembers,
+    savingsDeposited, savingsRequired, savingsNA, savingsScore,
+    lent, avgCorpus, velocity, velocityScore,
+    demand, recovery, repaymentNA, repaymentScore,
+    recordRows, recordScore, recordTotal, recordAssessedAll,
+    ccOps, pendingParts, overall, grade };
+}
+function saveNabardOfficialGrading(){
+  const g = computeNabardOfficialGrading();
+  if(!DB.grading.nabardHistory) DB.grading.nabardHistory = [];
+  const id = nextId('NGRD');
+  DB.grading.nabardHistory.push({ id, format:g.format, from:g.from, to:g.to, overall:g.overall, grade:g.grade, savedAt: nowStamp(), savedBy: DB.settings.currentUserName });
   saveDB();
-  logAudit('NABARD_GRADING_INPUT', ym+': manual assessment scores saved.');
-  flash('ok','NABARD-format grading inputs saved.');
+  logAudit('NABARD_GRADE_SAVED', NABARD_FORMATS[g.format].label+' ('+g.from+' to '+g.to+'): '+(g.grade||'Pending')+' — '+g.overall.toFixed(1)+' marks');
+  flash('ok','NABARD-format grading saved to history.');
   render();
-  return false;
 }
 function viewGrading(){
   let html = `<div class="section-title"><h2>SHG Grading</h2></div>`;
@@ -2951,25 +3052,93 @@ function viewGrading(){
   })) : `<div class="empty">No monthly grades saved yet.</div>`;
   html += `</div>`;
 
-  const ng = computeNabardGrading(ym);
-  html += `<div class="card"><h3>NABARD-Format SHG Grading (Local Reproduction) — ${ym}</h3>
-    <div class="msg info">Reproduces the parameter set commonly used for SHG grading under the SHG-Bank Linkage Programme — group size/homogeneity, meeting &amp; attendance regularity, savings &amp; internal-lending regularity, loan recovery, book-keeping, leadership rotation, conflict resolution and adherence to group norms. This is <b>not</b> the officially prescribed NABARD proforma — exact parameters, weights and cut-offs vary by bank/SRLM. Verify and adjust against your bank's actual grading sheet.</div>
-    <div class="grid cols3">
-      ${ng.grade ? stat('NABARD-Format Grade', ng.grade) : stat('NABARD-Format Grade', 'Pending ('+ng.scoredCount+'/'+ng.totalCount+' assessed)', true)}
-      ${stat('Overall Score', ng.overall.toFixed(1)+'%')}
-      ${stat('Indicators Assessed', ng.scoredCount+' / '+ng.totalCount)}
+  html += viewNabardGrading();
+  return html;
+}
+function viewNabardGrading(){
+  const u = nabardUI();
+  const g = computeNabardOfficialGrading();
+  let html = `<div class="card"><h3>NABARD SHG Grading — ${esc(g.cfg.label)}</h3>
+    <div class="msg info">Reproduced exactly from the official proforma — indicators, allotted marks, formulas and grade bands (A: 80+, B: 70–79, C: 60–69, D: below 60; only A &amp; B graded SHGs are to be considered for credit linkage). Items the proforma itself requires an assessor to physically verify (Resolution Book / Individual Pass Book upkeep, and — for Repeat Linkage — interest-servicing timing and overdrawing occasions) are marked "Manual" below and are never guessed.</div>
+    <div class="row">
+      <div class="field"><label>Format</label><select onchange="updateNabardUIField('format', this.value)">
+        <option value="fresh" ${u.format==='fresh'?'selected':''}>Format 1 — Fresh Linkage</option>
+        <option value="repeat" ${u.format==='repeat'?'selected':''}>Format 2 — Repeat Linkage</option>
+      </select></div>
+      <div class="field"><label>Period From</label><input type="date" value="${u.from}" onchange="updateNabardUIField('from', this.value)"></div>
+      <div class="field"><label>Period To</label><input type="date" value="${u.to}" onchange="updateNabardUIField('to', this.value)"></div>
     </div>
-    <form onsubmit="return saveNabardManual(event,'${ym}')">
-    <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Parameter</th><th>Source</th><th>Score (0–100)</th></tr></thead><tbody>
-      ${ng.params.map(p=>`<tr><td>${esc(p.label)}</td><td>${p.auto?'Auto (from records)':'Manual assessment'}</td><td>${
-        p.auto ? rightCell((p.value!=null?p.value.toFixed(1):'0.0')+'%')
-        : `<input type="number" min="0" max="100" step="1" name="m_${p.key}" value="${p.value!=null?p.value:''}" style="width:80px">`
-      }</td></tr>`).join('')}
+    <p class="hint">Usually the last 6 months. Currently: ${fmtDate(g.from)} to ${fmtDate(g.to)} (~${g.months} month(s)).</p>
+
+    <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>S.</th><th>Indicator</th><th>Allotted Marks</th><th>Basis</th><th>Marks Obtained</th></tr></thead><tbody>
+      <tr><td colspan="5"><b>1. Regularity of Meeting</b></td></tr>
+      <tr><td>a</td><td>Regularity of holding meetings by SHG</td><td class="num">${g.cfg.meetingHoldMarks}</td>
+        <td>${g.meetingsHeld} held / ${g.meetingsRequired} required (auto, from Meetings)</td><td class="num">${g.meetingHoldScore.toFixed(2)}</td></tr>
+      <tr><td>b</td><td>Regularity of Attendance of members</td><td class="num">${g.cfg.attendanceMarks}</td>
+        <td>Avg ${g.avgAttended.toFixed(1)} attended / ${g.totalMembers} members (auto)</td><td class="num">${g.attendanceScore.toFixed(2)}</td></tr>
+      <tr><td colspan="5"><b>2. Regularity of Savings by members</b></td></tr>
+      <tr><td>2</td><td>Regularity of Savings by members</td><td class="num">${g.cfg.savingsMarks}</td>
+        <td>${g.savingsNA ? `<span class="hint">Set Compulsory Savings ₹/member in SHG Profile to compute this</span>` : rupee(g.savingsDeposited)+' deposited / '+rupee(g.savingsRequired)+' required (auto)'}</td>
+        <td class="num">${g.savingsNA ? '—' : g.savingsScore.toFixed(2)}</td></tr>
+      <tr><td colspan="5"><b>3. Velocity of Lending to members from Group Corpus</b></td></tr>
+      <tr><td>3</td><td>Velocity of Lending (Amount lent ÷ Average Group Corpus)</td><td class="num">${g.cfg.velocityMarks}</td>
+        <td>${rupee(g.lent)} lent ÷ ${rupee(g.avgCorpus)} corpus = ${g.velocity.toFixed(2)} (corpus approximated as current — auto)</td><td class="num">${g.velocityScore}</td></tr>
+      <tr><td colspan="5"><b>4. Regularity in Repayment of loan by members</b></td></tr>
+      <tr><td>4</td><td>Recovery against Demand</td><td class="num">${g.cfg.repaymentMarks}</td>
+        <td>${g.repaymentNA ? 'No instalments fell due in this period — full marks (auto)' : rupee(g.recovery)+' recovered / '+rupee(g.demand)+' demand (auto)'}</td>
+        <td class="num">${g.repaymentScore.toFixed(2)}</td></tr>
+      <tr><td colspan="5"><b>5. Updated Record Keeping</b></td></tr>
+      ${g.recordRows.map(r=>`<tr><td></td><td>${esc(r.label)}</td><td class="num">${r.allotted}</td>
+        <td>${r.auto ? esc(r.status)+' <span class="hint">(auto)</span>' :
+          `<select onchange="updateNabardRecord('${r.key}', this.value)">
+            <option value="" ${r.earned==null?'selected':''}>— select —</option>
+            <option value="1" ${u.recordKeeping[r.key]===1?'selected':''}>Maintained up to date (Full marks)</option>
+            <option value="0.5" ${u.recordKeeping[r.key]===0.5?'selected':''}>Maintained, but not up to date (Half marks)</option>
+            <option value="0" ${u.recordKeeping[r.key]===0?'selected':''}>Not maintained (No marks)</option>
+          </select> <span class="hint">(manual)</span>`}
+        </td><td class="num">${r.earned==null?'—':r.earned.toFixed(2)}</td></tr>`).join('')}
+      <tr><td></td><td><b>Record Keeping Sub-total</b></td><td class="num"><b>${g.recordTotal}</b></td><td></td><td class="num"><b>${g.recordScore.toFixed(2)}</b></td></tr>
+      ${g.ccOps ? `<tr><td colspan="5"><b>6. Operations in Cash Credit/Term Loan A/c and Credit history</b></td></tr>
+      <tr><td>a</td><td>Number of transactions in last period (Dr &amp; Cr)</td><td class="num">${g.cfg.ccOps.transactionsMarks}</td>
+        <td>${g.ccOps.hasCC ? g.ccOps.txnCount+' transaction(s) on CC facility (auto)' : '<span class="hint">No Cash Credit facility recorded under Bank Loan to SHG</span>'}</td>
+        <td class="num">${g.ccOps.txnScore==null?'—':g.ccOps.txnScore}</td></tr>
+      <tr><td>b</td><td>Servicing of interest charged in CC A/c</td><td class="num">${g.cfg.ccOps.interestServicingMarks}</td>
+        <td><select onchange="updateNabardCCTier('interestServicing', this.value)">
+          <option value="" ${!u.ccTier.interestServicing?'selected':''}>— select —</option>
+          <option value="within1" ${u.ccTier.interestServicing==='within1'?'selected':''}>Within 1 month</option>
+          <option value="within2" ${u.ccTier.interestServicing==='within2'?'selected':''}>Within 2 months</option>
+          <option value="after2" ${u.ccTier.interestServicing==='after2'?'selected':''}>After 2 months</option>
+        </select> <span class="hint">(manual)</span></td>
+        <td class="num">${g.ccOps.interestScore==null?'—':g.ccOps.interestScore}</td></tr>
+      <tr><td>c</td><td>Occasions of overdrawing in CC A/c (last period)</td><td class="num">${g.cfg.ccOps.overdrawingMarks}</td>
+        <td><select onchange="updateNabardCCTier('overdrawing', this.value)">
+          <option value="" ${!u.ccTier.overdrawing?'selected':''}>— select —</option>
+          <option value="never" ${u.ccTier.overdrawing==='never'?'selected':''}>Never</option>
+          <option value="two" ${u.ccTier.overdrawing==='two'?'selected':''}>On 2 occasions</option>
+          <option value="more" ${u.ccTier.overdrawing==='more'?'selected':''}>On more than 2 occasions</option>
+        </select> <span class="hint">(manual)</span></td>
+        <td class="num">${g.ccOps.overdrawScore==null?'—':g.ccOps.overdrawScore}</td></tr>` : ''}
+      <tr><td></td><td><b>Total</b></td><td class="num"><b>100</b></td><td></td><td class="num"><b>${g.overall.toFixed(2)}</b></td></tr>
     </tbody></table></div>
-    <button class="btn" style="margin-top:8px" type="submit">Save Manual Assessment Scores</button>
-    </form>
-    <p class="hint" style="margin-top:8px">Auto-filled indicators are drawn from the same underlying records as the Local Grading Framework above and Data Quality Check — there is only one set of underlying figures, never separately re-entered.</p>
+
+    <div class="grid cols3" style="margin-top:10px">
+      ${g.grade ? stat('Grade', g.grade) : stat('Grade', 'Pending manual assessment', true)}
+      ${stat('Marks Obtained', g.overall.toFixed(2)+' / 100')}
+      ${stat('Credit-Linkage Eligible', g.grade==='A'||g.grade==='B' ? 'Yes' : (g.grade?'No':'—'), !(g.grade==='A'||g.grade==='B'))}
+    </div>
+    ${g.pendingParts.length ? `<div class="msg err" style="margin-top:10px">Grade Pending: ${g.pendingParts.map(esc).join('; ')}.</div>` : ''}
+    <p class="hint" style="margin-top:6px">Grade bands: A ≥80, B 70–79, C 60–69, D &lt;60. Only A &amp; B graded SHGs are to be considered for credit linkage, per the proforma.</p>
+    <button class="btn" style="margin-top:8px" onclick="saveNabardOfficialGrading()" ${g.pendingParts.length?'disabled title="Resolve the pending items above first"':''}>Save this Assessment to History</button>
   </div>`;
+
+  const hist = (DB.grading.nabardHistory||[]).slice().reverse();
+  html += `<div class="card"><h3>NABARD Grading History</h3>`;
+  html += hist.length ? tbl(['Saved On','Format','Period','Marks','Grade','Eligible','By'], hist.map(h=>[
+    fmtDate(h.savedAt.slice(0,10)), NABARD_FORMATS[h.format].label.replace('Format 1 — ','').replace('Format 2 — ',''),
+    fmtDate(h.from)+' to '+fmtDate(h.to), h.overall.toFixed(2), h.grade||'Pending',
+    (h.grade==='A'||h.grade==='B')?badge('Yes','green'):badge('No','amber'), esc(h.savedBy||'—')
+  ])) : `<div class="empty">No NABARD-format assessments saved yet.</div>`;
+  html += `</div>`;
   return html;
 }
 function showGradeRevisions(ym){
@@ -3071,9 +3240,11 @@ function viewBankLoanApplication(){
   html += `<div class="card"><h3>Current Corpus</h3><div class="grid cols4">
     ${stat('Member Savings', rupee(corpus.savings))}
     ${stat('Capital Fund', rupee(corpus.capitalFund))}
-    ${stat('CIF', rupee(corpus.cif))}
-    ${stat('Total Corpus', rupee(corpus.total))}
-  </div></div>`;
+    ${stat('Revolving Fund', rupee(corpus.revolvingFund))}
+    ${stat('Total Corpus (excl. CIF/borrowings)', rupee(corpus.total))}
+  </div>
+  <p class="hint" style="margin-top:6px">CIF (${rupee(corpus.cif)}) is a borrowed fund and is excluded from Corpus here — see the dedicated Corpus screen for the full breakdown and the Total Assets − Borrowings cross-check.</p>
+  </div>`;
   html += `<div class="card"><h3>Dose-wise Eligibility (Configurable)</h3>${tbl(['Dose','Label','Multiple of Corpus','Minimum Amount','Indicative Eligible Amount'],
     DB.loanDoseEligibility.map((d,i)=>{
       const calc = calculateDoseEligibility(d.dose, corpus.total);
@@ -3561,7 +3732,7 @@ function restoreBackup(){
     try{
       const data = JSON.parse(e.target.result);
       if(!data.members || !data.transactions) throw new Error('This does not look like a valid backup file.');
-      DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabard:{}}; if(!DB.grading.nabard) DB.grading.nabard={};
+      DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]}; if(!DB.grading.nabardHistory) DB.grading.nabardHistory=[];
       logAudit('BACKUP_RESTORE','Data restored from backup file');
       flash('ok','Backup restored.'); render();
     }catch(err){ alert('Restore failed: '+err.message); }
