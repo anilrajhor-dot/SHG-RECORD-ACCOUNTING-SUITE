@@ -981,9 +981,10 @@ function viewProfile(){
     <button class="btn" type="submit">Save Profile</button>
   </form></div>`;
 
-  html += `<div class="card"><h3>Bank Accounts</h3>`;
-  html += p.banks.length ? tbl(['Bank','Branch','Account No.','IFSC',''],
-    p.banks.map((b,i)=>[esc(b.bank),esc(b.branch),esc(b.accno),esc(b.ifsc),`<button class="btn small danger" onclick="removeBank(${i})">Remove</button>`])) :
+  html += `<div class="card"><h3>Bank Accounts</h3><p class="hint">The SHG's own savings/CC account(s) — the Account Number here is what appears on statements, the Bank Loan Application letter and LokOS export. Mark the one your UPI ID is linked to (a UPI ID always settles into one specific bank account).</p>`;
+  html += p.banks.length ? tbl(['Bank','Branch','Account No.','IFSC','UPI ID Linked',''],
+    p.banks.map((b,i)=>[esc(b.bank),esc(b.branch),esc(b.accno),esc(b.ifsc), b.upiLinked?(esc(b.upiId||'Yes')+' '+badge('UPI-linked','green')):(b.upiId?esc(b.upiId):'—'),
+      `<button class="btn small secondary" onclick="editBankPrompt(${i})">Edit</button> <button class="btn small danger" onclick="removeBank(${i})">Remove</button>`])) :
     `<div class="empty">No bank accounts added.</div>`;
   html += `<div style="margin-top:10px"><button class="btn secondary small" onclick="addBankPrompt()">+ Add Bank Account</button></div></div>`;
   return html;
@@ -1002,29 +1003,94 @@ function addBankPrompt(){
     <div class="field"><label>Branch</label><input name="branch"></div>
     <div class="field"><label>Account Number</label><input name="accno" required></div>
     <div class="field"><label>IFSC</label><input name="ifsc"></div>
+    <div class="field"><label>UPI ID linked to this account <span class="hint">(e.g. shgname@upi — leave blank if none)</span></label><input name="upiId" placeholder="e.g. jyotishg@upi"></div>
+    <div class="field"><label><input type="checkbox" name="upiLinked" style="width:auto"> This is the account the SHG's UPI ID settles into</label></div>
     <button class="btn" type="submit">Add</button>
   </form>`);
 }
 function addBank(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
-  DB.profile.banks.push({bank:f.get('bank'),branch:f.get('branch'),accno:f.get('accno'),ifsc:f.get('ifsc')});
+  DB.profile.banks.push({bank:f.get('bank'),branch:f.get('branch'),accno:f.get('accno'),ifsc:f.get('ifsc'),upiId:f.get('upiId')||'',upiLinked:!!f.get('upiLinked')});
   closeModal(); flash('ok','Bank account added.'); render(); return false;
+}
+function editBankPrompt(i){
+  const b = DB.profile.banks[i]; if(!b) return;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Edit Bank Account</h3>
+  <form onsubmit="return saveBankEdit(event,${i})">
+    <div class="field"><label>Bank Name</label><input name="bank" required value="${esc(b.bank)}"></div>
+    <div class="field"><label>Branch</label><input name="branch" value="${esc(b.branch)}"></div>
+    <div class="field"><label>Account Number</label><input name="accno" required value="${esc(b.accno)}"></div>
+    <div class="field"><label>IFSC</label><input name="ifsc" value="${esc(b.ifsc)}"></div>
+    <div class="field"><label>UPI ID linked to this account</label><input name="upiId" value="${esc(b.upiId||'')}" placeholder="e.g. jyotishg@upi"></div>
+    <div class="field"><label><input type="checkbox" name="upiLinked" style="width:auto" ${b.upiLinked?'checked':''}> This is the account the SHG's UPI ID settles into</label></div>
+    <button class="btn" type="submit">Save</button>
+  </form>`);
+}
+function saveBankEdit(ev,i){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  const b = DB.profile.banks[i]; if(!b) return false;
+  Object.assign(b, {bank:f.get('bank'),branch:f.get('branch'),accno:f.get('accno'),ifsc:f.get('ifsc'),upiId:f.get('upiId')||'',upiLinked:!!f.get('upiLinked')});
+  closeModal(); flash('ok','Bank account updated.'); render(); return false;
 }
 function removeBank(i){ if(confirm('Remove this bank account?')){ DB.profile.banks.splice(i,1); render(); } }
 
 /* ============================================================ MEMBERS */
 function viewMembers(){
   let html = `<div class="section-title"><h2>Member Register</h2><button class="btn" onclick="memberForm()">+ Add Member</button></div>`;
-  if(!DB.members.length){ html += `<div class="card"><div class="empty">No members yet. Add your first member to begin.</div></div>`; return html; }
+  const live = DB.members.filter(m=>m.status!=='Deleted');
+  const deleted = DB.members.filter(m=>m.status==='Deleted');
+  if(!live.length && !deleted.length){ html += `<div class="card"><div class="empty">No members yet. Add your first member to begin.</div></div>`; return html; }
   html += `<div class="card">`;
-  html += tbl(['ID','Name','Father/Husband','Mobile','Village','Status','Savings Bal.','Loan O/S',''],
-    DB.members.map(m=>[m.id, esc(m.name), esc(m.fatherHusband), esc(m.mobile), esc(m.village),
+  html += live.length ? tbl(['ID','Name','Father/Husband','Mobile','Village','Status','Savings Bal.','Loan O/S',''],
+    live.map(m=>[m.id, esc(m.name), esc(m.fatherHusband), esc(m.mobile), esc(m.village),
       badge(m.status, m.status==='Active'?'green':(m.status==='Exited'?'red':'amber')),
       rightCell(rupee(memberSavingsBalance(m.id))), rightCell(rupee(memberLoanOutstanding(m.id))),
-      `<button class="btn small secondary" onclick="memberForm('${m.id}')">Edit</button> <a style="cursor:pointer;font-size:12px" onclick="go('memberstatement');setTimeout(()=>document.getElementById('msMember').value='${m.id}',0)">Statement</a>`
-    ]));
+      `<button class="btn small secondary" onclick="memberForm('${m.id}')">Edit</button> <a style="cursor:pointer;font-size:12px" onclick="go('memberstatement');setTimeout(()=>document.getElementById('msMember').value='${m.id}',0)">Statement</a> <button class="btn small danger" onclick="deleteMemberPrompt('${m.id}')">Delete</button>`
+    ])) : `<div class="empty">No members yet. Add your first member to begin.</div>`;
+  html += `</div>`;
+
+  html += `<div class="card"><h3>Deleted Members ${deleted.length?('('+deleted.length+')'):''}</h3>`;
+  html += deleted.length ? tbl(['ID','Name','Deleted On','Deleted By','Reason',''],
+    deleted.map(m=>[m.id, esc(m.name), fmtDate((m.deletedAt||'').slice(0,10)), esc(m.deletedBy||'—'), esc(m.deleteReason||'—'),
+      `<button class="btn small secondary" onclick="restoreMember('${m.id}')">Restore</button> <a style="cursor:pointer;font-size:12px" onclick="go('memberstatement');setTimeout(()=>document.getElementById('msMember').value='${m.id}',0)">Statement</a>`]))
+    : `<div class="empty">No members have been deleted. Deleting a member never erases their savings/loan history — it only removes them from active lists, and every deletion (with who did it, when, and why) stays listed here so it can be reviewed or reversed.</div>`;
   html += `</div>`;
   return html;
+}
+function deleteMemberPrompt(id){
+  const m = DB.members.find(x=>x.id===id); if(!m) return;
+  const sav = memberSavingsBalance(id), loanOs = memberLoanOutstanding(id);
+  const hasBalance = sav>0.5 || loanOs>0.5;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Delete Member — ${esc(m.name)} (${m.id})</h3>
+    <p class="hint">Deleting only removes this member from active lists (attendance, new savings/loan entries, MCP, grading). Their ID, savings/loan history and past transactions are kept exactly as posted, and this deletion is recorded below so it can be reviewed or undone.</p>
+    ${hasBalance ? `<div class="msg err">This member still has Savings Balance ${rupee(sav)} and/or Loan Outstanding ${rupee(loanOs)}. Settle these first if possible — or tick below to delete anyway (e.g. the member exited and these are being written off/handled separately).</div>` : ''}
+    <form onsubmit="return deleteMember(event,'${id}')">
+      <div class="field"><label>Reason for Deletion *</label><input name="reason" required placeholder="e.g. Member relocated / left the group / entered by mistake"></div>
+      ${hasBalance ? `<div class="field"><label><input type="checkbox" name="force" style="width:auto" required> I confirm deletion despite the outstanding balance above</label></div>` : ''}
+      <button class="btn danger" type="submit">Delete Member</button>
+    </form>`);
+}
+function deleteMember(ev,id){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  const m = DB.members.find(x=>x.id===id); if(!m){ closeModal(); return false; }
+  const reason = (f.get('reason')||'').trim();
+  if(!reason){ flash('error','A reason is required to delete a member.'); render(); return false; }
+  m.statusBeforeDelete = m.status;
+  m.status = 'Deleted';
+  m.deletedAt = nowStamp();
+  m.deletedBy = DB.settings.currentUserName;
+  m.deleteReason = reason;
+  logAudit('DELETE_MEMBER', id+' ('+m.name+') deleted — '+reason);
+  closeModal(); flash('ok','Member deleted. See Deleted Members below to review or restore.'); render();
+  return false;
+}
+function restoreMember(id){
+  const m = DB.members.find(x=>x.id===id); if(!m) return;
+  m.status = m.statusBeforeDelete || 'Active';
+  const prevReason = m.deleteReason;
+  m.deletedAt=''; m.deletedBy=''; m.deleteReason=''; m.statusBeforeDelete='';
+  logAudit('RESTORE_MEMBER', id+' ('+m.name+') restored (was deleted: '+(prevReason||'')+')');
+  flash('ok','Member restored.'); render();
 }
 function badge(text,cls){ return `<span class="badge ${cls}">${esc(text)}</span>`; }
 function memberForm(id){
@@ -2244,11 +2310,11 @@ function viewBankLoanToSHG(){
     ${stat('Total Bank Loan Outstanding', rupee(accountBalance('BANK_TL')+accountBalance('BANK_CC')))}
   </div>`;
   if(!DB.bankLoans.length){ html += `<div class="card"><div class="empty">No TL/CC facility recorded yet.</div></div>`; return html; }
-  html += `<div class="card">${tbl(['Facility ID','Type','Sanction Date','Sanctioned Amount','Utilised','Not Utilised','Outstanding Payable','Rate %',''],
+  html += `<div class="card">${tbl(['Facility ID','Bank A/c No.','Type','Sanction Date','Sanctioned Amount','Utilised','Not Utilised','Outstanding Payable','Rate %',''],
     DB.bankLoans.map(b=>{
       const utilised = bankLoanUtilised(b.id);
       const notUtilised = Math.max(0, Math.round((b.sanctionedAmount-utilised)*100)/100);
-      return [b.id, b.type, fmtDate(b.sanctionDate), rightCell(rupee(b.sanctionedAmount)), rightCell(rupee(utilised)),
+      return [b.id, esc(b.loanAccountNo||'—'), b.type, fmtDate(b.sanctionDate), rightCell(rupee(b.sanctionedAmount)), rightCell(rupee(utilised)),
         rightCell(notUtilised>0?rupee(notUtilised):'—'), rightCell(rupee(bankLoanOutstanding(b.id))), b.rate+'%',
         `<button class="btn small secondary" onclick="bankLoanDrawalForm('${b.id}')">Drawal</button> <button class="btn small secondary" onclick="bankLoanRepaymentForm('${b.id}')">Repay</button>`];
     }))}</div>`;
@@ -2263,11 +2329,12 @@ function bankLoanSanctionForm(){
       <div class="field"><label>Sanction Date</label><input type="date" name="sanctionDate" value="${todayStr()}"></div>
     </div>
     <div class="row">
+      <div class="field"><label>Loan/CC Account Number *<span class="hint">(as issued by the bank on the sanction letter)</span></label><input name="loanAccountNo" required></div>
       <div class="field"><label>Sanctioned Amount ₹ *</label><input type="number" min="1" step="0.01" name="sanctionedAmount" required></div>
-      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="10"></div>
-      <div class="field"><label>Tenure (months, for TL)</label><input type="number" min="1" step="1" name="tenureMonths" value="60"></div>
     </div>
     <div class="row">
+      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="10"></div>
+      <div class="field"><label>Tenure (months, for TL)</label><input type="number" min="1" step="1" name="tenureMonths" value="60"></div>
       <div class="field"><label>Bank Account</label><select name="bankAccount">${(DB.profile.banks||[]).length ? DB.profile.banks.map(b=>`<option value="${esc(b.bank+' - '+b.accno)}">${esc(b.bank)} — ${esc(b.accno)}</option>`).join('') : `<option value="">Not specified</option>`}</select></div>
     </div>
     <div class="field"><label>Narration</label><input name="narration"></div>
@@ -2280,11 +2347,12 @@ function saveBankLoanSanction(ev){
     const data = Object.fromEntries(f.entries());
     const sanctionedAmount = parseFloat(data.sanctionedAmount);
     if(!sanctionedAmount || sanctionedAmount<=0) throw new Error('Enter a valid sanctioned amount.');
-    const loan = { id: nextId('BKLN'), type:data.type, sanctionDate:data.sanctionDate, sanctionedAmount,
+    if(!(data.loanAccountNo||'').trim()) throw new Error('Enter the Loan/CC Account Number issued by the bank.');
+    const loan = { id: nextId('BKLN'), type:data.type, loanAccountNo:(data.loanAccountNo||'').trim(), sanctionDate:data.sanctionDate, sanctionedAmount,
       rate: parseFloat(data.rate)||0, tenureMonths: parseInt(data.tenureMonths)||60, bankAccount:data.bankAccount||'',
       narration:data.narration||'', status:'Active' };
     DB.bankLoans.push(loan);
-    logAudit('BANK_LOAN_SANCTIONED', loan.id+' ('+loan.type+') sanctioned — '+rupee(sanctionedAmount));
+    logAudit('BANK_LOAN_SANCTIONED', loan.id+' ('+loan.type+', A/c No. '+loan.loanAccountNo+') sanctioned — '+rupee(sanctionedAmount));
     closeModal(); flash('ok','Sanction recorded. Use Drawal to record money actually received.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
@@ -3638,8 +3706,8 @@ function buildExportData(kind){
     rows: DB.cif.map(c=>[c.id,c.date,c.source,c.amount,c.rate,c.interestMethod||'reducing',c.period,cifTrancheOutstanding(c.id).toFixed(2),cifInterestPaidTotal(c.id).toFixed(2),c.status||'Active'])};
   if(kind==='revolvingfund') return {headers:['Date','Source','Amount','Rate','PeriodMonths','OutstandingLiability'],
     rows: DB.revolvingFund.map(c=>[c.date,c.source,c.amount,c.rate,c.period,revolvingFundOutstanding().toFixed(2)])};
-  if(kind==='bankloans') return {headers:['FacilityID','Type','SanctionDate','SanctionedAmount','Utilised','NotUtilised','OutstandingPayable','Rate','Status'],
-    rows: DB.bankLoans.map(b=>{ const utilised=bankLoanUtilised(b.id); return [b.id,b.type,b.sanctionDate,b.sanctionedAmount,utilised.toFixed(2),
+  if(kind==='bankloans') return {headers:['FacilityID','LoanAccountNo','Type','SanctionDate','SanctionedAmount','Utilised','NotUtilised','OutstandingPayable','Rate','Status'],
+    rows: DB.bankLoans.map(b=>{ const utilised=bankLoanUtilised(b.id); return [b.id,b.loanAccountNo||'',b.type,b.sanctionDate,b.sanctionedAmount,utilised.toFixed(2),
       Math.max(0,b.sanctionedAmount-utilised).toFixed(2), bankLoanOutstanding(b.id).toFixed(2), b.rate, b.status]; })};
   if(kind==='attendance') return {headers:['MeetingDate','MemberID','Member','Present'],
     rows: DB.meetings.flatMap(mt=>activeMembers().map(m=>[mt.date,m.id,memberName(m.id), (mt.presentIds||[]).includes(m.id)?'Yes':'No']))};
