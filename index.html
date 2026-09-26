@@ -358,7 +358,7 @@ function defaultLokosMapping(){
     members: [{internal:'MemberID',lokos:'MemberID',mandatory:true},{internal:'Name',lokos:'Name',mandatory:true},{internal:'FatherHusband',lokos:'FatherHusbandName',mandatory:false},{internal:'Mobile',lokos:'MobileNo',mandatory:false},{internal:'Village',lokos:'Village',mandatory:false},{internal:'DOJ',lokos:'DateOfJoining',mandatory:true},{internal:'Status',lokos:'MemberStatus',mandatory:true}],
     savings: [{internal:'MemberID',lokos:'MemberID',mandatory:true},{internal:'Name',lokos:'Name',mandatory:false},{internal:'ClosingSavingsBalance',lokos:'SavingsBalance',mandatory:true}],
     loans: [{internal:'LoanID',lokos:'LoanID',mandatory:true},{internal:'MemberID',lokos:'MemberID',mandatory:true},{internal:'Member',lokos:'MemberName',mandatory:false},{internal:'Purpose',lokos:'LoanPurpose',mandatory:false},{internal:'Principal',lokos:'PrincipalAmount',mandatory:true},{internal:'InterestRate',lokos:'InterestRate',mandatory:true},{internal:'InterestMethod',lokos:'InterestMethod',mandatory:false},{internal:'Instalments',lokos:'Instalments',mandatory:false},{internal:'Frequency',lokos:'RepaymentFrequency',mandatory:false},{internal:'OutstandingPrincipal',lokos:'OutstandingPrincipal',mandatory:true},{internal:'InterestDue',lokos:'InterestDue',mandatory:false},{internal:'Status',lokos:'LoanStatus',mandatory:true},{internal:'NextDueDate',lokos:'NextDueDate',mandatory:false}],
-    cif: [{internal:'Date',lokos:'ReceiptDate',mandatory:true},{internal:'Source',lokos:'Source',mandatory:false},{internal:'Amount',lokos:'CIFAmount',mandatory:true},{internal:'Rate',lokos:'InterestRate',mandatory:false},{internal:'PeriodMonths',lokos:'RepaymentPeriodMonths',mandatory:false},{internal:'OutstandingLiability',lokos:'OutstandingLiability',mandatory:true}],
+    cif: [{internal:'CIFID',lokos:'CIFID',mandatory:true},{internal:'Date',lokos:'ReceiptDate',mandatory:true},{internal:'Source',lokos:'Source',mandatory:false},{internal:'Amount',lokos:'CIFAmount',mandatory:true},{internal:'Rate',lokos:'InterestRate',mandatory:false},{internal:'InterestMethod',lokos:'InterestMethod',mandatory:false},{internal:'PeriodMonths',lokos:'RepaymentPeriodMonths',mandatory:false},{internal:'OutstandingLiability',lokos:'OutstandingLiability',mandatory:true},{internal:'InterestPaid',lokos:'InterestPaid',mandatory:false},{internal:'Status',lokos:'Status',mandatory:true}],
     transactions: [{internal:'Date',lokos:'TransactionDate',mandatory:true},{internal:'VoucherNo',lokos:'VoucherNo',mandatory:true},{internal:'Type',lokos:'TransactionType',mandatory:false},{internal:'Debit',lokos:'DebitHead',mandatory:true},{internal:'Credit',lokos:'CreditHead',mandatory:true},{internal:'Amount',lokos:'Amount',mandatory:true},{internal:'MemberID',lokos:'MemberID',mandatory:false},{internal:'Narration',lokos:'Narration',mandatory:false}]
   };
 }
@@ -384,6 +384,15 @@ function loadDB(){
       if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
       if(!DB.revolvingFund) DB.revolvingFund = [];
       if(!DB.bankLoans) DB.bankLoans = [];
+      // Migrate CIF records saved before CIF became a proper loan sub-ledger: give any entry
+      // missing an id/status/interestMethod one, without touching amounts or existing postings.
+      if(DB.cif && DB.cif.length){
+        DB.cif.forEach(c=>{
+          if(!c.id) c.id = nextId('CIF');
+          if(!c.interestMethod) c.interestMethod = 'reducing';
+          if(!c.status) c.status = 'Active';
+        });
+      }
       return;
     }
   }catch(e){}
@@ -438,7 +447,7 @@ function postTxn(t){
     voucherNo: t.voucherNo || nextId('V'),
     type: t.type||'Journal',
     debit: t.debit, credit: t.credit, amount: amt,
-    memberId: t.memberId||'', loanId: t.loanId||'', bankLoanId: t.bankLoanId||'', meetingId: t.meetingId||'',
+    memberId: t.memberId||'', loanId: t.loanId||'', bankLoanId: t.bankLoanId||'', cifId: t.cifId||'', meetingId: t.meetingId||'',
     narration: t.narration||'',
     createdBy: DB.settings.currentUserName, createdAt: nowStamp(),
     modifiedBy:'', modifiedAt:'',
@@ -454,7 +463,7 @@ function reverseTxn(id, reason){
   if(!orig) throw new Error('Transaction not found.');
   if(orig.reversed) throw new Error('Already reversed.');
   const rev = postTxn({date: todayStr(), type:'Reversal', debit:orig.credit, credit:orig.debit,
-    amount:orig.amount, memberId:orig.memberId, loanId:orig.loanId, bankLoanId:orig.bankLoanId, meetingId:orig.meetingId,
+    amount:orig.amount, memberId:orig.memberId, loanId:orig.loanId, bankLoanId:orig.bankLoanId, cifId:orig.cifId, meetingId:orig.meetingId,
     narration:'Reversal of '+orig.voucherNo+(reason?(' — '+reason):''), reversalOf:orig.id});
   orig.reversed = true;
   orig.modifiedBy = DB.settings.currentUserName; orig.modifiedAt = nowStamp();
@@ -480,6 +489,7 @@ function ledgerMovement(code, opts){
     if(opts.memberId && t.memberId!==opts.memberId) continue;
     if(opts.loanId && t.loanId!==opts.loanId) continue;
     if(opts.bankLoanId && t.bankLoanId!==opts.bankLoanId) continue;
+    if(opts.cifId && t.cifId!==opts.cifId) continue;
     if(t.debit===code) dr += t.amount;
     if(t.credit===code) cr += t.amount;
   }
@@ -965,9 +975,9 @@ function saveMember(ev,id){
 
 /* ============================================================ MEETINGS (guided workflow) */
 function viewMeetings(){
-  let html = `<div class="section-title"><h2>SHG Meetings</h2><div class="row"><button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button><button class="btn" onclick="go('meetingnew')">+ Conduct New Meeting</button></div></div>`;
+  let html = `<div class="section-title"><h2>SHG Meetings</h2><div class="row"><button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button><button class="btn" onclick="startNewMeeting()">+ Conduct New Meeting</button></div></div>`;
   html += `<div class="card">`;
-  html += DB.meetings.length ? tbl(['Date','Attendance','Savings','Principal','Interest','Fine','Total Collection','New Loans','Expenses','Deposit Made','Recon.','Status',''],
+  html += DB.meetings.length ? tbl(['Date','Place','Attendance','Savings','Principal','Interest','Fine','Total Collection','New Loans','Expenses','Deposit Made','Recon.','Status',''],
     DB.meetings.slice().reverse().map(mt=>{
       const pct = mt.totalMembers ? Math.round(mt.present/mt.totalMembers*100) : 0;
       // Older meetings (before principal/interest were split) only have a combined totals.repayment.
@@ -979,7 +989,7 @@ function viewMeetings(){
         const diff = Math.round((mt.actualReceived-totalCollection)*100)/100;
         recon = diff===0 ? badge('Matched','green') : badge(rupee(Math.abs(diff))+(diff>0?' extra':' short'),'amber');
       }
-      return [fmtDate(mt.date), mt.present+'/'+mt.totalMembers+' ('+pct+'%)',
+      return [fmtDate(mt.date), esc(mt.place||'—'), mt.present+'/'+mt.totalMembers+' ('+pct+'%)',
       rightCell(rupee(mt.totals.savings)), rightCell(rupee(principal)), rightCell(rupee(interest)), rightCell(rupee(mt.totals.fines)),
       rightCell('<b>'+rupee(totalCollection)+'</b>'), rightCell(rupee(mt.totals.newLoans)),
       rightCell(rupee(mt.totals.expenses)), mt.bankDeposit&&mt.bankDeposit.amount?rightCell(rupee(mt.bankDeposit.amount)):'—',
@@ -1025,8 +1035,9 @@ function viewMeetingDetail(meetingId){
     return [esc(memberName(memberId)), lid, rightCell(rupee(prin)), rightCell(rupee(int_)), rightCell('<b>'+rupee(prin+int_)+'</b>'), rightCell(rupee(loanOutstanding(lid).principal))];
   });
   const nonMember = txns.filter(t=>!t.memberId);
-  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Details — ${fmtDate(mt.date)}</h3>
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Details — ${fmtDate(mt.date)}${mt.place?(' — '+esc(mt.place)):''}</h3>
     <p class="hint">Present: ${mt.present}/${mt.totalMembers}${mt.postedBy?(' · Posted by '+esc(mt.postedBy)+(mt.postedAt?(' on '+fmtDate(mt.postedAt.slice(0,10))):'')):''}</p>
+    ${mt.minutes && mt.minutes.length ? `<h4>Minutes of Meeting</h4>${mt.minutes.map((a,i)=>`<div class="qcard" style="margin-bottom:6px"><b>${i+1}. ${esc(a.topic||'(untitled)')}</b><div class="hint" style="margin-top:3px">${esc(a.discussion||'')}</div></div>`).join('')}` : ''}
     <h4>Member-wise</h4>${memberRows.length ? tbl(['Member','Savings','Loan Repayment','Fine','Total'], memberRows) : '<div class="empty">No member-wise transactions.</div>'}
     ${loanRows.length ? `<h4 style="margin-top:12px">Loan-wise</h4>${tbl(['Member','Loan ID','Principal','Interest','Total','Loan O/S Now'], loanRows)}` : ''}
     ${nonMember.length ? `<h4 style="margin-top:12px">Other Entries (New Loan / Expenses)</h4>${tbl(['Type','Debit','Credit','Amount','Narration'],
@@ -1039,124 +1050,184 @@ function meetingWorkflow(){
   const today = todayStr();
   const dueList = [];
   members.forEach(m=> memberDueInfos(m.id, today).forEach(d=>{ if(d.totalDue>0.5) dueList.push({m,d}); }));
+  const membersWithLoans = members.filter(m=>memberDueInfos(m.id, today).length>0);
 
-  let html = '';
-  if(dueList.length){
-    html += `<div class="card"><h3>Members with Repayment Due (${dueList.length} loan(s))</h3>
+  let html = `<div class="card" style="padding:10px 14px">
+    <div id="meetingStepIndicator" style="font-weight:700;color:var(--navy-2);font-size:13.5px">Step 1 of 6 — ${MEETING_STEP_NAMES[0]}</div>
+    <div id="meetingStepDots" style="display:flex;gap:5px;margin-top:6px">${[1,2,3,4,5,6].map(n=>`<div style="flex:1;height:4px;border-radius:2px;background:${n===1?'var(--navy-2)':'#D9E1E8'}"></div>`).join('')}</div>
+  </div>`;
+
+  html += `<div class="card"><form onsubmit="return postMeeting(event)">
+
+  <!-- STEP 1: Date, Place & Attendance -->
+  <div class="mstep" data-step="1">
+    <h3>Meeting Date, Place &amp; Attendance</h3>
+    <div class="row">
+      <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
+      <div class="field"><label>Place / Venue</label><input name="place" placeholder="e.g. Community Hall, Sample Village"></div>
+      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+    </div>
+    <h3 style="margin-top:14px">Attendance</h3>
+    <p class="hint">All members are listed below — mark only who is absent; everyone else stays present.</p>
+    <div class="tablewrap"><table><thead><tr><th>Member</th><th>Present</th></tr></thead><tbody>
+      ${members.map(m=>`<tr><td>${esc(m.name)}</td><td><input type="checkbox" name="present_${m.id}" checked style="width:auto"></td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="row" style="margin-top:14px"><button type="button" class="btn" onclick="goToMeetingStep(2)">Next: Minutes of Meeting →</button></div>
+  </div>
+
+  <!-- STEP 2: Minutes of Meeting -->
+  <div class="mstep" data-step="2" style="display:none">
+    <h3>Minutes of Meeting</h3>
+    <p class="hint">Add one entry per agenda item. Use the mic to dictate the discussion/decision, or type it directly.</p>
+    <textarea id="minutesJSON" name="minutesJSON" style="display:none">${esc(JSON.stringify(MEETING_AGENDA))}</textarea>
+    <div id="agendaList">${renderAgendaList()}</div>
+    <div class="row" style="margin-top:6px">
+      <button type="button" class="btn secondary small" onclick="addAgendaItem()">+ Add Agenda Item</button>
+      <button type="button" class="btn secondary small" onclick="replayAllMinutes()">🔊 Replay All Minutes</button>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="btn secondary" onclick="goToMeetingStep(1)">← Back</button>
+      <button type="button" class="btn" onclick="goToMeetingStep(3)">Next: Savings &amp; Fine →</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: Savings & Fine -->
+  <div class="mstep" data-step="3" style="display:none">
+    <h3>Members Savings &amp; Fine</h3>
+    <div class="helpbox">Enter each member's savings and any fine — this is the only place savings need to be entered; the Members Savings ledger updates automatically.</div>
+    ${members.map(m=>`<div class="card" style="margin-top:8px;padding:10px 12px">
+      <div style="font-weight:600;margin-bottom:6px">${esc(m.name)}</div>
+      <div class="row">
+        <div class="field"><label>Savings ₹</label><input type="number" min="0" step="0.01" name="sav_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
+        <div class="field"><label>Fine ₹</label><input type="number" min="0" step="0.01" name="fine_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
+        <div class="field"><label>Member Total</label><div class="num" id="mtotal_${m.id}" style="padding-top:8px;font-weight:600">₹0.00</div></div>
+      </div>
+    </div>`).join('')}
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="btn secondary" onclick="goToMeetingStep(2)">← Back</button>
+      <button type="button" class="btn" onclick="goToMeetingStep(4)">Next: Loan Repayment →</button>
+    </div>
+  </div>
+
+  <!-- STEP 4: Loan Repayment -->
+  <div class="mstep" data-step="4" style="display:none">
+    <h3>Loan Repayment</h3>
+    ${dueList.length ? `<div class="card"><h4 style="margin-top:0">Members with Repayment Due (${dueList.length} loan(s))</h4>
       ${tbl(['Member','Loan ID','Current Instalment (P+I)','Arrears (P+I)','Total Principal Due','Total Interest Due','Total Amount Due'],
         dueList.map(x=>[esc(x.m.name), x.d.loan.id,
           rightCell(rupee(x.d.principalDue)+' + '+rupee(x.d.interestDue)),
           rightCell(x.d.arrears>0?(rupee(x.d.arrearsPrincipal)+' + '+rupee(x.d.arrearsInterest)):'—'),
           rightCell(rupee(x.d.totalPrincipalDue)), rightCell(rupee(x.d.totalInterestDue)),
           rightCell('<b>'+rupee(x.d.totalDue)+'</b>')]))}
-      <p class="hint" style="margin-top:6px">Total Principal Due + Total Interest Due always equals Total Amount Due. As on today — expand a member below and use "Fill Due Amounts" to apply these to the grid; changing the meeting date recalculates as on that date.</p>
-    </div>`;
-  }
-
-  html += `<div class="card"><h3>Conduct Meeting</h3>
-  <div class="helpbox">Enter savings, fines, and each loan's repayment directly here — this is the only place repayments need to be entered. A member with more than one loan repays each loan separately below; nothing needs to be entered twice.</div>
-  <form onsubmit="return postMeeting(event)">
-  <div class="row">
-    <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
-    <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
-  </div>`;
-
-  members.forEach(m=>{ html += renderMemberMeetingCard(m, today); });
-
-  html += `<div class="grid cols4" style="margin-top:10px">
-    <div class="stat"><div class="lbl">Total Savings</div><div class="val" id="meetingTotSav">₹0.00</div></div>
-    <div class="stat"><div class="lbl">Total Principal</div><div class="val" id="meetingTotPrin">₹0.00</div></div>
-    <div class="stat"><div class="lbl">Total Interest</div><div class="val" id="meetingTotInt">₹0.00</div></div>
-    <div class="stat"><div class="lbl">Total Fines</div><div class="val" id="meetingTotFine">₹0.00</div></div>
-  </div>
-  <div class="grid cols3" style="margin-top:10px">
-    <div class="stat"><div class="lbl">Present / Saving / Repaying / Multi-Loan</div><div class="val" id="meetingCounts" style="font-size:13px">—</div></div>
-    <div class="stat"><div class="lbl">Total Collection</div><div class="val" id="meetingGrandTotal">₹0.00</div></div>
-    <div class="stat"><div class="lbl">Net Collection (after new loans &amp; expenses)</div><div class="val" id="meetingNetCollection">₹0.00</div></div>
-  </div>
-  <div class="row" style="margin-top:10px">
-    <div class="field"><label>Actual Cash/Bank Counted Today ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
-  </div>
-  <div class="hint" id="meetingReconDiff"></div>
-  <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" id="allowExcessChk" onchange="toggleAdjustmentReason()" style="width:auto"> Allow a loan's principal or interest payment to exceed the amount due (authorised adjustment)</label></div>
-  <div class="field" id="adjustmentReasonField" style="display:none;margin-top:6px"><label>Reason for Authorised Adjustment *</label><input name="adjustmentReason" placeholder="e.g. advance interest paid by member, rounding settlement"></div>
-  <h3 style="margin-top:16px">New Loan Disbursed at this Meeting (optional)</h3>
-  <div class="row">
-    <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
-    <div class="field"><label>Purpose</label><input name="newloan_purpose"></div>
-    <div class="field"><label>Principal ₹</label><input type="number" min="0" step="0.01" name="newloan_amount" oninput="meetingCalcGrandTotal()"></div>
-    <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="newloan_rate" value="12"></div>
-    <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="newloan_inst" value="12"></div>
-  </div>
-  <div class="hint">A member may take a new loan even while an existing loan is still open — each gets its own Loan ID and independent schedule.</div>
-  <h3 style="margin-top:16px">Meeting Expenses (optional)</h3>
-  <div class="row">
-    <div class="field"><label>Category</label><select name="exp_cat">${DB.expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>
-    <div class="field"><label>Amount ₹</label><input type="number" min="0" step="0.01" name="exp_amount" oninput="meetingCalcGrandTotal()"></div>
-    <div class="field"><label>Narration</label><input name="exp_narration"></div>
-  </div>
-  <div id="depositSection">
-    <h3 style="margin-top:16px">Deposit Meeting Collection into Bank (optional)</h3>
-    <p class="hint">Only applies when Collect In is Cash. The deposit is posted together with this meeting — Debit Bank, Credit Cash — as a transfer, never as income or expense.</p>
-    <div class="row">
-      <div class="field"><label>Deposit Amount ₹</label><input type="number" min="0" step="0.01" name="depositAmount" oninput="meetingCalcGrandTotal()"></div>
-      <div class="field"><label>Deposit Date</label><input type="date" name="depositDate" value="${today}"></div>
-      <div class="field"><label>Bank Account</label><select name="depositBank">${(DB.profile.banks||[]).length ? DB.profile.banks.map(b=>`<option value="${esc(b.bank+' - '+b.accno)}">${esc(b.bank)} — ${esc(b.accno)}</option>`).join('') : `<option value="">Not specified</option>`}</select></div>
-    </div>
-    <div class="row">
-      <div class="field"><label>Deposit / Reference No.</label><input name="depositRef"></div>
-      <div class="field"><label>Remarks</label><input name="depositRemarks"></div>
+      <p class="hint" style="margin-top:6px">Total Principal Due + Total Interest Due always equals Total Amount Due. Use "Fill Due Amounts" below each member to apply these — you can still edit before posting.</p>
+    </div>` : `<div class="card"><div class="empty">No repayments currently due.</div></div>`}
+    ${membersWithLoans.length ? membersWithLoans.map(m=>renderLoanRepaymentCard(m, today)).join('') : ''}
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="btn secondary" onclick="goToMeetingStep(3)">← Back</button>
+      <button type="button" class="btn" onclick="goToMeetingStep(5)">Next: Journal / Other Entries →</button>
     </div>
   </div>
-  <div class="row" style="margin-top:10px">
-    <button class="btn" type="submit">Review &amp; Post Meeting</button>
-    <button class="btn secondary" type="button" onclick="go('meetings')">Cancel</button>
+
+  <!-- STEP 5: Journal / Other Entries -->
+  <div class="mstep" data-step="5" style="display:none">
+    <h3>New Loan Disbursed at this Meeting (optional)</h3>
+    <div class="row">
+      <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Purpose</label><input name="newloan_purpose"></div>
+      <div class="field"><label>Principal ₹</label><input type="number" min="0" step="0.01" name="newloan_amount" oninput="meetingCalcGrandTotal()"></div>
+      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="newloan_rate" value="12"></div>
+      <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="newloan_inst" value="12"></div>
+    </div>
+    <div class="hint">A member may take a new loan even while an existing loan is still open — each gets its own Loan ID and independent schedule.</div>
+    <h3 style="margin-top:16px">Meeting Expenses (optional)</h3>
+    <div class="row">
+      <div class="field"><label>Category</label><select name="exp_cat">${DB.expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>
+      <div class="field"><label>Amount ₹</label><input type="number" min="0" step="0.01" name="exp_amount" oninput="meetingCalcGrandTotal()"></div>
+      <div class="field"><label>Narration</label><input name="exp_narration"></div>
+    </div>
+    <div id="depositSection">
+      <h3 style="margin-top:16px">Deposit Meeting Collection into Bank (optional)</h3>
+      <p class="hint">Only applies when Collect In is Cash. The deposit is posted together with this meeting — Debit Bank, Credit Cash — as a transfer, never as income or expense.</p>
+      <div class="row">
+        <div class="field"><label>Deposit Amount ₹</label><input type="number" min="0" step="0.01" name="depositAmount" oninput="meetingCalcGrandTotal()"></div>
+        <div class="field"><label>Deposit Date</label><input type="date" name="depositDate" value="${today}"></div>
+        <div class="field"><label>Bank Account</label><select name="depositBank">${(DB.profile.banks||[]).length ? DB.profile.banks.map(b=>`<option value="${esc(b.bank+' - '+b.accno)}">${esc(b.bank)} — ${esc(b.accno)}</option>`).join('') : `<option value="">Not specified</option>`}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Deposit / Reference No.</label><input name="depositRef"></div>
+        <div class="field"><label>Remarks</label><input name="depositRemarks"></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="btn secondary" onclick="goToMeetingStep(4)">← Back</button>
+      <button type="button" class="btn" onclick="goToMeetingStep(6)">Next: Review &amp; Post →</button>
+    </div>
   </div>
+
+  <!-- STEP 6: Review & Post -->
+  <div class="mstep" data-step="6" style="display:none">
+    <h3>Totals &amp; Review</h3>
+    <div class="grid cols4">
+      <div class="stat"><div class="lbl">Total Savings</div><div class="val" id="meetingTotSav">₹0.00</div></div>
+      <div class="stat"><div class="lbl">Total Principal</div><div class="val" id="meetingTotPrin">₹0.00</div></div>
+      <div class="stat"><div class="lbl">Total Interest</div><div class="val" id="meetingTotInt">₹0.00</div></div>
+      <div class="stat"><div class="lbl">Total Fines</div><div class="val" id="meetingTotFine">₹0.00</div></div>
+    </div>
+    <div class="grid cols3" style="margin-top:10px">
+      <div class="stat"><div class="lbl">Present / Saving / Repaying / Multi-Loan</div><div class="val" id="meetingCounts" style="font-size:13px">—</div></div>
+      <div class="stat"><div class="lbl">Total Collection</div><div class="val" id="meetingGrandTotal">₹0.00</div></div>
+      <div class="stat"><div class="lbl">Net Collection (after new loans &amp; expenses)</div><div class="val" id="meetingNetCollection">₹0.00</div></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="field"><label>Actual Cash/Bank Counted Today ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
+    </div>
+    <div class="hint" id="meetingReconDiff"></div>
+    <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" id="allowExcessChk" onchange="toggleAdjustmentReason()" style="width:auto"> Allow a loan's principal or interest payment to exceed the amount due (authorised adjustment)</label></div>
+    <div class="field" id="adjustmentReasonField" style="display:none;margin-top:6px"><label>Reason for Authorised Adjustment *</label><input name="adjustmentReason" placeholder="e.g. advance interest paid by member, rounding settlement"></div>
+    <div class="row" style="margin-top:14px">
+      <button type="button" class="btn secondary" onclick="goToMeetingStep(5)">← Back</button>
+      <button class="btn" type="submit">Review &amp; Post Meeting</button>
+      <button class="btn secondary" type="button" onclick="go('meetings')">Cancel</button>
+    </div>
+  </div>
+
   </form></div>`;
   return html;
 }
-// One member's card: Present/Savings/Fine at member level, plus an expandable per-loan grid
-// (native <details>, so no JS is needed to show/hide, and field values still submit when
-// collapsed). This is what keeps a 2-loan member's repayment unambiguous — every rupee typed
-// goes into a specific loan's own Principal/Interest field, never a shared member-level box.
-function renderMemberMeetingCard(m, asOfDate){
+// One member's loan-wise repayment card — used only in Step 4, for members who hold at least
+// one active loan. Every rupee typed here goes into a specific loan's own Principal/Interest
+// field (never a shared member-level box), matching the app's central loan-wise accounting.
+function renderLoanRepaymentCard(m, asOfDate){
   const dues = memberDueInfos(m.id, asOfDate);
+  if(!dues.length) return '';
   const totalOS = dues.reduce((s,d)=>s+d.outstanding,0);
   const totalDue = dues.reduce((s,d)=>s+d.totalDue,0);
   let html = `<div class="card" id="mcard_${m.id}" style="margin-top:10px;padding:12px 14px">
     <div class="row" style="align-items:center;justify-content:space-between;margin-bottom:6px">
-      <label style="display:flex;align-items:center;gap:7px;font-weight:600;color:var(--text)"><input type="checkbox" name="present_${m.id}" checked style="width:auto"> ${esc(m.name)}</label>
-      <span class="hint">${dues.length?('Loans: '+dues.length+' · O/S '+rupee(totalOS)+(totalDue>0.5?(' · Due '+rupee(totalDue)):'')):'No active loan'}</span>
+      <div style="font-weight:600;color:var(--text)">${esc(m.name)}</div>
+      <span class="hint">Loans: ${dues.length} · O/S ${rupee(totalOS)}${totalDue>0.5?(' · Due '+rupee(totalDue)):''}</span>
     </div>
-    <div class="row">
-      <div class="field"><label>Savings ₹</label><input type="number" min="0" step="0.01" name="sav_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
-      <div class="field"><label>Fine ₹</label><input type="number" min="0" step="0.01" name="fine_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
-      <div class="field"><label>Member Total</label><div class="num" id="mtotal_${m.id}" style="padding-top:8px;font-weight:600">₹0.00</div></div>
-    </div>`;
-  if(dues.length){
-    html += `<details ${totalDue>0.5?'open':''} style="margin-top:6px">
+    <details ${totalDue>0.5?'open':''}>
       <summary style="cursor:pointer;font-weight:600;color:var(--navy-2);font-size:13.5px">Loan-wise Repayment (${dues.length} loan${dues.length>1?'s':''})</summary>
       <div class="row" style="margin-top:8px"><button type="button" class="btn small secondary" onclick="meetingAllocateDue('${m.id}')">Fill Due Amounts</button></div>
       <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Loan ID</th><th>Purpose</th><th>Rate %</th><th>Loan O/S</th><th>Current Principal Due</th><th>Current Interest Due</th><th>Arrears Principal</th><th>Arrears Interest</th><th>Total Principal Due</th><th>Total Interest Due</th><th>Total Amount Due</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Balance</th></tr></thead><tbody>`;
-    dues.forEach(d=>{
-      html += `<tr>
-        <td>${d.loan.id}</td><td>${esc(d.loan.purpose||'—')}</td><td class="num">${d.loan.interestRate}%</td>
-        <td class="num">${rupee(d.outstanding)}</td>
-        <td class="num" id="pd_${d.loan.id}">${rupee(d.principalDue)}</td>
-        <td class="num" id="id_${d.loan.id}">${rupee(d.interestDue)}</td>
-        <td class="num" id="arp_${d.loan.id}">${rupee(d.arrearsPrincipal)}</td>
-        <td class="num" id="ari_${d.loan.id}">${rupee(d.arrearsInterest)}</td>
-        <td class="num" id="tpd_${d.loan.id}"><b>${rupee(d.totalPrincipalDue)}</b></td>
-        <td class="num" id="tid_${d.loan.id}"><b>${rupee(d.totalInterestDue)}</b></td>
-        <td class="num" id="tad_${d.loan.id}"><b>${d.totalDue>0.5?rupee(d.totalDue):'—'}</b></td>
-        <td><input type="number" min="0" step="0.01" name="rp_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
-        <td><input type="number" min="0" step="0.01" name="ri_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
-        <td class="num" id="loanbal_${d.loan.id}">${d.totalDue>0.5?rupee(d.totalDue):'—'}</td>
-      </tr>`;
-    });
-    html += `</tbody></table></div></details>`;
-  }
-  html += `</div>`;
+  dues.forEach(d=>{
+    html += `<tr>
+      <td>${d.loan.id}</td><td>${esc(d.loan.purpose||'—')}</td><td class="num">${d.loan.interestRate}%</td>
+      <td class="num">${rupee(d.outstanding)}</td>
+      <td class="num" id="pd_${d.loan.id}">${rupee(d.principalDue)}</td>
+      <td class="num" id="id_${d.loan.id}">${rupee(d.interestDue)}</td>
+      <td class="num" id="arp_${d.loan.id}">${rupee(d.arrearsPrincipal)}</td>
+      <td class="num" id="ari_${d.loan.id}">${rupee(d.arrearsInterest)}</td>
+      <td class="num" id="tpd_${d.loan.id}"><b>${rupee(d.totalPrincipalDue)}</b></td>
+      <td class="num" id="tid_${d.loan.id}"><b>${rupee(d.totalInterestDue)}</b></td>
+      <td class="num" id="tad_${d.loan.id}"><b>${d.totalDue>0.5?rupee(d.totalDue):'—'}</b></td>
+      <td><input type="number" min="0" step="0.01" name="rp_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
+      <td><input type="number" min="0" step="0.01" name="ri_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
+      <td class="num" id="loanbal_${d.loan.id}">${d.totalDue>0.5?rupee(d.totalDue):'—'}</td>
+    </tr>`;
+  });
+  html += `</tbody></table></div></details></div>`;
   return html;
 }
 // Fills every one of this member's loan rows with that loan's own due principal/interest —
@@ -1269,13 +1340,96 @@ function meetingCalcGrandTotal(){
 // PASS 2 (confirmPostMeeting, after the user reviews the summary): only then are transactions
 //   actually created, in one go.
 let PENDING_MEETING_PLAN = null;
+// Step-wizard state for the meeting entry form. Kept as plain module variables (not DOM
+// state) because the wizard is one continuous <form> with CSS-toggled sections — no step
+// change ever calls the global render(), so every field the user has already typed stays
+// exactly where it is when moving between steps, same as the app's existing live-total
+// calculations already rely on.
+let MEETING_STEP = 1;
+let MEETING_AGENDA = [{topic:'', discussion:''}];
+const MEETING_STEP_NAMES = ['Date, Place & Attendance','Minutes of Meeting','Members Savings & Fine','Loan Repayment','Journal / Other Entries','Review & Post'];
+function startNewMeeting(){ MEETING_STEP=1; MEETING_AGENDA=[{topic:'', discussion:''}]; go('meetingnew'); }
+function goToMeetingStep(n){
+  if(n<1) n=1; if(n>6) n=6;
+  MEETING_STEP = n;
+  document.querySelectorAll('.mstep').forEach(el=>{ el.style.display = (parseInt(el.getAttribute('data-step'))===n) ? '' : 'none'; });
+  const ind = document.getElementById('meetingStepIndicator'); if(ind) ind.textContent = 'Step '+n+' of 6 — '+MEETING_STEP_NAMES[n-1];
+  const prog = document.getElementById('meetingStepDots');
+  if(prog) Array.from(prog.children).forEach((d,i)=>{ d.style.background = (i+1===n) ? 'var(--navy-2)' : (i+1<n ? 'var(--green)' : '#D9E1E8'); });
+  window.scrollTo(0,0);
+}
+/* ---------------- Minutes of Meeting (agenda-wise), with optional voice input/playback ----------------
+   Voice is used ONLY for the qualitative minutes text, never for financial amounts — every
+   rupee figure in this app must still be typed, so a mis-heard word can never silently change
+   a posted amount. Uses the browser's own Web Speech API; where a device/browser doesn't
+   support it, the mic/replay buttons say so plainly instead of failing silently. */
+function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+function speechLang(){ return (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN'; }
+function renderAgendaList(){
+  return MEETING_AGENDA.map((item,i)=>`
+    <div class="card" style="margin-bottom:8px;padding:10px 12px" id="agendaItem_${i}">
+      <div class="row">
+        <div class="field" style="flex:3"><label>Agenda Item ${i+1}</label><input value="${esc(item.topic)}" oninput="updateAgendaField(${i},'topic',this.value)" placeholder="e.g. Review of loan repayments"></div>
+        ${MEETING_AGENDA.length>1?`<button type="button" class="btn small danger" style="align-self:flex-end;height:38px" onclick="removeAgendaItem(${i})">Remove</button>`:''}
+      </div>
+      <label style="margin-top:6px">Discussion / Decision</label>
+      <div class="row" style="align-items:flex-start;gap:6px">
+        <textarea rows="2" style="flex:1" oninput="updateAgendaField(${i},'discussion',this.value)" placeholder="Type, or use the mic to dictate">${esc(item.discussion)}</textarea>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <button type="button" class="btn small secondary" onclick="startAgendaVoiceInput(${i})" title="Record via voice">🎤</button>
+          <button type="button" class="btn small secondary" onclick="replayAgendaText(${i})" title="Play back">🔊</button>
+        </div>
+      </div>
+    </div>`).join('') + (speechSupported()?'':'<p class="hint">Voice input isn\'t supported on this browser/device — minutes can still be typed normally.</p>');
+}
+function refreshAgendaUI(){ const el=document.getElementById('agendaList'); if(el) el.innerHTML = renderAgendaList(); syncMinutesJSON(); }
+function addAgendaItem(){ MEETING_AGENDA.push({topic:'', discussion:''}); refreshAgendaUI(); }
+function removeAgendaItem(i){ if(MEETING_AGENDA.length<=1) return; MEETING_AGENDA.splice(i,1); refreshAgendaUI(); }
+function updateAgendaField(i,field,val){ if(MEETING_AGENDA[i]) MEETING_AGENDA[i][field]=val; syncMinutesJSON(); }
+function syncMinutesJSON(){ const el=document.getElementById('minutesJSON'); if(el) el.value = JSON.stringify(MEETING_AGENDA); }
+function startAgendaVoiceInput(i){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ alert('Voice input is not supported on this browser/device — please type the minutes instead.'); return; }
+  try{
+    const rec = new SR();
+    rec.lang = speechLang(); rec.interimResults = false; rec.maxAlternatives = 1;
+    rec.onresult = (e)=>{
+      const text = e.results[0][0].transcript;
+      const card = document.getElementById('agendaItem_'+i);
+      const ta = card ? card.querySelector('textarea') : null;
+      if(ta){ ta.value = (ta.value ? ta.value+' ' : '') + text; updateAgendaField(i,'discussion',ta.value); }
+    };
+    rec.onerror = ()=>{ /* user cancelled or mic denied — no crash, just no text added */ };
+    rec.start();
+  }catch(e){ alert('Could not start voice input: '+e.message); }
+}
+function replayAgendaText(i){
+  if(!window.speechSynthesis){ alert('Voice playback is not supported on this browser/device.'); return; }
+  const item = MEETING_AGENDA[i]; if(!item) return;
+  const text = (item.topic?item.topic+'. ':'')+(item.discussion||'');
+  if(!text.trim()){ alert('Nothing recorded yet for this agenda item.'); return; }
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = speechLang();
+  speechSynthesis.cancel(); speechSynthesis.speak(utter);
+}
+function replayAllMinutes(){
+  if(!window.speechSynthesis){ alert('Voice playback is not supported on this browser/device.'); return; }
+  const text = MEETING_AGENDA.map((item,i)=>('Agenda '+(i+1)+': '+(item.topic||'')+'. '+(item.discussion||''))).join(' ');
+  if(!text.trim()){ alert('No minutes recorded yet.'); return; }
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = speechLang();
+  speechSynthesis.cancel(); speechSynthesis.speak(utter);
+}
 function postMeeting(ev){
   ev.preventDefault();
   const f = new FormData(ev.target);
   const date = f.get('date');
+  const place = (f.get('place')||'').trim();
   const mode = f.get('mode');
   const allowExcess = !!f.get('allowExcess');
   const adjustmentReason = (f.get('adjustmentReason')||'').trim();
+  let minutes = [];
+  try{ minutes = JSON.parse(f.get('minutesJSON')||'[]').filter(a=>(a.topic||'').trim()||(a.discussion||'').trim()); }catch(e){ minutes = []; }
   if(!date){ flash('error','Meeting date is required.'); render(); return false; }
   if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
   const members = activeMembers();
@@ -1367,7 +1521,7 @@ function postMeeting(ev){
     const repayingCount = memberEntries.filter(r=>r.loanRows.length>0).length;
     const multiLoanRepayCount = memberEntries.filter(r=>r.loanRows.length>1).length;
 
-    PENDING_MEETING_PLAN = { date, mode, allowExcess, adjustmentReason, anyOverrideUsed, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings,
+    PENDING_MEETING_PLAN = { date, place, mode, allowExcess, adjustmentReason, anyOverrideUsed, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings, minutes,
       totals, totalCollection, netCash, present, totalMembers:members.length, presentIds, absentIds,
       savingCount, repayingCount, multiLoanRepayCount,
       dueCount: (()=>{ let c=0; members.forEach(m=>memberDueInfos(m.id,date).forEach(d=>{ if(d.totalDue>0.5) c++; })); return c; })() };
@@ -1386,7 +1540,8 @@ function showMeetingConfirmation(){
   });
   const loanRows = [];
   p.memberEntries.forEach(r=> r.loanRows.forEach(lr=>{ if(lr.rp>0||lr.ri>0) loanRows.push([esc(r.m.name), lr.loan.id, rightCell(rupee(lr.rp)), rightCell(rupee(lr.ri)), rightCell('<b>'+rupee(lr.rp+lr.ri)+'</b>'), lr.override?badge('Adjustment','amber'):'']); }));
-  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Summary — ${fmtDate(p.date)}</h3>
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Summary — ${fmtDate(p.date)}${p.place?(' — '+esc(p.place)):''}</h3>
+    ${p.minutes && p.minutes.length ? `<p class="hint">Minutes recorded: ${p.minutes.length} agenda item(s)</p>` : ''}
     <div class="grid cols2">
       ${stat('Members Present', p.present+' / '+p.totalMembers)}
       ${stat('Saving / Repaying / Multi-Loan', p.savingCount+' / '+p.repayingCount+' / '+p.multiLoanRepayCount)}
@@ -1447,8 +1602,8 @@ function confirmPostMeeting(){
       postTxn({date:p.deposit.date,type:'Bank Deposit',debit:'BANK',credit:'CASH',amount:p.deposit.amount,meetingId,narration});
     }
     const closingCash = accountBalance('CASH');
-    DB.meetings.push({id:meetingId, date:p.date, totalMembers:p.totalMembers, present:p.present, presentIds:p.presentIds, absentIds:p.absentIds,
-      totals:p.totals, actualReceived:p.actualReceived, mode:p.mode, closingCash,
+    DB.meetings.push({id:meetingId, date:p.date, place:p.place||'', totalMembers:p.totalMembers, present:p.present, presentIds:p.presentIds, absentIds:p.absentIds,
+      totals:p.totals, actualReceived:p.actualReceived, mode:p.mode, closingCash, minutes:p.minutes||[],
       bankDeposit: p.deposit ? {amount:p.deposit.amount, bankAccount:p.deposit.bankAccount, ref:p.deposit.ref} : null,
       postedBy: DB.settings.currentUserName, postedAt: nowStamp()});
     logAudit('POST_MEETING', meetingId+' on '+p.date+' — '+p.present+'/'+p.totalMembers+' present, total collection '+rupee(p.totalCollection));
@@ -1456,6 +1611,7 @@ function confirmPostMeeting(){
     if(p.reconDiff!=null && p.reconDiff!==0) msg += ' Counted-vs-entries difference of '+rupee(Math.abs(p.reconDiff))+' was saved with the meeting.';
     if(p.mode==='CASH' && !p.deposit && p.totalCollection>0) msg += ' Remember to deposit cash collected when convenient (Transfer Funds).';
     PENDING_MEETING_PLAN = null;
+    MEETING_STEP = 1; MEETING_AGENDA = [{topic:'', discussion:''}];
     closeModal();
     flash('ok', msg);
     ROUTE='meetings'; render();
@@ -1708,15 +1864,94 @@ function closeLoan(id){
 }
 
 /* ============================================================ CIF */
+/* ============================================================ CIF (treated as a loan the SHG owes to VO/CLF/NRLM) */
+// CIF now behaves like Member Loans and Bank Loan to SHG: each receipt is its own tranche with
+// its own interest rate, monthly schedule, and repayment record — never one blended figure.
+// Interest is shown monthly in the schedule for planning, but — consistent with every other
+// loan in this app — is only posted to the books when actually paid (cash basis), never accrued
+// in advance. This reuses the same accounting shape as Bank Loan to SHG (Dr liability + Dr
+// Interest Expense / Cr Cash-Bank-UPI on repayment) rather than inventing a new one.
+function generateCIFSchedule(cifId, asOfDate){
+  asOfDate = asOfDate || todayStr();
+  const c = DB.cif.find(x=>x.id===cifId);
+  if(!c || !c.amount || !c.date || isNaN(new Date(c.date+'T00:00:00').getTime())) return [];
+  const n = Math.max(1, c.period||1);
+  const method = c.interestMethod || 'reducing';
+  const principalPerInst = Math.round((c.amount/n)*100)/100;
+  const totalFlatInterest = Math.round(c.amount*(c.rate||0)/100 * (n/12)*100)/100;
+  const repayTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && t.debit==='CIF').sort((a,b)=>a.date<b.date?-1:1);
+  const interestTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && t.debit==='INTEREST_EXPENSE').sort((a,b)=>a.date<b.date?-1:1);
+  let principalPool = repayTx.reduce((s,t)=>s+t.amount,0);
+  let interestPool = interestTx.reduce((s,t)=>s+t.amount,0);
+  let runningOutstanding = c.amount;
+  const schedule = [];
+  for(let i=1;i<=n;i++){
+    const dueDate = addPeriod(c.date, i, 'Monthly');
+    const principalDue = (i===n) ? Math.round((c.amount - principalPerInst*(n-1))*100)/100 : principalPerInst;
+    const interestDue = method==='reducing'
+      ? Math.round(runningOutstanding*(c.rate||0)/1200*100)/100
+      : Math.round((totalFlatInterest/n)*100)/100;
+    const principalPaid = Math.min(principalDue, Math.max(0,principalPool));
+    const interestPaid = Math.min(interestDue, Math.max(0,interestPool));
+    principalPool -= principalPaid; interestPool -= interestPaid;
+    runningOutstanding = Math.max(0, runningOutstanding - principalDue);
+    let status;
+    const fullyPaid = principalPaid>=principalDue-0.5 && interestPaid>=interestDue-0.5;
+    const partiallyPaid = (principalPaid>0 || interestPaid>0) && !fullyPaid;
+    if(fullyPaid) status='Paid';
+    else if(partiallyPaid) status = (dueDate<asOfDate ? 'Partially Paid (Overdue)' : 'Partially Paid');
+    else status = (dueDate<asOfDate ? 'Overdue' : 'Due');
+    schedule.push({inst:i, dueDate, principalDue, interestDue, totalDue:Math.round((principalDue+interestDue)*100)/100,
+      principalPaid, interestPaid, balance: Math.round(((principalDue-principalPaid)+(interestDue-interestPaid))*100)/100, status});
+  }
+  return schedule;
+}
+// Tranche-wise outstanding. Transactions posted before CIF became tranche-tagged have no
+// cifId, so for the common case of a single historical CIF receipt (nothing to disambiguate)
+// this falls back to the whole-account balance rather than showing a misleading zero; with
+// more than one tranche, only cifId-tagged activity (everything from this point on) is used.
+function cifTrancheOutstanding(cifId){
+  if(DB.cif.length===1) return Math.max(0, accountBalance('CIF'));
+  return Math.max(0, accountBalance('CIF',{cifId}));
+}
+// Aggregate across every CIF tranche — still used by Dashboard, LokOS export and the Balance
+// Sheet, which don't need a tranche-wise breakdown. Thin wrapper only; no separate calculation.
+function cifOutstanding(){ return accountBalance('CIF'); }
+function cifInterestPaidTotal(cifId){ return Math.max(0, accountBalance('INTEREST_EXPENSE',{cifId})); }
+function cifEligibleForClosure(c){ return c.status!=='Closed' && cifTrancheOutstanding(c.id)<=0.5; }
+
 function viewCIF(){
   let html = `<div class="section-title"><h2>CIF Management</h2><button class="btn" onclick="cifForm()">+ Record CIF Received</button></div>`;
-  html += `<div class="grid cols2">${stat('Total CIF Received', rupee(DB.cif.reduce((s,c)=>s+(c.amount||0),0)))}${stat('CIF Outstanding (Liability)', rupee(cifOutstanding()))}</div>`;
-  html += `<div class="card">${DB.cif.length ? tbl(['Date','Source','Amount','Rate %','Period (months)','Bank'],
-    DB.cif.map(c=>[fmtDate(c.date), esc(c.source), rightCell(rupee(c.amount)), c.rate+'%', c.period, esc(c.bank)])) :
-    `<div class="empty">No CIF recorded yet.</div>`}</div>`;
+  html += `<div class="msg info">CIF is treated as a loan the SHG owes to VO/CLF/NRLM — each receipt has its own interest rate and monthly schedule, and repayments (principal + interest) are recorded against that specific tranche, just like Member Loans.</div>`;
+  const totalInterestPaid = DB.cif.reduce((s,c)=>s+cifInterestPaidTotal(c.id),0);
+  html += `<div class="grid cols3">${stat('Total CIF Received', rupee(DB.cif.reduce((s,c)=>s+(c.amount||0),0)))}${stat('CIF Outstanding (Liability)', rupee(cifOutstanding()))}${stat('Total Interest Paid on CIF', rupee(totalInterestPaid))}</div>`;
+  if(!DB.cif.length){ html += `<div class="card"><div class="empty">No CIF recorded yet.</div></div>`; return html; }
+  html += `<div class="card">${tbl(['CIF ID','Date','Source','Amount','Rate %','Period (months)','Received Into','Outstanding','Status',''],
+    DB.cif.map(c=>{
+      const os = cifTrancheOutstanding(c.id);
+      const eligible = cifEligibleForClosure(c);
+      return [c.id, fmtDate(c.date), esc(c.source), rightCell(rupee(c.amount)), c.rate+'%', c.period, esc(c.bank),
+        rightCell(rupee(os)), eligible?badge('Eligible for Closure','amber'):badge(c.status,c.status==='Closed'?'grey':'green'),
+        `<button class="btn small secondary" onclick="viewCIFSchedule('${c.id}')">Schedule</button> `+
+        (c.status!=='Closed' ? `<button class="btn small secondary" onclick="cifRepaymentForm('${c.id}')">Repay</button>`:'')+
+        (eligible ? ` <button class="btn small secondary" onclick="closeCIF('${c.id}')">Mark Closed</button>` : '')
+      ];
+    }))}</div>`;
   return html;
 }
-function cifOutstanding(){ return accountBalance('CIF'); }
+function viewCIFSchedule(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return;
+  const sched = generateCIFSchedule(cifId);
+  const os = cifTrancheOutstanding(cifId);
+  const statusColor = s=> s==='Paid' ? 'green' : (s==='Due' ? 'grey' : (s.includes('Overdue') ? 'red' : 'amber'));
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>CIF Repayment Schedule — ${c.id}</h3>
+  <p class="hint">Source: ${esc(c.source)} · Principal ${rupee(c.amount)} · ${c.rate}% p.a. (${c.interestMethod==='flat'?'flat':'reducing balance'}) · ${c.period} monthly instalments<br>
+  Outstanding: <b>${rupee(os)}</b> · Interest paid to date: <b>${rupee(cifInterestPaidTotal(cifId))}</b></p>
+  ${tbl(['#','Due Date','Principal Due','Interest Due','Total Due','Principal Paid','Interest Paid','Balance','Status'],
+    sched.map(s=>[s.inst, fmtDate(s.dueDate), rightCell(rupee(s.principalDue)), rightCell(rupee(s.interestDue)), rightCell(rupee(s.totalDue)),
+      rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
+  <p class="hint" style="margin-top:8px">Interest is shown here on a monthly basis for planning. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>`);
+}
 function cifForm(){
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record CIF Received</h3>
   <form onsubmit="return saveCIF(event)">
@@ -1729,19 +1964,67 @@ function cifForm(){
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="9"></div>
       <div class="field"><label>Repayment Period (months)</label><input type="number" min="1" step="1" name="period" value="36"></div>
     </div>
-    <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
-    <button class="btn" type="submit">Post CIF Receipt</button>
+    <div class="row">
+      <div class="field"><label>Interest Method</label><select name="interestMethod"><option value="reducing">Reducing Balance</option><option value="flat">Flat</option></select></div>
+      <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
+    </div>
+    <div class="hint">9% p.a., reducing balance, 36 months is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche.</div>
+    <button class="btn" style="margin-top:8px" type="submit">Post CIF Receipt</button>
   </form>`);
 }
 function saveCIF(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
   try{
     const data = Object.fromEntries(f.entries());
-    DB.cif.push({date:data.date, source:data.source, amount:parseFloat(data.amount), rate:parseFloat(data.rate)||0, period:parseInt(data.period)||36, bank:data.mode});
-    postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount:data.amount,narration:'CIF received from '+data.source});
+    const amount = parseFloat(data.amount);
+    if(!amount || amount<=0) throw new Error('Enter a valid CIF amount.');
+    const c = { id: nextId('CIF'), date:data.date, source:data.source, amount, rate:parseFloat(data.rate)||0,
+      period:parseInt(data.period)||36, interestMethod:data.interestMethod||'reducing', bank:data.mode, status:'Active' };
+    DB.cif.push(c);
+    postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount,cifId:c.id,narration:'CIF received from '+data.source+' ('+c.id+')'});
+    logAudit('CIF_RECEIVED', c.id+' received from '+data.source+' — '+rupee(amount));
     closeModal(); flash('ok','CIF receipt posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
+}
+function cifRepaymentForm(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record CIF Repayment — ${c.id}</h3>
+  <p class="hint">Outstanding: <b>${rupee(cifTrancheOutstanding(cifId))}</b></p>
+  <form onsubmit="return saveCIFRepayment(event,'${c.id}')">
+    <div class="row">
+      <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
+      <div class="field"><label>Principal Paid ₹</label><input type="number" min="0" step="0.01" name="principal" value="0"></div>
+      <div class="field"><label>Interest Paid ₹</label><input type="number" min="0" step="0.01" name="interest" value="0"></div>
+    </div>
+    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+    <div class="field"><label>Narration</label><input name="narration"></div>
+    <button class="btn" type="submit">Post Repayment</button>
+  </form>`);
+}
+function saveCIFRepayment(ev, cifId){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    const c = DB.cif.find(x=>x.id===cifId); if(!c) throw new Error('CIF tranche not found.');
+    const data = Object.fromEntries(f.entries());
+    const principal = parseFloat(data.principal)||0, interest = parseFloat(data.interest)||0;
+    if(principal<0||interest<0) throw new Error('Negative amounts are not allowed.');
+    if(principal===0 && interest===0) throw new Error('Enter a principal and/or interest amount.');
+    const outstanding = cifTrancheOutstanding(cifId);
+    if(principal > outstanding+0.5) throw new Error('Principal repayment ('+rupee(principal)+') exceeds the outstanding balance ('+rupee(outstanding)+').');
+    if(principal>0) postTxn({date:data.date, type:'CIF Repayment', debit:'CIF', credit:data.mode, amount:principal, cifId,
+      narration:'Principal repaid — '+c.id+(data.narration?(' — '+data.narration):'')});
+    if(interest>0) postTxn({date:data.date, type:'CIF Interest', debit:'INTEREST_EXPENSE', credit:data.mode, amount:interest, cifId,
+      narration:'Interest paid — '+c.id+(data.narration?(' — '+data.narration):'')});
+    if(cifTrancheOutstanding(cifId)<=0.5) c.status='Closed';
+    closeModal(); flash('ok','CIF repayment posted.'); render();
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+function closeCIF(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return;
+  if(!cifEligibleForClosure(c)){ flash('error','This CIF tranche still has an outstanding balance and cannot be closed yet.'); render(); return; }
+  c.status='Closed'; logAudit('CIF_CLOSED', cifId+' marked closed'); flash('ok','CIF tranche marked closed.'); render();
 }
 
 /* ============================================================ REVOLVING FUND */
@@ -2306,6 +2589,7 @@ function runDataQuality(){
   // negative balances
   if(accountBalance('CASH')<0) issues.push({sev:'red', text:'Cash balance is negative.'});
   if(accountBalance('BANK')<0) issues.push({sev:'red', text:'Bank balance is negative.'});
+  if(accountBalance('UPI')<0) issues.push({sev:'red', text:'UPI balance is negative.'});
   // trial balance (reuses the same central calculation as the Trial Balance screen)
   if(generateTrialBalance().diff !== 0) issues.push({sev:'red', text:'Trial Balance does not match.'});
   // duplicate members
@@ -2328,7 +2612,12 @@ function runDataQuality(){
     if(l.interestRate<0) issues.push({sev:'red', text:'Loan '+l.id+' has a negative interest rate.'});
     if(!['Weekly','Fortnightly','Monthly'].includes(l.frequency||'Monthly')) issues.push({sev:'amber', text:'Loan '+l.id+' has an unrecognised repayment frequency.'});
     if(!l.instalments || l.instalments<1) issues.push({sev:'red', text:'Loan '+l.id+' has an invalid number of instalments.'});
-    if(loanOutstanding(l.id).principal<0) issues.push({sev:'red', text:'Loan '+l.id+' shows negative outstanding — check repayments.'});
+    // loanOutstanding() itself clamps to zero (Math.max(0, ...)), so checking its return value
+    // here could never fire — it was dead code. Checking the raw, unclamped ledger balance
+    // instead actually catches the real problem: more principal recorded as repaid than was
+    // ever disbursed against this loan (a duplicate or misposted repayment).
+    const rawLoanBalance = accountBalance('MEMBER_LOANS',{loanId:l.id});
+    if(rawLoanBalance<-0.5) issues.push({sev:'red', text:'Loan '+l.id+' has been repaid '+rupee(Math.abs(rawLoanBalance))+' more than its recorded principal — check for a duplicate or misposted repayment.'});
     loanIdCounts[l.id] = (loanIdCounts[l.id]||0)+1;
     // Cross-check: outstanding from the ledger must agree with outstanding derived from the
     // loan's own schedule — these are two different views of the same data (item 16/17); if
@@ -2338,10 +2627,21 @@ function runDataQuality(){
     if(Math.abs(scheduleOutstanding - loanOutstanding(l.id).principal) > 1) issues.push({sev:'red', text:'Loan '+l.id+': ledger balance and repayment schedule disagree — data may need review.'});
   });
   Object.keys(loanIdCounts).forEach(id=>{ if(loanIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate Loan ID detected: '+id+' appears more than once.'}); });
+  // CIF tranches — same category of checks as loans, since CIF is now a loan sub-ledger too.
+  const cifIdCounts = {};
+  DB.cif.forEach(c=>{
+    if(!c.amount || c.amount<=0) issues.push({sev:'red', text:'CIF '+c.id+' has no valid amount.'});
+    if(!c.date || isNaN(new Date(c.date+'T00:00:00').getTime())) issues.push({sev:'red', text:'CIF '+c.id+' has a missing or invalid date.'});
+    if(c.rate<0) issues.push({sev:'red', text:'CIF '+c.id+' has a negative interest rate.'});
+    if(!c.period || c.period<1) issues.push({sev:'red', text:'CIF '+c.id+' has an invalid repayment period.'});
+    cifIdCounts[c.id] = (cifIdCounts[c.id]||0)+1;
+  });
+  Object.keys(cifIdCounts).forEach(id=>{ if(cifIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate CIF ID detected: '+id+' appears more than once.'}); });
   // orphan transactions: a loanId or memberId that no longer matches any real record
-  const loanIdSet = new Set(DB.loans.map(l=>l.id)), memberIdSet = new Set(DB.members.map(m=>m.id));
+  const loanIdSet = new Set(DB.loans.map(l=>l.id)), memberIdSet = new Set(DB.members.map(m=>m.id)), cifIdSet = new Set(DB.cif.map(c=>c.id));
   DB.transactions.forEach(t=>{
     if(t.loanId && !loanIdSet.has(t.loanId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references loan '+t.loanId+', which no longer exists.'});
+    if(t.cifId && !cifIdSet.has(t.cifId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references CIF '+t.cifId+', which no longer exists.'});
     if(t.memberId && !memberIdSet.has(t.memberId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references a member that no longer exists.'});
     // A repayment/interest transaction's memberId must match the loan it's tagged against.
     if(t.loanId && t.memberId && (t.credit==='MEMBER_LOANS'||t.credit==='INTEREST_INCOME')){
@@ -2352,6 +2652,9 @@ function runDataQuality(){
     // any specific loan's sub-ledger — this breaks loan-wise accounting and is always critical.
     if(!t.reversed && !t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')){
       issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no Loan ID — it cannot be attributed to a specific loan.'});
+    }
+    if(!t.reversed && !t.cifId && (t.type==='CIF Repayment'||t.type==='CIF Interest')){
+      issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no CIF ID — it cannot be attributed to a specific CIF tranche.'});
     }
   });
   // repayment posted against a loan that is now closed (the loan may have been closed after this posting)
@@ -2830,8 +3133,8 @@ function buildExportData(kind){
     rows: DB.loans.map(l=>{ const due = memberDueInfos(l.memberId, todayStr()).find(d=>d.loan.id===l.id);
       return [l.id,l.memberId,memberName(l.memberId),l.purpose||'',l.principal,l.interestRate,l.interestMethod||'flat',l.instalments,l.frequency||'Monthly',
         loanOutstanding(l.id).principal.toFixed(2), due?due.totalInterestDue.toFixed(2):'0.00', l.status,l.nextDueDate]; })};
-  if(kind==='cif') return {headers:['Date','Source','Amount','Rate','PeriodMonths','OutstandingLiability'],
-    rows: DB.cif.map(c=>[c.date,c.source,c.amount,c.rate,c.period,cifOutstanding().toFixed(2)])};
+  if(kind==='cif') return {headers:['CIFID','Date','Source','Amount','Rate','InterestMethod','PeriodMonths','OutstandingLiability','InterestPaid','Status'],
+    rows: DB.cif.map(c=>[c.id,c.date,c.source,c.amount,c.rate,c.interestMethod||'reducing',c.period,cifTrancheOutstanding(c.id).toFixed(2),cifInterestPaidTotal(c.id).toFixed(2),c.status||'Active'])};
   if(kind==='revolvingfund') return {headers:['Date','Source','Amount','Rate','PeriodMonths','OutstandingLiability'],
     rows: DB.revolvingFund.map(c=>[c.date,c.source,c.amount,c.rate,c.period,revolvingFundOutstanding().toFixed(2)])};
   if(kind==='bankloans') return {headers:['FacilityID','Type','SanctionDate','SanctionedAmount','Utilised','NotUtilised','OutstandingPayable','Rate','Status'],
