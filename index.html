@@ -765,7 +765,8 @@ function buildNav(){
   const ul = document.getElementById('navlist');
   ul.innerHTML = NAV.map(n=>{
     if(n.grp) return `<li class="grp">${esc(n.grp)}</li>`;
-    return `<li><a class="${ROUTE===n.id?'active':''}" onclick="go('${n.id}')">${n.icon} &nbsp;<span>${esc(n.label)}</span></a></li>`;
+    const isActive = ROUTE===n.id || (n.id==='meetings' && ROUTE==='meetingnew');
+    return `<li><a class="${isActive?'active':''}" onclick="go('${n.id}')">${n.icon} &nbsp;<span>${esc(n.label)}</span></a></li>`;
   }).join('');
 }
 function go(route){ ROUTE = route; location.hash = route; closeSidebar(); render(); window.scrollTo(0,0); }
@@ -783,7 +784,7 @@ function render(){
   if(FLASH){ html += `<div class="msg ${FLASH.type==='error'?'err':(FLASH.type==='ok'?'ok':'info')}">${esc(FLASH.text)}</div>`; FLASH=null; }
   try{
     html += ({
-      dashboard: viewDashboard, profile: viewProfile, members: viewMembers, meetings: viewMeetings,
+      dashboard: viewDashboard, profile: viewProfile, members: viewMembers, meetings: viewMeetings, meetingnew: viewMeetings,
       savings: viewSavings, loans: viewLoans, cif: viewCIF, revolvingfund: viewRevolvingFund, corpus: viewCorpus, transactions: viewTransactions,
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'), upibook: ()=>viewBook('UPI','UPI Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
