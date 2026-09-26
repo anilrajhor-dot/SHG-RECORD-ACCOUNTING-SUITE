@@ -141,6 +141,17 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
 }
 ::-webkit-scrollbar{height:9px;width:9px;}
 ::-webkit-scrollbar-thumb{background:#c5d0da;border-radius:5px;}
+.printhead{display:none;}
+@media print{
+  #sidebar,#sidebarScrim,#topbar,footer.byline,.no-print{display:none !important;}
+  #main{margin-left:0 !important;}
+  #content{padding:0 !important;max-width:none !important;}
+  body{background:#fff;}
+  .card{box-shadow:none;border:1px solid #999;break-inside:avoid;}
+  .printhead{display:block;margin-bottom:10px;}
+  .printhead h2{margin:0 0 2px 0;}
+  a{color:inherit;text-decoration:none;}
+}
 </style>
 </head>
 <body>
@@ -186,7 +197,8 @@ const ACCOUNTS = {
   BANK_CC:         {label:'Bank Cash Credit (CC) Payable', type:'liability'},
   OTHER_LIABILITIES:{label:'Other Liabilities',   type:'liability'},
   SHG_FUND:        {label:'SHG Fund / Capital',   type:'equity'},
-  INTEREST_INCOME: {label:'Interest Income',      type:'income'},
+  INTEREST_INCOME: {label:'Interest Income (Internal Lending)', type:'income'},
+  BANK_INTEREST:   {label:'Interest Earned on Bank Deposits', type:'income'},
   FINE_INCOME:     {label:'Fine / Penalty Income',type:'income'},
   OTHER_INCOME:    {label:'Other Income',         type:'income'},
   INTEREST_EXPENSE:{label:'Interest Paid on Bank Loan', type:'expense'}
@@ -650,10 +662,14 @@ function calculateCorpus(){
   const capitalFund = Math.round((fund+cumulativeSurplus)*100)/100;
   const revolvingFund = accountBalance('REVOLVING_FUND');
   const cif = accountBalance('CIF'); // kept for callers (e.g. Balance Sheet) that show CIF as its own liability line — not part of `total` below.
-  // Shown for visibility only (per request) — fines/penalties and other receipts are already
-  // inside cumulativeSurplus/capitalFund above via the Income & Expenditure Account, so this is
-  // a breakout for display, never added a second time into `total`.
+  // Shown for visibility only (per request) — fines/penalties, other receipts (donations,
+  // grants etc.) and both kinds of interest earned (on internal lending to members, and on the
+  // SHG's own bank deposits) are already inside cumulativeSurplus/capitalFund above via the
+  // Income & Expenditure Account, so these are a breakout for display, never added a second
+  // time into `total`.
   const otherReceipts = Math.round((accountBalance('FINE_INCOME')+accountBalance('OTHER_INCOME'))*100)/100;
+  const interestInternal = accountBalance('INTEREST_INCOME');
+  const interestBankDeposits = accountBalance('BANK_INTEREST');
   const total = Math.round((savings+capitalFund+revolvingFund)*100)/100;
 
   const totalAssets = Math.round((accountBalance('CASH')+accountBalance('BANK')+accountBalance('UPI')+accountBalance('MEMBER_LOANS')+accountBalance('OTHER_ASSETS'))*100)/100;
@@ -661,7 +677,7 @@ function calculateCorpus(){
   const borrowings = Math.round((cif+bankTL+bankCC+otherLiab)*100)/100;
   const totalAssetsLessBorrowings = Math.round((totalAssets-borrowings)*100)/100;
 
-  return { savings, capitalFund, revolvingFund, cif, otherReceipts, total,
+  return { savings, capitalFund, revolvingFund, cif, otherReceipts, interestInternal, interestBankDeposits, total,
     totalAssets, borrowings, bankTL, bankCC, otherLiab, totalAssetsLessBorrowings,
     tallies: Math.abs(total-totalAssetsLessBorrowings) < 0.5 };
 }
@@ -677,10 +693,12 @@ function viewCorpus(){
     ${stat('Members Savings', rupee(c.savings))}
     ${stat('Capital Fund (SHG Fund + Cumulative Surplus)', rupee(c.capitalFund))}
     ${stat('Revolving Fund', rupee(c.revolvingFund))}
+    ${stat('— of which Interest Earned — Internal Lending (Member Loans)', rupee(c.interestInternal))}
+    ${stat('— of which Interest Earned — Bank Deposits', rupee(c.interestBankDeposits))}
     ${stat('— of which Fines/Penalties + Other Receipts (donations, grants, etc.)', rupee(c.otherReceipts))}
     ${stat('Total Corpus', '<b>'+rupee(c.total)+'</b>')}
   </div>
-  <p class="hint" style="margin-top:10px">Total Corpus = Members Savings + Capital Fund + Revolving Fund. Capital Fund = SHG Fund (opening capital) + cumulative surplus from the Income &amp; Expenditure Account since inception — which already includes fines/penalties and other receipts (donations, grants, membership fee etc. posted as Other Income); the line above breaks that portion out for visibility only, it is not added again.</p>
+  <p class="hint" style="margin-top:10px">Total Corpus = Members Savings + Capital Fund + Revolving Fund. Capital Fund = SHG Fund (opening capital) + cumulative surplus from the Income &amp; Expenditure Account since inception — which already includes interest earned (on internal lending to members and on the SHG's own bank deposits) and other receipts (fines/penalties, donations, grants, membership fee etc.); the lines above break those portions out for visibility only, they are not added again. Use "Record Bank Interest Credited" on the Bank Book screen to post bank-credited interest as it comes in.</p>
   </div>`;
   html += `<div class="card"><h3>Formula B — Total Assets minus Borrowings</h3><div class="grid cols3">
     ${stat('Total Assets (Cash+Bank+UPI+Loans to Members+Other Assets)', rupee(c.totalAssets))}
@@ -729,6 +747,7 @@ const NAV = [
   {id:'audit', label:'Audit Trail', icon:'🕘'},
   {grp:'Records'},
   {id:'reports', label:'Reports', icon:'▤'},
+  {id:'registers', label:'Registers (Print)', icon:'🖨'},
   {id:'memberstatement', label:'Member Statement', icon:'▤'},
   {grp:'System'},
   {id:'backup', label:'Backup & Restore', icon:'⇅'},
@@ -763,7 +782,7 @@ function render(){
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'), upibook: ()=>viewBook('UPI','UPI Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
-      lokos: viewLokos, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, memberstatement: viewMemberStatement,
+      lokos: viewLokos, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement,
       backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI
     }[ROUTE] || viewDashboard)();
   }catch(e){
@@ -926,7 +945,8 @@ function viewProfile(){
       <div class="field"><label>Meeting Frequency</label><select name="meetingFrequency">${['Weekly','Fortnightly','Monthly'].map(d=>`<option ${p.meetingFrequency===d?'selected':''}>${d}</option>`).join('')}</select></div>
     </div>
     <div class="row">
-      <div class="field"><label>Compulsory Savings per Member per Cycle ₹ <span class="hint">(as per SHG's own rule — used for NABARD-format grading)</span></label><input type="number" min="0" step="1" name="compulsorySavingAmount" value="${p.compulsorySavingAmount||0}"></div>
+      <div class="field"><label>Compulsory Savings per Member per Cycle ₹ <span class="hint">(as per SHG's own rule — used for grading)</span></label><input type="number" min="0" step="1" name="compulsorySavingAmount" value="${p.compulsorySavingAmount||0}"></div>
+      <div class="field"><label>Meetings Required per Month <span class="hint">(as per SHG's own rule — editable; used for grading)</span></label><input type="number" min="0" step="0.1" name="meetingsRequiredPerMonth" value="${p.meetingsRequiredPerMonth || (p.meetingFrequency==='Weekly'?4:(p.meetingFrequency==='Fortnightly'?2:1))}"></div>
     </div>
     <div class="row">
       <div class="field"><label>President</label><input name="president" value="${esc(p.president)}"></div>
@@ -1713,6 +1733,31 @@ function confirmPostMeeting(){
 // Generalised transfer between the SHG's own liquid funds — Cash, Bank, UPI — in any
 // direction. This is never income or expense, only a movement between asset accounts, so it
 // never touches Income & Expenditure or the Trial Balance's net position.
+// Records interest the bank has credited to the SHG's own savings/CC account — Debit Bank,
+// Credit Interest Earned on Bank Deposits. This is genuine income (unlike a Cash/Bank transfer)
+// and flows into Income & Expenditure and Corpus like any other income account.
+function bankInterestForm(){
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record Bank Interest Credited</h3>
+  <p class="hint">Interest the bank has credited to the SHG's savings/CC account (e.g. quarterly or half-yearly interest). This is income — it never affects Cash.</p>
+  <form onsubmit="return saveBankInterest(event)">
+    <div class="row">
+      <div class="field"><label>Date Credited</label><input type="date" name="date" value="${todayStr()}"></div>
+      <div class="field"><label>Amount ₹ *</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
+    </div>
+    <div class="field"><label>Narration</label><input name="narration" placeholder="e.g. Interest credited by bank — Q2"></div>
+    <button class="btn" type="submit">Post</button>
+  </form>`);
+}
+function saveBankInterest(ev){
+  ev.preventDefault(); const f = new FormData(ev.target);
+  try{
+    const date = f.get('date')||todayStr(), amount = parseFloat(f.get('amount'))||0;
+    if(amount<=0) throw new Error('Enter an interest amount greater than zero.');
+    postTxn({date, type:'Bank Interest Credited', debit:'BANK', credit:'BANK_INTEREST', amount, narration: f.get('narration')||'Interest credited by bank'});
+    closeModal(); flash('ok','Bank interest recorded.'); render();
+  }catch(e){ flash('error', e.message); render(); }
+  return false;
+}
 function depositToBankForm(){
   const balances = {CASH:accountBalance('CASH'), BANK:accountBalance('BANK'), UPI:accountBalance('UPI')};
   const banks = DB.profile.banks||[];
@@ -2347,7 +2392,7 @@ function updateTxnNature(){
     creditOpts = FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)}));
   } else if(nature==='income'){
     debitOpts = FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)}));
-    creditOpts = [{value:'FINE_INCOME',label:accountLabel('FINE_INCOME')},{value:'OTHER_INCOME',label:accountLabel('OTHER_INCOME')}];
+    creditOpts = [{value:'FINE_INCOME',label:accountLabel('FINE_INCOME')},{value:'BANK_INTEREST',label:accountLabel('BANK_INTEREST')},{value:'OTHER_INCOME',label:accountLabel('OTHER_INCOME')}];
   } else if(nature==='transfer'){
     debitOpts = FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)}));
     creditOpts = FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)}));
@@ -2422,7 +2467,7 @@ function doReverse(id){
 
 /* ============================================================ CASH / BANK BOOK */
 function viewBook(code,title){
-  let html = `<div class="section-title"><h2>${esc(title)}</h2><button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button></div>`;
+  let html = `<div class="section-title"><h2>${esc(title)}</h2><div class="row">${code==='BANK'?'<button class="btn secondary" onclick="bankInterestForm()">Record Bank Interest Credited</button>':''}<button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button></div></div>`;
   // Opening balance is posted as a real transaction (Debit Cash/Bank, Credit SHG Fund — see
   // postOpeningBalances), so it already appears in the transaction loop below. Starting the
   // running balance at DB.settings.openingCash/openingBank here would double-count it.
@@ -2884,10 +2929,11 @@ function computeGrading(ym){
    Linkage), reproduced exactly (indicators, allotted marks, formulas and grade bands) from the
    proforma supplied by the user. This is additive — it does not replace the configurable Local
    Grading Framework above. Everything the app already records is auto-filled from the same
-   central functions used elsewhere (ledger, generateLoanSchedule, runDataQuality); a small
-   number of items the proforma itself requires an assessor to physically verify — Resolution
-   Book / Individual Pass Book upkeep, interest-servicing timing and overdrawing occasions on a
-   Cash Credit account — remain manual, clearly marked, and are never guessed. */
+   central functions used elsewhere (ledger, generateLoanSchedule, runDataQuality). All six
+   Record Keeping registers, including Resolution Book and Individual Pass Book, are prepared
+   automatically by this app and so are auto-scored too. Only interest-servicing timing and
+   overdrawing occasions on a Cash Credit account (Repeat Linkage only) remain manual, clearly
+   marked, and are never guessed, since those depend on the bank's own CC statement. */
 const NABARD_FORMATS = {
   fresh: { label:'Format 1 — SHG Grading Format for Fresh Linkage',
     meetingHoldMarks:10, attendanceMarks:10, savingsMarks:10,
@@ -2903,7 +2949,7 @@ const NABARD_FORMATS = {
     ccOps:{transactionsMarks:10, interestServicingMarks:10, overdrawingMarks:5} }
 };
 const NABARD_RECORD_LABELS = {resolutionBook:'Meeting Resolution Book', cashBook:'Cash Book', savingsLedger:'Savings Ledger', loanLedger:'Loan Ledger', generalLedger:'General Ledger', passBook:'Individual Pass Book'};
-const NABARD_RECORD_AUTO = {resolutionBook:false, cashBook:true, savingsLedger:true, loanLedger:true, generalLedger:true, passBook:false}; // digital books the app itself keeps up to date are auto-scored full marks; the two physical/manual items need an assessor's confirmation
+const NABARD_RECORD_AUTO = {resolutionBook:true, cashBook:true, savingsLedger:true, loanLedger:true, generalLedger:true, passBook:true}; // all six registers are prepared automatically by this app (Resolution Book via Minutes of Meeting, Individual Pass Book via Member Statement, etc.) so all are auto-scored from Data Quality status — none require manual assessor confirmation
 function nabardSixMonthsAgo(dateStr){ const d=new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()-6); return d.toISOString().slice(0,10); }
 function nabardPeriodMonths(from,to){ const days=(new Date(to+'T00:00:00')-new Date(from+'T00:00:00'))/86400000; return Math.max(1, Math.round(days/30.44)); }
 let NABARD_UI = null;
@@ -2924,7 +2970,7 @@ function computeNabardOfficialGrading(){
   const meetings = DB.meetings.filter(mt=>mt.date>=from && mt.date<=to);
   const freq = DB.profile.meetingFrequency||'Monthly';
   const months = nabardPeriodMonths(from,to);
-  const perMonth = freq==='Weekly'?4.33:(freq==='Fortnightly'?2.17:1);
+  const perMonth = parseFloat(DB.profile.meetingsRequiredPerMonth) || (freq==='Weekly'?4.33:(freq==='Fortnightly'?2.17:1));
   const meetingsRequired = Math.max(1, Math.round(months*perMonth));
   const meetingsHeld = meetings.length;
   const meetingHoldScore = Math.round(Math.min(cfg.meetingHoldMarks, (meetingsHeld/meetingsRequired)*cfg.meetingHoldMarks)*100)/100;
@@ -2995,7 +3041,7 @@ function computeNabardOfficialGrading(){
 
   const pendingParts = [];
   if(savingsNA) pendingParts.push('Set a Compulsory Savings amount in SHG Profile to score Regularity of Savings');
-  if(!recordAssessedAll) pendingParts.push('Confirm Resolution Book & Individual Pass Book status below');
+  if(!recordAssessedAll) pendingParts.push('Record Keeping could not be auto-assessed — check Data Quality');
   if(ccOps && !ccOps.allAssessed) pendingParts.push('Confirm Cash Credit operations details below');
 
   const overall = Math.round((meetingHoldScore+attendanceScore+(savingsScore||0)+velocityScore+repaymentScore+recordScore+(ccOps?ccOps.total:0))*100)/100;
@@ -3059,7 +3105,7 @@ function viewNabardGrading(){
   const u = nabardUI();
   const g = computeNabardOfficialGrading();
   let html = `<div class="card"><h3>NABARD SHG Grading — ${esc(g.cfg.label)}</h3>
-    <div class="msg info">Reproduced exactly from the official proforma — indicators, allotted marks, formulas and grade bands (A: 80+, B: 70–79, C: 60–69, D: below 60; only A &amp; B graded SHGs are to be considered for credit linkage). Items the proforma itself requires an assessor to physically verify (Resolution Book / Individual Pass Book upkeep, and — for Repeat Linkage — interest-servicing timing and overdrawing occasions) are marked "Manual" below and are never guessed.</div>
+    <div class="msg info">Reproduced exactly from the official proforma — indicators, allotted marks, formulas and grade bands (A: 80+, B: 70–79, C: 60–69, D: below 60; only A &amp; B graded SHGs are to be considered for credit linkage). All Record Keeping registers (including Resolution Book and Individual Pass Book) are prepared automatically by this app and scored auto, from the same Data Quality check used elsewhere. Only the Cash Credit account's interest-servicing timing and overdrawing occasions (Repeat Linkage only) still need the assessor's confirmation below, since those depend on the bank's own CC statement.</div>
     <div class="row">
       <div class="field"><label>Format</label><select onchange="updateNabardUIField('format', this.value)">
         <option value="fresh" ${u.format==='fresh'?'selected':''}>Format 1 — Fresh Linkage</option>
@@ -3610,6 +3656,185 @@ function viewReports(){
 function shareReportCSV(kind, label){
   const {headers, rows} = buildExportData(kind);
   shareFile(kind+'_export.csv', toCSV(headers, rows), 'text/csv', (DB.profile.name||'SHG')+' — '+label);
+}
+
+/* ============================================================ REGISTERS (PRINTABLE) */
+// "Other registers required as per guidelines" are not separate data stores — they are views
+// over the same transactions/meetings/loans this app already records, filtered to a chosen
+// period and laid out the way a register is normally kept, then printed via the browser's own
+// Print (window.print()); the print CSS in <style> hides the sidebar/topbar/controls so only
+// the register itself is printed.
+const REGISTER_LIST = [
+  {id:'meeting', label:'Meeting Register'},
+  {id:'attendance', label:'Attendance Register'},
+  {id:'savings', label:'Savings Register'},
+  {id:'loan', label:'Loan Register'},
+  {id:'repayment', label:'Repayment Register'},
+  {id:'interest', label:'Interest Register'},
+  {id:'cashbook', label:'Cash Book'},
+  {id:'bankbook', label:'Bank Book'},
+  {id:'ledger', label:'General Ledger (Period Summary)'},
+  {id:'passbook', label:'Individual Pass Book'}
+];
+function registersUI(){
+  if(!window.__reg){ const to = todayStr();
+    window.__reg = { period:'month', month: to.slice(0,7), year: to.slice(0,4), from: to.slice(0,8)+'01', to,
+      register:'meeting', passMember: (DB.members[0]&&DB.members[0].id)||'' };
+  }
+  return window.__reg;
+}
+function registersPeriodRange(){
+  const w = registersUI();
+  let from, to, label;
+  if(w.period==='month'){
+    from = w.month+'-01';
+    const d = new Date(w.month+'-01T00:00:00'); const last = new Date(d.getFullYear(), d.getMonth()+1, 0);
+    to = last.toISOString().slice(0,10);
+    label = 'Month: '+w.month;
+  } else if(w.period==='year'){
+    from = w.year+'-01-01'; to = w.year+'-12-31'; label = 'Year: '+w.year;
+  } else {
+    from = w.from; to = w.to; label = 'Period: '+fmtDate(w.from)+' to '+fmtDate(w.to);
+  }
+  return {w, from, to, label};
+}
+function updateRegField(field, val){ registersUI()[field] = val; render(); }
+function registerMeetingRows(from,to){
+  return DB.meetings.filter(mt=>mt.date>=from && mt.date<=to).sort((a,b)=>a.date<b.date?-1:1).map(mt=>{
+    const coll = (mt.totals&&mt.totals.savings||0)+(mt.totals&&mt.totals.repayment||0);
+    return [fmtDate(mt.date), esc(mt.place||'—'), mt.present+' / '+mt.totalMembers,
+      (mt.totalMembers? Math.round(mt.present/mt.totalMembers*100):0)+'%',
+      rightCell(rupee(coll)), rightCell(rupee(mt.totals&&mt.totals.expenses||0)), mt.minutes&&mt.minutes.length?mt.minutes.length+' item(s)':'—'];
+  });
+}
+function registerAttendanceRows(from,to){
+  return DB.meetings.filter(mt=>mt.date>=from && mt.date<=to).sort((a,b)=>a.date<b.date?-1:1).map(mt=>{
+    const present = (mt.presentIds||[]).map(memberName).join(', ')||'—';
+    const absent = (mt.absentIds||[]).map(memberName).join(', ')||'—';
+    return [fmtDate(mt.date), mt.present+' / '+mt.totalMembers, esc(present), esc(absent)];
+  });
+}
+function registerSavingsRows(from,to){
+  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS')
+    .sort((a,b)=>a.date<b.date?-1:1)
+    .map(t=>[fmtDate(t.date), t.voucherNo, esc(memberName(t.memberId)), rightCell(rupee(t.amount)), esc(t.narration||'')]);
+}
+function registerLoanRows(from,to){
+  return DB.loans.filter(l=>l.disbursementDate>=from && l.disbursementDate<=to).sort((a,b)=>a.disbursementDate<b.disbursementDate?-1:1)
+    .map(l=>[l.id, fmtDate(l.disbursementDate), esc(memberName(l.memberId)), esc(l.purpose||'—'), rightCell(rupee(l.principal)),
+      l.interestRate+'%', rightCell(rupee(loanOutstanding(l.id).principal)), badge(l.status, l.status==='Closed'?'grey':'green')]);
+}
+function registerRepaymentRows(from,to){
+  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && (t.type==='Loan Repayment'||t.type==='Interest Received'))
+    .sort((a,b)=>a.date<b.date?-1:1)
+    .map(t=>[fmtDate(t.date), t.voucherNo, esc(memberName(t.memberId)), t.loanId||'—', t.type==='Loan Repayment'?rightCell(rupee(t.amount)):'',
+      t.type==='Interest Received'?rightCell(rupee(t.amount)):'', esc(t.narration||'')]);
+}
+function registerInterestRows(from,to){
+  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && (t.credit==='INTEREST_INCOME'||t.credit==='BANK_INTEREST'||t.debit==='EXP_Interest Paid'))
+    .sort((a,b)=>a.date<b.date?-1:1)
+    .map(t=>[fmtDate(t.date), t.voucherNo, t.credit==='INTEREST_INCOME'?'Interest Received — Internal Lending':(t.credit==='BANK_INTEREST'?'Interest Earned — Bank Deposits':'Interest Paid'),
+      t.memberId?esc(memberName(t.memberId)):'—', rightCell(rupee(t.amount)), esc(t.narration||'')]);
+}
+function registerBookRows(code, from, to){
+  let bal = 0;
+  const rows = [];
+  DB.transactions.filter(t=>(t.debit===code||t.credit===code) && t.date<from).sort((a,b)=>a.date<b.date?-1:1)
+    .forEach(t=>{ bal += t.debit===code? t.amount : -t.amount; });
+  const opening = bal;
+  DB.transactions.filter(t=>(t.debit===code||t.credit===code) && t.date>=from && t.date<=to).sort((a,b)=>a.date<b.date?-1:1)
+    .forEach(t=>{
+      const isDr = t.debit===code; bal += isDr? t.amount : -t.amount;
+      rows.push([fmtDate(t.date), t.voucherNo, esc(t.narration||t.type), isDr?rightCell(rupee(t.amount)):'', !isDr?rightCell(rupee(t.amount)):'', rightCell(rupee(bal))]);
+    });
+  return {opening, closing:bal, rows};
+}
+function registerLedgerRows(from,to){
+  return allLedgerCodes().map(c=>{
+    // period movement: filter manually since ledgerMovement only supports upToDate/fromDate as inclusive bounds
+    let dr=0, cr=0, openDr=0, openCr=0;
+    DB.transactions.forEach(t=>{
+      if(t.debit!==c && t.credit!==c) return;
+      if(t.date<from){ if(t.debit===c) openDr+=t.amount; if(t.credit===c) openCr+=t.amount; return; }
+      if(t.date>to) return;
+      if(t.debit===c) dr+=t.amount; if(t.credit===c) cr+=t.amount;
+    });
+    const type = accountType(c); const normalDebit = (type==='asset'||type==='expense');
+    const opening = normalDebit ? openDr-openCr : openCr-openDr;
+    const closing = opening + (normalDebit ? dr-cr : cr-dr);
+    return {code:c, label:accountLabel(c), opening, dr, cr, closing};
+  }).filter(r=>r.opening||r.dr||r.cr||r.closing);
+}
+function viewRegisters(){
+  const {w, from, to, label} = registersPeriodRange();
+  let html = `<div class="section-title no-print"><h2>Registers (Printable)</h2></div>`;
+  html += `<div class="card no-print">
+    <div class="row">
+      <div class="field"><label>Register</label><select onchange="updateRegField('register', this.value)">
+        ${REGISTER_LIST.map(r=>`<option value="${r.id}" ${w.register===r.id?'selected':''}>${esc(r.label)}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Period</label><select onchange="updateRegField('period', this.value)">
+        <option value="month" ${w.period==='month'?'selected':''}>Month-wise</option>
+        <option value="year" ${w.period==='year'?'selected':''}>Year-wise</option>
+        <option value="custom" ${w.period==='custom'?'selected':''}>Specific Period</option>
+      </select></div>
+      ${w.period==='month'?`<div class="field"><label>Month</label><input type="month" value="${w.month}" onchange="updateRegField('month', this.value)"></div>`:''}
+      ${w.period==='year'?`<div class="field"><label>Year</label><input type="number" min="2000" max="2100" value="${w.year}" onchange="updateRegField('year', this.value)"></div>`:''}
+      ${w.period==='custom'?`<div class="field"><label>From</label><input type="date" value="${w.from}" onchange="updateRegField('from', this.value)"></div>
+        <div class="field"><label>To</label><input type="date" value="${w.to}" onchange="updateRegField('to', this.value)"></div>`:''}
+      ${w.register==='passbook'?`<div class="field"><label>Member</label><select onchange="updateRegField('passMember', this.value)">${DB.members.map(m=>`<option value="${m.id}" ${w.passMember===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select></div>`:''}
+    </div>
+    <button class="btn" style="margin-top:8px" onclick="window.print()">🖨 Print this Register</button>
+    <p class="hint" style="margin-top:6px">Print uses the browser's own Print dialog (Ctrl/Cmd+P also works) — choose "Save as PDF" there for a soft copy, or print directly for a hard copy for record.</p>
+  </div>`;
+
+  const regLabel = (REGISTER_LIST.find(r=>r.id===w.register)||{}).label || 'Register';
+  html += `<div class="printhead"><h2>${esc(DB.profile.name||'SHG')}</h2><p>${esc(regLabel)} — ${esc(label)}</p></div>`;
+
+  html += `<div class="card"><h3 class="no-print">${esc(regLabel)} — ${esc(label)}</h3>`;
+  if(w.register==='meeting'){
+    const rows = registerMeetingRows(from,to);
+    html += rows.length ? tbl(['Date','Place','Present/Total','Attendance %','Savings+Repayment Collected','Expenses','Minutes'], rows) : `<div class="empty">No meetings in this period.</div>`;
+  } else if(w.register==='attendance'){
+    const rows = registerAttendanceRows(from,to);
+    html += rows.length ? tbl(['Date','Present/Total','Present Members','Absent Members'], rows) : `<div class="empty">No meetings in this period.</div>`;
+  } else if(w.register==='savings'){
+    const rows = registerSavingsRows(from,to);
+    html += rows.length ? tbl(['Date','Voucher','Member','Amount','Narration'], rows) : `<div class="empty">No savings deposits in this period.</div>`;
+  } else if(w.register==='loan'){
+    const rows = registerLoanRows(from,to);
+    html += rows.length ? tbl(['Loan ID','Disbursed On','Member','Purpose','Principal','Rate','Outstanding','Status'], rows) : `<div class="empty">No loans disbursed in this period.</div>`;
+  } else if(w.register==='repayment'){
+    const rows = registerRepaymentRows(from,to);
+    html += rows.length ? tbl(['Date','Voucher','Member','Loan ID','Principal Repaid','Interest Repaid','Narration'], rows) : `<div class="empty">No repayments in this period.</div>`;
+  } else if(w.register==='interest'){
+    const rows = registerInterestRows(from,to);
+    html += rows.length ? tbl(['Date','Voucher','Nature','Member','Amount','Narration'], rows) : `<div class="empty">No interest entries in this period.</div>`;
+  } else if(w.register==='cashbook' || w.register==='bankbook'){
+    const code = w.register==='cashbook'?'CASH':'BANK';
+    const {opening, closing, rows} = registerBookRows(code, from, to);
+    html += `<div class="grid cols2 no-print">${stat('Opening Balance', rupee(opening))}${stat('Closing Balance', rupee(closing))}</div>`;
+    html += `<p><b>Opening Balance: ${rupee(opening)}</b></p>`;
+    html += rows.length ? tbl(['Date','Voucher','Particulars','Receipts (Dr)','Payments (Cr)','Balance'], rows) : `<div class="empty">No entries in this period.</div>`;
+    html += `<p><b>Closing Balance: ${rupee(closing)}</b></p>`;
+  } else if(w.register==='ledger'){
+    const rows = registerLedgerRows(from,to);
+    html += rows.length ? tbl(['Account','Opening','Debit (Period)','Credit (Period)','Closing'],
+      rows.map(r=>[esc(r.label), rightCell(rupee(r.opening)), rightCell(rupee(r.dr)), rightCell(rupee(r.cr)), rightCell(rupee(r.closing))]))
+      : `<div class="empty">No ledger movement in this period.</div>`;
+  } else if(w.register==='passbook'){
+    const m = DB.members.find(x=>x.id===w.passMember);
+    if(!m){ html += `<div class="empty">No members yet.</div>`; }
+    else {
+      html += `<p><b>${esc(m.name)} (${m.id})</b></p>`;
+      const txns = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.date>=from && t.date<=to).sort((a,b)=>a.date<b.date?-1:1);
+      html += txns.length ? tbl(['Date','Voucher','Type','Loan ID','Debit','Credit','Amount','Narration'],
+        txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)]))
+        : `<div class="empty">No entries for this member in this period.</div>`;
+    }
+  }
+  html += `</div>`;
+  return html;
 }
 
 /* ============================================================ MEMBER STATEMENT */
