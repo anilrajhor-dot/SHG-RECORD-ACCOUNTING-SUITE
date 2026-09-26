@@ -342,6 +342,7 @@ let ROUTE = 'dashboard';
 let FLASH = null;
 let DEMO_MODE = false; // true only while seedDemoDataCore() is generating sample records
 let HELP_CHAT = []; // in-memory only, not persisted — Help Assistant conversation for this session
+let AI_CHAT = []; // in-memory only, not persisted — "Ask AI" (AI SHG Manager) conversation for this session
 
 /* ---------------- Persistence ---------------- */
 function freshDB(){
@@ -364,7 +365,8 @@ function freshDB(){
     mcp:{ history:[] },
     lokosMapping: defaultLokosMapping(),
     loanDoseEligibility: defaultDoseEligibility(),
-    settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en' },
+    settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en',
+      aiApiProvider:'', aiApiKey:'' },
     seq:1
   };
 }
@@ -402,6 +404,8 @@ function loadDB(){
       if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
       if(!DB.revolvingFund) DB.revolvingFund = [];
       if(!DB.bankLoans) DB.bankLoans = [];
+      if(DB.settings.aiApiProvider===undefined) DB.settings.aiApiProvider = '';
+      if(DB.settings.aiApiKey===undefined) DB.settings.aiApiKey = '';
       // Migrate CIF records saved before CIF became a proper loan sub-ledger: give any entry
       // missing an id/status/interestMethod one, without touching amounts or existing postings.
       if(DB.cif && DB.cif.length){
@@ -737,6 +741,8 @@ const NAV = [
   {grp:'Overview'},
   {id:'dashboard', label:'Dashboard', icon:'▦'},
   {id:'profile', label:'SHG Profile', icon:'◎'},
+  {grp:'AI SHG Manager'},
+  {id:'aimanager', label:'AI SHG Manager', icon:'🤖'},
   {grp:'Field Operations'},
   {id:'members', label:'Members', icon:'◈'},
   {id:'meetings', label:'Meetings', icon:'◷'},
@@ -804,7 +810,10 @@ function render(){
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
       lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement,
-      backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI
+      backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI,
+      aimanager: viewAIManager, aiask: viewAIAsk, aidaily: viewAIDailyReview, aidq: viewAIDataQuality,
+      airecovery: viewAILoanRecovery, aimonthend: viewAIMonthEnd, aigrading: viewAIGrading,
+      aibusiness: viewAIBusiness, aireports: viewAIReports, aitraining: viewAITraining
     }[ROUTE] || viewDashboard)();
   }catch(e){
     html += `<div class="msg err">Error rendering this screen: ${esc(e.message)}</div>`;
@@ -4240,8 +4249,23 @@ function viewSettings(){
     <p class="hint">Changing this label does not alter previously saved monthly grades — each saved grade permanently records the version used at the time.</p>
     <button class="btn" type="submit">Save</button>
   </form></div>`;
+
+  html += `<div class="card"><h3>AI SHG Manager — Status</h3>
+    <p class="hint">AI Status: <b>${aiStatusLabel()}</b>. The AI SHG Manager always answers from this app's own stored data and calculation functions — it never invents figures and never posts, edits or deletes an accounting record itself. An API key is optional and is used only if you later connect an external AI service for richer natural-language answers; it is stored only in this browser's local storage, never hard-coded in the app file.</p>
+    <form onsubmit="return saveAISettings(event)">
+      <div class="row">
+        <div class="field"><label>AI API Provider (optional)</label><input name="aiApiProvider" value="${esc(DB.settings.aiApiProvider||'')}" placeholder="e.g. none / OpenAI / Azure — leave blank for Local mode"></div>
+        <div class="field"><label>AI API Key (optional)</label><input type="password" name="aiApiKey" value="${esc(DB.settings.aiApiKey||'')}" placeholder="Leave blank to keep using Local (offline, rule-based) mode" autocomplete="off"></div>
+      </div>
+      <button class="btn" type="submit">Save</button>
+      ${DB.settings.aiApiKey?'<button type="button" class="btn secondary" onclick="clearAIKey()">Clear Key / Use Local Mode</button>':''}
+    </form>
+  </div>`;
   return html;
 }
+function aiStatusLabel(){ return (DB.settings.aiApiKey && DB.settings.aiApiProvider) ? 'API Connected ('+esc(DB.settings.aiApiProvider)+')' : 'Local (offline, rule-based — no data leaves this device)'; }
+function saveAISettings(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.settings.aiApiProvider=(f.get('aiApiProvider')||'').trim(); DB.settings.aiApiKey=(f.get('aiApiKey')||'').trim(); flash('ok','AI settings saved.'); render(); return false; }
+function clearAIKey(){ DB.settings.aiApiProvider=''; DB.settings.aiApiKey=''; flash('ok','AI API key cleared. AI SHG Manager is back to Local mode.'); render(); }
 function saveUserSettings(ev){ ev.preventDefault(); const f=new FormData(ev.target); Object.assign(DB.settings, Object.fromEntries(f.entries())); flash('ok','Saved.'); render(); return false; }
 function saveOpening(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -4287,6 +4311,484 @@ function viewHelp(){
   html += items.map(([t,d])=>`<div class="card"><h3>${esc(t)}</h3><p style="margin:0;color:var(--muted);font-size:13.5px">${esc(d)}</p></div>`).join('');
   html += `<div class="card"><h3>About This Application</h3><p style="color:var(--muted);font-size:13.5px">This is a self-contained, offline-first SHG records, accounting and grading tool. It runs entirely in the browser and stores data only on this device (browser local storage) — nothing is sent anywhere. Use Backup & Restore regularly, and after any browser data clearing, restore from your last backup. It does not connect to any official LokOS/DAY-NRLM system; it prepares validated, correctly formatted data for submission through whatever mechanism your SRLM/DAY-NRLM officially authorises.</p></div>`;
   return html;
+}
+
+/* ============================================================ AI SHG MANAGER
+   An advisory-only layer. It NEVER posts, edits, deletes or auto-approves any accounting
+   record, loan term, grade or LokOS export — it only reads the app's own existing central
+   functions (accountBalance, memberDueInfos, runDataQuality, generateTrialBalance,
+   computeGrading, monthClosingChecklist, calculateCorpus, incomeExpenditure) and explains
+   what they already say. Any action a user takes on an AI suggestion still goes through the
+   app's normal screens and validation — AI Suggestion → User Review → User Confirmation →
+   Existing Validation Engine → Post/Save. Runs fully offline/local by default; an optional
+   API key (Settings) is for a future external AI connection only and is never required. */
+function aiOverdueLoanRows(asOfDate){
+  asOfDate = asOfDate || todayStr();
+  const rows = [];
+  DB.loans.filter(l=>l.status!=='Closed').forEach(loan=>{
+    const infos = memberDueInfos(loan.memberId, asOfDate);
+    const info = infos.find(i=>i.loan.id===loan.id);
+    if(info && info.totalDue>0.5){
+      const mem = DB.members.find(m=>m.id===loan.memberId);
+      rows.push(Object.assign({loan, member:mem, memberName: mem?mem.name:'(unknown member)'}, info));
+    }
+  });
+  return rows.sort((a,b)=>b.totalDue-a.totalDue);
+}
+function aiContext(){
+  const ym = monthKey(todayStr());
+  const dq = runDataQuality();
+  const tb = generateTrialBalance();
+  const grading = computeGrading(ym);
+  const corpus = calculateCorpus();
+  const ie = incomeExpenditure(fyStart(), todayStr());
+  const overdue = aiOverdueLoanRows();
+  const active = activeMembers();
+  return {
+    asOf: todayStr(), ym,
+    shgName: DB.profile.name || 'This SHG',
+    cash: accountBalance('CASH'), bank: accountBalance('BANK'), upi: accountBalance('UPI'),
+    activeMemberCount: active.length, totalMemberCount: DB.members.length,
+    totalSavings: active.reduce((s,m)=>s+memberSavingsBalance(m.id),0),
+    activeLoans: DB.loans.filter(l=>l.status!=='Closed'),
+    totalLoanOutstanding: DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0),
+    overdue, overdueTotal: Math.round(overdue.reduce((s,r)=>s+r.totalDue,0)*100)/100,
+    cifOutstanding: cifOutstanding(),
+    dq, dqRed: dq.filter(i=>i.sev==='red').length, dqAmber: dq.filter(i=>i.sev==='amber').length,
+    tb, grading, corpus, ie
+  };
+}
+function aiHealthCards(){
+  const c = aiContext();
+  const dataHealth = c.dqRed>0?'red':(c.dqAmber>0?'amber':'green');
+  const accountingHealth = c.tb.diff===0 ? 'green' : 'red';
+  const loanHealth = c.overdue.length===0 ? 'green' : (c.overdue.length<=3?'amber':'red');
+  const checklist = monthClosingChecklist(c.ym);
+  const criticalFails = checklist.filter(x=>!x.ok && !x.warnOnly).length;
+  const monthEndStatus = criticalFails>0 ? 'Not Ready' : (checklist.some(x=>!x.ok)?'Attention Required':'Ready');
+  const gradingStatus = c.grading.gradePending ? 'Pending — data correction required' : ((c.grading.grade||'—')+' ('+c.grading.overall.toFixed(0)+'%)');
+  const lokosReadiness = c.dqRed>0 ? 'Upload Not Permitted' : (c.dqAmber>0?'Correction Recommended':'Ready for Upload');
+  const alerts = [];
+  if(c.cash<0) alerts.push('Cash balance is negative — review recent cash entries.');
+  if(c.bank<0) alerts.push('Bank balance is negative — review recent bank entries.');
+  if(c.tb.diff!==0) alerts.push('Trial Balance does not match (difference '+rupee(Math.abs(c.tb.diff))+'). This should not normally occur — check Data Quality.');
+  if(c.overdue.length>0) alerts.push(c.overdue.length+' loan(s) have overdue dues totalling '+rupee(c.overdueTotal)+'. See Loan Recovery Assistant.');
+  if(c.dqRed>0) alerts.push(c.dqRed+' critical data-quality issue(s) need attention before this SHG can be graded or its data exported.');
+  else if(c.dqAmber>0) alerts.push(c.dqAmber+' data-quality item(s) need attention (not critical).');
+  return {c, dataHealth, accountingHealth, loanHealth, monthEndStatus, gradingStatus, lokosReadiness, alerts, checklist};
+}
+function aiDot(sev){ return `<span class="dot ${sev}"></span>`; }
+function aiModuleBtn(route,label){ return `<button type="button" class="btn secondary small" style="margin:3px" onclick="go('${route}')">${label}</button>`; }
+function aiCard(title, bodyHtml){ return `<div class="card"><h3>${esc(title)}</h3>${bodyHtml}</div>`; }
+function viewAIManager(){
+  const h = aiHealthCards();
+  let html = `<div class="section-title"><h2>🤖 AI SHG Manager</h2></div>`;
+  html += `<div class="msg info">A read-only advisory layer. It reads and explains this SHG's own recorded data using the app's existing accounting, data-quality and grading engines — it never posts, edits, deletes or auto-approves any record. Every suggestion still needs your review and confirmation on the app's normal screens.</div>`;
+  html += aiCard('SHG Health at a Glance', `<div class="grid cols4">
+    ${stat('Data Quality', aiDot(h.dataHealth)+' '+(h.dataHealth==='green'?'Ready':h.dataHealth==='amber'?'Attention Required':'Error'))}
+    ${stat('Accounting', aiDot(h.accountingHealth)+' '+(h.accountingHealth==='green'?'Balanced':'Mismatch'))}
+    ${stat('Loans', aiDot(h.loanHealth)+' '+h.c.overdue.length+' overdue')}
+    ${stat('Month-End Status', h.monthEndStatus)}
+    ${stat('Grading (this month)', h.gradingStatus)}
+    ${stat('LokOS Readiness', h.lokosReadiness)}
+  </div>`);
+  html += h.alerts.length
+    ? aiCard('AI Alerts', h.alerts.map(a=>`<div class="msg amber" style="margin-bottom:6px">${esc(a)}</div>`).join(''))
+    : `<div class="msg ok">No AI alerts right now — everything checked looks normal.</div>`;
+  html += aiCard('AI Modules', `<div class="row" style="flex-wrap:wrap">
+    ${aiModuleBtn('aiask','💬 Ask AI')}${aiModuleBtn('aidaily','📅 Daily Review')}${aiModuleBtn('aidq','🔍 Data Quality Auditor')}
+    ${aiModuleBtn('airecovery','💰 Loan Recovery Assistant')}${aiModuleBtn('aimonthend','🔒 Month-End Accountant')}${aiModuleBtn('aigrading','★ Grading Assistant')}
+    ${aiModuleBtn('aibusiness','📈 SHG Business Adviser')}${aiModuleBtn('aireports','📝 Report Writer')}${aiModuleBtn('aitraining','🎓 Training Assistant')}
+  </div>`);
+  return html;
+}
+
+/* ---------------- Ask AI (natural-language interface over the app's own data) ---------------- */
+function aiRenderResponse(r){
+  let html = `<div style="margin-bottom:16px">`;
+  html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">ANSWER</div><div style="font-size:14px;margin-bottom:8px">${esc(r.answer)}</div>`;
+  if(r.figures && r.figures.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">FIGURES</div><ul style="margin:4px 0 8px 18px;font-size:13.5px">${r.figures.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
+  if(r.evidence && r.evidence.length) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">EVIDENCE</div><ul style="margin:4px 0 8px 18px;font-size:13.5px;color:var(--muted)">${r.evidence.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;
+  if(r.observation) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">OBSERVATION</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.observation)}</div>`;
+  if(r.action) html += `<div style="font-weight:700;color:var(--navy-2);font-size:12px;letter-spacing:.03em">RECOMMENDED ACTION</div><div style="font-size:13.5px;margin-bottom:8px">${esc(r.action)}</div>`;
+  html += `<div style="font-size:11.5px;color:var(--muted)">Data status: ${esc(r.confidence||'Calculation-based, from this app\'s own stored records')} · as on ${fmtDate(todayStr())}</div>`;
+  html += `</div>`;
+  return html;
+}
+function aiAsk(qRaw){
+  const q = (qRaw||'').toLowerCase().trim();
+  const c = aiContext();
+  const base = {confidence:'Data verified — calculated from this app\'s own stored records'};
+  if(!q) return Object.assign({answer:'Please type a question.'}, base, {confidence:'—'});
+  const has = (...words)=>words.some(w=>q.includes(w));
+
+  if(has('cash') && !has('bank')) return Object.assign({}, base, {
+    answer:`${c.shgName} currently has ${rupee(c.cash)} in cash.`,
+    figures:['Cash in hand: '+rupee(c.cash)],
+    evidence:['From the Cash Book (accountBalance("CASH")) as on '+fmtDate(c.asOf)]});
+  if(has('bank balance','money in bank') || (has('bank') && has('balance','how much','money'))) return Object.assign({}, base, {
+    answer:`${c.shgName} currently has ${rupee(c.bank)} in the bank.`,
+    figures:['Bank balance: '+rupee(c.bank)],
+    evidence:['From the Bank Book (accountBalance("BANK")) as on '+fmtDate(c.asOf)]});
+  if(has('upi')) return Object.assign({}, base, {
+    answer:`The UPI account balance is ${rupee(c.upi)}. UPI collections/payments are posted directly into the Bank account in this app, so this figure is normally zero unless a legacy UPI balance exists.`,
+    figures:['UPI balance: '+rupee(c.upi)]});
+  if(has('overdue','who has outstanding','outstanding loan') && has('loan','instalment','installment','repayment','due')) {
+    if(!c.overdue.length) return Object.assign({}, base, {answer:'No member currently has an overdue loan instalment.', figures:['Overdue loans: 0']});
+    const top = c.overdue.slice(0,10);
+    return Object.assign({}, base, {
+      answer:`${c.overdue.length} loan(s) have an overdue amount, totalling ${rupee(c.overdueTotal)}.`,
+      figures: top.map(r=>r.memberName+' — Loan '+r.loan.id+': '+rupee(r.totalDue)+' due (Principal '+rupee(r.totalPrincipalDue)+' + Interest '+rupee(r.totalInterestDue)+')'),
+      evidence:['Calculated loan-wise via memberDueInfos(), the same function used in the Meeting module and Loan Register'],
+      observation: c.overdue.length>top.length ? ('Showing the top 10 of '+c.overdue.length+' — see Loan Recovery Assistant for the full list.') : undefined,
+      action:'Open the Loan Recovery Assistant for follow-up suggestions for each member.'});
+  }
+  if(has('total loan','loan outstanding') || (has('loan') && has('shg','total','current'))) return Object.assign({}, base, {
+    answer:`Total outstanding on active member loans is ${rupee(c.totalLoanOutstanding)} across ${c.activeLoans.length} active loan(s).`,
+    figures:['Total loan outstanding: '+rupee(c.totalLoanOutstanding), 'Active loans: '+c.activeLoans.length],
+    evidence:['Sum of loanOutstanding(loanId).principal over every non-closed loan']});
+  if(has('savings') && has('total','how much')) return Object.assign({}, base, {
+    answer:`Total member savings held by the SHG is ${rupee(c.totalSavings)} across ${c.activeMemberCount} active member(s).`,
+    figures:['Total savings: '+rupee(c.totalSavings), 'Active members: '+c.activeMemberCount],
+    evidence:['Sum of memberSavingsBalance(id) for every active member']});
+  if(has('income') && has('month','this month')) {
+    const from = c.ym+'-01', to = todayStr();
+    const mIe = incomeExpenditure(from, to);
+    return Object.assign({}, base, {answer:`Income recorded so far this month (${c.ym}) is ${rupee(mIe.income)}, against expenditure of ${rupee(mIe.expenditure)}.`,
+      figures:['Income (month): '+rupee(mIe.income), 'Expenditure (month): '+rupee(mIe.expenditure), 'Surplus/(Deficit): '+rupee(mIe.surplus)],
+      evidence:['From incomeExpenditure(), the same function behind Financial Statements']});
+  }
+  if(has('trial balance') && has('why','not match','mismatch','wrong','not matching','not balanced')) return Object.assign({}, base, {
+    answer: c.tb.diff===0 ? 'The Trial Balance is matched — Total Debit equals Total Credit.' : `The Trial Balance does not match by ${rupee(Math.abs(c.tb.diff))}. This should never happen since every voucher enforces equal debit and credit at the time of posting.`,
+    figures:['Total Debit: '+rupee(c.tb.totalDr), 'Total Credit: '+rupee(c.tb.totalCr), 'Difference: '+rupee(c.tb.diff)],
+    observation: c.tb.diff!==0 ? 'A mismatch usually points to a corrupted backup restore or a manually edited data file rather than normal data entry.' : undefined,
+    action: c.tb.diff!==0 ? 'Open Data Quality Check for the specific record(s) involved, or restore your last known-good backup.' : undefined});
+  if(has('transactions above') || (has('transaction') && has('10,000','10000','above','large'))) {
+    const big = DB.transactions.filter(t=>!t.reversed && t.amount>10000).sort((a,b)=>b.amount-a.amount).slice(0,15);
+    return Object.assign({}, base, {answer: big.length? (big.length+' transaction(s) above ₹10,000 found.') : 'No transaction above ₹10,000 was found.',
+      figures: big.map(t=>fmtDate(t.date)+' — '+t.type+': '+rupee(t.amount)+' ('+t.voucherNo+')')});
+  }
+  if(has('not paid','have not paid','who has not paid') && has('month','this month')) {
+    const from = c.ym+'-01', to = todayStr();
+    const paidIds = new Set(DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').map(t=>t.memberId));
+    const notPaid = activeMembers().filter(m=>!paidIds.has(m.id));
+    return Object.assign({}, base, {answer: notPaid.length? (notPaid.length+' active member(s) have not made a savings entry this month ('+c.ym+').') : 'Every active member has made a savings entry this month.',
+      figures: notPaid.map(m=>m.name)});
+  }
+  if(has('bank manager','summary for the bank')) return Object.assign({}, base, {
+    answer:`Here is a quick summary for a bank manager briefing: Members ${c.activeMemberCount}, Total Savings ${rupee(c.totalSavings)}, Loan Outstanding ${rupee(c.totalLoanOutstanding)}, Cash ${rupee(c.cash)}, Bank ${rupee(c.bank)}, CIF Outstanding ${rupee(c.cifOutstanding)}.`,
+    action:'Use AI Report Writer → "Bank Manager Briefing" for a printable version.'});
+  if(has('financial position','explain the financial')) return Object.assign({}, base, {
+    answer:`${c.shgName} holds ${rupee(c.cash+c.bank)} in cash+bank, has lent out ${rupee(c.totalLoanOutstanding)} to members (against ${rupee(c.totalSavings)} in member savings), and carries ${rupee(c.cifOutstanding)} of outstanding CIF liability. Total Corpus (own funds) is ${rupee(c.corpus.total)}.`,
+    figures:['Cash+Bank: '+rupee(c.cash+c.bank), 'Loan Outstanding: '+rupee(c.totalLoanOutstanding), 'Savings: '+rupee(c.totalSavings), 'CIF Outstanding: '+rupee(c.cifOutstanding), 'Total Corpus: '+rupee(c.corpus.total)],
+    evidence:['calculateCorpus() cross-checked by two independent formulas — see the Corpus screen']});
+  if(has('what data is missing','what is missing','data missing')) {
+    if(!c.dq.length) return Object.assign({}, base, {answer:'No missing or inconsistent data was found by the Data Quality engine.'});
+    return Object.assign({}, base, {answer:c.dq.length+' data item(s) need attention ('+c.dqRed+' critical, '+c.dqAmber+' warning).',
+      figures:c.dq.slice(0,10).map(i=>'['+i.sev.toUpperCase()+'] '+i.text), action:'Open Data Quality Auditor for the full list with suggested corrections.'});
+  }
+  if(has('graded this month','can this shg be graded','ready for grading')) return Object.assign({}, base, {
+    answer: c.grading.gradePending ? 'Not yet — grading is Pending because critical data-quality issues exist. Resolve them first.' : `Yes. This month\'s calculated grade is ${c.grading.grade} (${c.grading.overall.toFixed(1)}%).`,
+    figures:['Critical data-quality issues: '+c.dqRed],
+    action:'See the Grading Assistant for the indicator-wise breakdown.'});
+  return Object.assign({}, base, {
+    answer:'I don\'t have a ready answer for that yet using this app\'s current rules. Try asking about cash, bank, savings, loan outstanding, overdue members, income/expenditure, Trial Balance, or grading — or open the relevant screen from the left menu.',
+    confidence:'—'});
+}
+function viewAIAsk(){
+  let html = `<div class="section-title"><h2>💬 Ask AI</h2></div>`;
+  html += `<div class="msg info">Ask a plain-language question about this SHG's own recorded data. Answers are calculated only from this app's stored records and functions — nothing is invented.</div>`;
+  html += `<div class="card"><form onsubmit="return aiAskSubmit(event)">
+    <div class="row"><div class="field" style="flex:3"><input name="q" id="aiAskInput" placeholder="e.g. Who has overdue loans?" autocomplete="off"></div>
+    <button class="btn" type="submit">Ask</button>${aiVoiceButtonsHTML()}</div>
+  </form></div>`;
+  if(AI_CHAT.length){
+    html += `<div class="card"><h3>Conversation</h3>`;
+    AI_CHAT.slice().reverse().forEach(c=>{
+      html += `<div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--line)"><div style="font-weight:600;color:var(--navy-2);font-size:13px">You asked</div><div style="font-size:13.5px;margin-bottom:8px">${esc(c.q)}</div>${aiRenderResponse(c.r)}</div>`;
+    });
+    html += `</div>`;
+  }
+  html += aiCard('Try asking…', `<div class="row" style="flex-wrap:wrap">${['How much cash does the SHG have?','Who has outstanding loans?','Which members have overdue instalments?','What was the income this month?','What is the total savings?','Why is the Trial Balance not matching?','Which members have not paid this month?','Explain the financial position of this SHG.','What data is missing?','Can this SHG be graded this month?'].map(t=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiAskQuick('${esc(t).replace(/'/g,"\\'")}')">${esc(t)}</button>`).join('')}</div>`);
+  return html;
+}
+function aiAskSubmit(ev){
+  ev.preventDefault();
+  const inp = document.getElementById('aiAskInput');
+  const q = inp.value;
+  if(!q.trim()) return false;
+  const r = aiAsk(q);
+  AI_CHAT.push({q, r});
+  ROUTE='aiask'; render();
+  setTimeout(()=>{ const el=document.getElementById('aiAskInput'); if(el) el.focus(); },0);
+  return false;
+}
+function aiAskQuick(q){ AI_CHAT.push({q, r: aiAsk(q)}); render(); }
+
+/* ---------------- Voice Assistant (graceful fallback to text if unsupported) ---------------- */
+function aiVoiceAvailable(){ return !!(typeof window!=='undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)); }
+function aiSpeechSynthAvailable(){ return !!(typeof window!=='undefined' && window.speechSynthesis); }
+function aiVoiceButtonsHTML(){
+  if(!aiVoiceAvailable()) return '';
+  return `<button type="button" class="btn secondary" title="Speak your question" onclick="aiVoiceStart()">🎤</button>`;
+}
+function aiVoiceStart(){
+  if(!aiVoiceAvailable()){ flash('info','Voice input is not supported in this browser. Please type your question instead.'); render(); return; }
+  try{
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang = (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN';
+    rec.onresult = function(ev){
+      const text = ev.results[0][0].transcript;
+      const inp = document.getElementById('aiAskInput');
+      if(inp) inp.value = text;
+      const r = aiAsk(text);
+      AI_CHAT.push({q:text, r});
+      render();
+      if(aiSpeechSynthAvailable()) aiSpeak(r.answer);
+    };
+    rec.onerror = function(){ flash('error','Could not capture voice input. Please type your question instead.'); render(); };
+    rec.start();
+  }catch(e){ flash('error','Voice input is unavailable right now. Please type your question instead.'); render(); }
+}
+function aiSpeak(text){
+  if(!aiSpeechSynthAvailable() || !text) return;
+  try{ const u = new SpeechSynthesisUtterance(text); u.lang = (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN'; window.speechSynthesis.speak(u); }catch(e){}
+}
+
+/* ---------------- AI Data Quality Auditor (narrates the existing runDataQuality() findings) ---------------- */
+function aiSeverityLabel(sev){ return sev==='red' ? 'Critical' : 'Medium'; }
+function viewAIDataQuality(){
+  const issues = runDataQuality();
+  let html = `<div class="section-title"><h2>🔍 AI Data Quality Auditor</h2></div>`;
+  html += `<div class="msg info">This narrates the same checks used by Data Quality Check (left menu) in Problem → Evidence → Why it matters → Suggested correction format. It never silently corrects anything — you make every fix yourself on the relevant screen.</div>`;
+  if(!issues.length){ html += `<div class="msg ok">No issues found — this SHG's records currently pass every automated check.</div>`; return html; }
+  const bySev = {red:issues.filter(i=>i.sev==='red'), amber:issues.filter(i=>i.sev==='amber')};
+  html += aiCard('Summary', `${bySev.red.length} Critical, ${bySev.amber.length} Medium/attention item(s).`);
+  ['red','amber'].forEach(sev=>{
+    if(!bySev[sev].length) return;
+    html += `<div class="card"><h3>${aiSeverityLabel(sev)}</h3>`;
+    bySev[sev].forEach(i=>{
+      html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)">
+        <div><b>Problem:</b> ${esc(i.text)}</div>
+        <div class="hint"><b>Evidence:</b> Detected by the app's Data Quality engine from your stored records as on ${fmtDate(todayStr())}.</div>
+        <div class="hint"><b>Why it matters:</b> ${sev==='red' ? 'This can make Trial Balance, Grading or LokOS export unreliable until corrected.' : 'This can reduce record quality and grading, though it is not urgent.'}</div>
+        <div class="hint"><b>Suggested action:</b> Open the relevant screen (Members, Loans, Transactions, Profile, or Trial Balance) and correct the underlying record — the AI cannot make this change for you.</div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+  return html;
+}
+
+/* ---------------- AI Daily Review ---------------- */
+function viewAIDailyReview(){
+  const c = aiContext();
+  let html = `<div class="section-title"><h2>📅 AI Daily Review</h2></div>`;
+  html += `<div class="msg info">A snapshot of today's position from this app's own ledgers. The colours below are advisory only and never change the official SHG Grading.</div>`;
+  const overall = c.dqRed>0 ? 'red' : (c.overdue.length>0 || c.dqAmber>0 ? 'amber' : 'green');
+  html += `<div class="msg ${overall==='green'?'ok':(overall==='amber'?'amber':'err')}"><b>${overall==='green'?'Green — Normal':overall==='amber'?'Amber — Attention Required':'Red — Immediate Action'}</b></div>`;
+  html += aiCard('Accounting', `<div class="grid cols4">
+    ${stat('Cash Position', rupee(c.cash))}${stat('Bank Position', rupee(c.bank))}${stat('UPI Position', rupee(c.upi))}
+    ${stat('Trial Balance', c.tb.diff===0?'Matched':'Mismatch '+rupee(Math.abs(c.tb.diff)), c.tb.diff!==0)}
+  </div>`);
+  const recentTxns = DB.transactions.filter(t=>!t.reversed).slice(-10).reverse();
+  html += aiCard('Recent Activity (last 10 postings)', recentTxns.length ? tbl(['Date','Type','Amount'], recentTxns.map(t=>[fmtDate(t.date), t.type, rightCell(rupee(t.amount))])) : '<p class="hint">No transactions recorded yet.</p>');
+  html += aiCard('Loans', `<div class="grid cols4">
+    ${stat('Active Loans', c.activeLoans.length)}${stat('Total Outstanding', rupee(c.totalLoanOutstanding))}
+    ${stat('Overdue Loans', c.overdue.length, c.overdue.length>0)}${stat('Overdue Amount', rupee(c.overdueTotal), c.overdueTotal>0)}
+  </div>`);
+  html += aiCard('Data Quality', `<div class="grid cols4">${stat('Critical', c.dqRed, c.dqRed>0)}${stat('Attention', c.dqAmber, c.dqAmber>0)}</div>`);
+  return html;
+}
+
+/* ---------------- AI Loan Recovery Assistant ---------------- */
+function aiRecoverySuggestion(row){
+  const s = [];
+  if(row.arrears>0.5) s.push('Discuss repayment difficulty with the member — arrears of '+rupee(row.arrears)+' have built up.');
+  else s.push('Follow up on this instalment before it becomes arrears.');
+  s.push('Verify the repayment record with the member at the next meeting.');
+  s.push('Follow up through the Vitta Sakhi / bookkeeper if the member cannot attend.');
+  return s;
+}
+function viewAILoanRecovery(){
+  const rows = aiOverdueLoanRows();
+  let html = `<div class="section-title"><h2>💰 AI Loan Recovery Assistant</h2></div>`;
+  html += `<div class="msg info">Suggestions only — the AI never contacts members, changes loan terms, waives interest, or alters accounting records. Every figure below comes from the same memberDueInfos() function used in the Meeting module.</div>`;
+  if(!rows.length){ html += `<div class="msg ok">No member currently has an overdue loan instalment.</div>`; return html; }
+  html += aiCard('Overdue Loans ('+rows.length+', totalling '+rupee(rows.reduce((s,r)=>s+r.totalDue,0))+')',
+    tbl(['Loan ID','Member','Purpose','Principal O/S','Principal Due','Interest Due','Arrears','Total Due'],
+      rows.map(r=>[r.loan.id, esc(r.memberName), esc(r.loan.purpose||''), rightCell(rupee(r.outstanding)), rightCell(rupee(r.totalPrincipalDue)), rightCell(rupee(r.totalInterestDue)), rightCell(rupee(r.arrears)), rightCell('<b>'+rupee(r.totalDue)+'</b>')])));
+  html += `<div class="card"><h3>Suggested Follow-up</h3>`;
+  rows.forEach(r=>{
+    html += `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--line)"><b>${esc(r.memberName)} — Loan ${r.loan.id}</b> (${rupee(r.totalDue)} due)
+      <ul style="margin:4px 0 0 18px;font-size:13.5px">${aiRecoverySuggestion(r).map(s=>`<li>${esc(s)}</li>`).join('')}</ul></div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+
+/* ---------------- AI Month-End Accountant ---------------- */
+function viewAIMonthEnd(){
+  const ym = monthKey(todayStr());
+  const checklist = monthClosingChecklist(ym);
+  const criticalFails = checklist.filter(x=>!x.ok && !x.warnOnly);
+  const status = criticalFails.length>0 ? 'Not Ready' : (checklist.some(x=>!x.ok) ? 'Attention Required' : 'Ready');
+  let html = `<div class="section-title"><h2>🔒 AI Month-End Accountant</h2></div>`;
+  html += `<div class="msg info">This reviews the same checklist used by Month-End Closing (left menu) for ${ym}. The AI never closes the month itself — use Month-End Closing to actually close it.</div>`;
+  html += `<div class="msg ${status==='Ready'?'ok':(status==='Attention Required'?'amber':'err')}"><b>MONTH-END STATUS — ${status}</b></div>`;
+  html += aiCard('Checklist', tbl(['Item','Status','Detail'], checklist.map(x=>[x.label, x.ok?badge('OK','green'):badge(x.warnOnly?'Note':'Issue', x.warnOnly?'amber':'red'), esc(x.detail)])));
+  if(criticalFails.length) html += `<div class="msg amber">${criticalFails.length} unresolved critical item(s) must be corrected (or an authorised override recorded) before closing.</div>`;
+  html += `<div class="row"><button class="btn secondary" onclick="go('closing')">Open Month-End Closing</button></div>`;
+  return html;
+}
+
+/* ---------------- AI Grading Assistant ---------------- */
+function viewAIGrading(){
+  const ym = monthKey(todayStr());
+  const g = computeGrading(ym);
+  const prevYm = (()=>{ const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-2,1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); })();
+  const prev = DB.grading.history[prevYm];
+  let html = `<div class="section-title"><h2>★ AI Grading Assistant</h2></div>`;
+  html += `<div class="msg info">This explains the score already calculated by the app's own configurable Local Grading Framework (Settings → Grading Framework Version: ${esc(DB.grading.ruleVersion)}). It never changes the score or grade — see SHG Grading (left menu) for the official NABARD-format assessment.</div>`;
+  html += `<div class="msg ${g.gradePending?'err':'ok'}"><b>${g.gradePending ? 'Grade Pending — data correction required' : ('Current Grade: '+g.grade+' ('+g.overall.toFixed(1)+'%)')}</b></div>`;
+  html += aiCard('Indicator-wise Breakdown', tbl(['Indicator','Value','Status'], g.indicators.map(i=>[i.label, i.value.toFixed(1)+'%', i.value>=80?badge('Green','green'):i.value>=50?badge('Amber','amber'):badge('Red','red')])));
+  const weak = g.indicators.filter(i=>i.value<80).sort((a,b)=>a.value-b.value);
+  if(weak.length){
+    html += aiCard('Reasons for Deductions / Suggested Corrective Action', weak.map(i=>{
+      const actions = {
+        'Meeting Regularity':'Hold meetings as per the scheduled frequency and record every meeting in the app.',
+        'Attendance':'Encourage fuller attendance; record attendance for every member at every meeting.',
+        'Savings Regularity':'Follow up with members who have not made their regular savings this month.',
+        'Loan Recovery':'Review overdue member loans — see the Loan Recovery Assistant.'
+      };
+      return `<div style="margin-bottom:6px"><b>${esc(i.label)}</b> — ${i.value.toFixed(1)}%: ${esc(actions[i.label]||'Review the underlying records for this indicator.')}</div>`;
+    }).join(''));
+  }
+  if(prev){
+    const change = g.overall - prev.overall;
+    html += aiCard('Comparison with Previous Month ('+prevYm+')', `Previous: ${prev.gradePending?'Pending':prev.grade} (${prev.overall.toFixed(1)}%) → Current: ${g.gradePending?'Pending':g.grade} (${g.overall.toFixed(1)}%) — ${change>0?'improved by '+change.toFixed(1)+' points':change<0?'declined by '+Math.abs(change).toFixed(1)+' points':'unchanged'}.`);
+  } else {
+    html += `<div class="msg info">No saved grade snapshot found for ${prevYm} to compare against (a snapshot is saved when that month is closed).</div>`;
+  }
+  html += `<div class="row"><button class="btn secondary" onclick="go('grading')">Open SHG Grading</button></div>`;
+  return html;
+}
+
+/* ---------------- AI SHG Business Adviser (uses only data actually tracked by this app) ---------------- */
+function viewAIBusiness(){
+  const c = aiContext();
+  let html = `<div class="section-title"><h2>📈 AI SHG Business Adviser</h2></div>`;
+  html += `<div class="msg info">Observations are calculated only from data this app actually tracks (savings, loans, cash flow, corpus). This app does not track member-level enterprise sales, purchases, stock or debtors, so those figures are shown as "Data not available" rather than estimated.</div>`;
+  const loanToCorpus = c.corpus.total>0 ? (c.totalLoanOutstanding/c.corpus.total*100) : null;
+  const savingsToLoan = c.totalLoanOutstanding>0 ? (c.totalSavings/c.totalLoanOutstanding*100) : null;
+  html += aiCard('Observations', `
+    <div style="margin-bottom:8px"><b>Loan burden vs. own funds:</b> ${loanToCorpus===null?'Data not available (Corpus is zero).':`Loans outstanding are ${loanToCorpus.toFixed(0)}% of Total Corpus (${rupee(c.totalLoanOutstanding)} of ${rupee(c.corpus.total)}).`}
+    ${loanToCorpus!==null && loanToCorpus>150 ? '<br><i>Possible implication:</i> The SHG has lent out considerably more than its own funds, relying heavily on CIF/bank borrowings.<br><i>Suggested action:</i> Review the repayment pace on outstanding loans and future borrowing plans.' : ''}</div>
+    <div style="margin-bottom:8px"><b>Savings coverage of loans:</b> ${savingsToLoan===null?'No loans currently outstanding.':`Member savings cover ${savingsToLoan.toFixed(0)}% of the loan book.`}</div>
+    <div style="margin-bottom:8px"><b>Cash flow (this financial year):</b> Income ${rupee(c.ie.income)}, Expenditure ${rupee(c.ie.expenditure)}, Surplus/(Deficit) ${rupee(c.ie.surplus)}.
+    ${c.ie.surplus<0?'<br><i>Possible implication:</i> Expenditure has exceeded income this year.<br><i>Suggested action:</i> Review meeting/administrative expenses against income sources (interest, fines).':''}</div>
+    <div><b>Sales / Purchases / Stock / Debtors / Creditors:</b> Data not available — this app does not currently track member enterprise-level business transactions.</div>
+  `);
+  html += `<div class="msg info" style="margin-top:4px">These are calculated observations, not financial advice. Please confirm with SHG office-bearers before acting.</div>`;
+  return html;
+}
+
+/* ---------------- AI Report Writer ---------------- */
+const AI_REPORT_TYPES = [
+  {id:'summary', label:'SHG Financial Summary'},
+  {id:'loanoutstanding', label:'Loan Outstanding Report'},
+  {id:'loanrecovery', label:'Loan Recovery Report'},
+  {id:'dataquality', label:'Data Quality Report'},
+  {id:'monthend', label:'Month-End Report'},
+  {id:'bankmanager', label:'Bank Manager Briefing'}
+];
+function aiGenerateReport(type){
+  const c = aiContext();
+  const lines = [(c.shgName)+' — '+(AI_REPORT_TYPES.find(t=>t.id===type)||{label:type}).label, 'Generated on '+fmtDate(todayStr()), ''];
+  if(type==='summary'){
+    lines.push('Active Members: '+c.activeMemberCount, 'Total Savings: '+rupee(c.totalSavings), 'Loan Outstanding: '+rupee(c.totalLoanOutstanding),
+      'Cash: '+rupee(c.cash), 'Bank: '+rupee(c.bank), 'CIF Outstanding: '+rupee(c.cifOutstanding), 'Total Corpus: '+rupee(c.corpus.total),
+      'Trial Balance: '+(c.tb.diff===0?'Matched':'Mismatch '+rupee(Math.abs(c.tb.diff))));
+  } else if(type==='loanoutstanding'){
+    c.activeLoans.forEach(l=>lines.push(l.id+' — '+(DB.members.find(m=>m.id===l.memberId)||{}).name+': '+rupee(loanOutstanding(l.id).principal)+' outstanding'));
+    lines.push('', 'Total: '+rupee(c.totalLoanOutstanding));
+  } else if(type==='loanrecovery'){
+    if(!c.overdue.length) lines.push('No overdue loans.');
+    c.overdue.forEach(r=>lines.push(r.memberName+' — Loan '+r.loan.id+': '+rupee(r.totalDue)+' due (Arrears '+rupee(r.arrears)+')'));
+  } else if(type==='dataquality'){
+    if(!c.dq.length) lines.push('No data-quality issues found.');
+    c.dq.forEach(i=>lines.push('['+i.sev.toUpperCase()+'] '+i.text));
+  } else if(type==='monthend'){
+    monthClosingChecklist(c.ym).forEach(x=>lines.push((x.ok?'[OK] ':'[ISSUE] ')+x.label+' — '+x.detail));
+  } else if(type==='bankmanager'){
+    lines.push('Members: '+c.activeMemberCount, 'Total Savings: '+rupee(c.totalSavings), 'Loan Outstanding: '+rupee(c.totalLoanOutstanding),
+      'Cash: '+rupee(c.cash), 'Bank: '+rupee(c.bank), 'CIF Outstanding: '+rupee(c.cifOutstanding),
+      'Trial Balance: '+(c.tb.diff===0?'Matched':'Mismatch'), 'Grading (this month): '+(c.grading.gradePending?'Pending':c.grading.grade));
+  }
+  return lines.join('\n');
+}
+function viewAIReports(){
+  const u = (window.__aiReportUI = window.__aiReportUI || {type:'summary'});
+  let html = `<div class="section-title"><h2>📝 AI Report Writer</h2></div>`;
+  html += `<div class="msg info">Reports are assembled only from this app's own stored data. Preview, then print or copy.</div>`;
+  html += `<div class="card"><div class="field"><label>Report</label><select onchange="window.__aiReportUI.type=this.value; render()">${AI_REPORT_TYPES.map(t=>`<option value="${t.id}" ${u.type===t.id?'selected':''}>${esc(t.label)}</option>`).join('')}</select></div></div>`;
+  const text = aiGenerateReport(u.type);
+  window.__aiReportText = text;
+  html += `<div class="card"><h3>Preview</h3><pre style="white-space:pre-wrap;font-family:inherit;font-size:13.5px">${esc(text)}</pre>
+    <div class="row"><button class="btn secondary" onclick="window.print()">Print</button><button class="btn secondary" onclick="aiShareReport()">Share</button></div></div>`;
+  return html;
+}
+function aiShareReport(){ shareText((DB.profile.name||'SHG')+' — AI Report', window.__aiReportText||''); }
+
+/* ---------------- AI Training Assistant ---------------- */
+const AI_TRAINING_KB = [
+  {kw:['gross profit'], a:'Gross Profit = Sales − Cost of Goods Sold. It shows what a business earns from its core trading activity before overheads. Example: an SHG member sells ₹10,000 of goods that cost her ₹7,000 to buy/make — her Gross Profit is ₹3,000.'},
+  {kw:['loan outstanding'], a:'Loan Outstanding is the principal amount a member still owes on a loan, after subtracting all principal she has repaid so far. Example: she borrowed ₹10,000 and has repaid ₹4,000 principal — her Loan Outstanding is ₹6,000.'},
+  {kw:['debtor holding period','debtor'], a:'Debtor Holding Period shows, on average, how many days it takes to collect cash from credit sales. A longer period means more of the business\'s money is tied up in unpaid customer bills.'},
+  {kw:['trial balance'], a:'A Trial Balance lists every account\'s Debit and Credit balance. Because every transaction is recorded as an equal Debit and Credit (double-entry), Total Debit must always equal Total Credit — if it doesn\'t, something was recorded incorrectly.'},
+  {kw:['cash flow'], a:'Cash Flow is the movement of actual cash in and out of the SHG — savings collected, loans disbursed, repayments received, expenses paid. It is different from profit, since profit can include amounts not yet received or paid in cash.'},
+  {kw:['shg example','give an shg example'], a:'Example: An SHG collects ₹100 savings from 10 members (₹1,000), lends ₹5,000 to one member for a shop, and that member repays ₹500 principal + ₹50 interest at the next meeting — the ₹50 interest becomes SHG income.'},
+  {kw:['quiz','10 quiz','practical exercise'], a:'Try this: 1) What is the double-entry rule? 2) What increases Cash but not Bank? 3) What is Loan Outstanding? 4) Why must Trial Balance balance? 5) What is Corpus? — check your answers against the Help & Training section.'}
+];
+function aiTrainingAsk(q){
+  const ql = (q||'').toLowerCase();
+  const hit = AI_TRAINING_KB.find(e=>e.kw.some(k=>ql.includes(k)));
+  return hit ? hit.a : null;
+}
+function viewAITraining(){
+  let html = `<div class="section-title"><h2>🎓 AI Training Assistant</h2></div>`;
+  html += `<div class="msg info">Simple explanations and practical SHG examples for members, Vitta Sakhis, bank managers and officials — offline, rule-based.</div>`;
+  html += `<div class="card"><form onsubmit="return aiTrainingSubmit(event)">
+    <div class="field"><label>Ask a training question</label><input name="q" id="aiTrainingInput" placeholder="e.g. Explain gross profit simply." autocomplete="off"></div>
+    <button class="btn" type="submit">Ask</button>
+  </form></div>`;
+  if(window.__aiTrainingChat && window.__aiTrainingChat.length){
+    html += `<div class="card"><h3>Conversation</h3>`;
+    window.__aiTrainingChat.slice().reverse().forEach(c=>{
+      html += `<div style="margin-bottom:12px"><div style="font-weight:600;color:var(--navy-2);font-size:13px">You asked</div><div style="font-size:13.5px;margin-bottom:6px">${esc(c.q)}</div>
+        <div style="font-weight:600;color:var(--muted);font-size:12px">Training Assistant</div><div style="font-size:13.5px">${esc(c.a)}</div></div>`;
+    });
+    html += `</div>`;
+  }
+  html += aiCard('Try asking…', `<div class="row" style="flex-wrap:wrap">${['Explain gross profit simply.','Explain loan outstanding.','Explain Trial Balance.','Explain cash flow.','Give an SHG example.','Create 10 quiz questions.'].map(t=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiTrainingQuick('${esc(t).replace(/'/g,"\\'")}')">${esc(t)}</button>`).join('')}</div>`);
+  return html;
+}
+function aiTrainingSubmit(ev){
+  ev.preventDefault();
+  const inp = document.getElementById('aiTrainingInput');
+  const q = inp.value; if(!q.trim()) return false;
+  const a = aiTrainingAsk(q) || 'I don\'t have a ready answer for that yet. Try one of the suggested questions below, or rephrase using a simple accounting term.';
+  window.__aiTrainingChat = window.__aiTrainingChat || [];
+  window.__aiTrainingChat.push({q,a});
+  ROUTE='aitraining'; render();
+  return false;
+}
+function aiTrainingQuick(q){
+  const a = aiTrainingAsk(q) || 'I don\'t have a ready answer for that yet.';
+  window.__aiTrainingChat = window.__aiTrainingChat || [];
+  window.__aiTrainingChat.push({q,a});
+  render();
 }
 
 /* ============================================================ HELP ASSISTANT (offline, rule-based — not a live/connected AI) */
