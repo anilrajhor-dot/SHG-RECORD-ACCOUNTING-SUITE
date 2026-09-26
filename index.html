@@ -346,7 +346,7 @@ function freshDB(){
     expenseCategories: DEFAULT_EXPENSE_CATS.slice(),
     closedPeriods:[],
     auditLog:[],
-    grading:{ ruleVersion:'2026.1', history:{} },
+    grading:{ ruleVersion:'2026.1', history:{}, nabard:{} },
     lokosMapping: defaultLokosMapping(),
     loanDoseEligibility: defaultDoseEligibility(),
     settings:{ currentUserName:'Bookkeeper', currentUserRole:'Bookkeeper', openingCash:0, openingBank:0, openingDate:'', language:'en' },
@@ -379,7 +379,8 @@ function loadDB(){
     const raw = localStorage.getItem(LS_KEY);
     if(raw){
       DB = JSON.parse(raw);
-      if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{}};
+      if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabard:{}};
+      if(!DB.grading.nabard) DB.grading.nabard = {};
       if(!DB.lokosMapping) DB.lokosMapping = defaultLokosMapping();
       if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
       if(!DB.revolvingFund) DB.revolvingFund = [];
@@ -643,6 +644,24 @@ function calculateCorpus(){
   return { savings, capitalFund, cif, revolvingFund, total: Math.round((savings+capitalFund+cif+revolvingFund)*100)/100 };
 }
 function calculateBankBalance(){ return accountBalance('BANK'); }
+// Dedicated Corpus screen — calculateCorpus() is the single source of truth already used by
+// the Balance Sheet's Notes to Accounts and the Bank Loan Application's eligibility (dose)
+// calculation, so this screen can never show a figure that differs from those.
+function viewCorpus(){
+  const c = calculateCorpus();
+  let html = `<div class="section-title"><h2>SHG Corpus</h2></div>`;
+  html += `<div class="msg info">Corpus is calculated automatically from existing records — it is not entered separately anywhere. The same total is used in the Balance Sheet Notes to Accounts and in the Bank Loan Application's eligibility calculation, so there is only one corpus figure across the whole application.</div>`;
+  html += `<div class="card"><div class="grid cols3">
+    ${stat('Members Savings', rupee(c.savings))}
+    ${stat('Capital Fund (SHG Fund + Cumulative Surplus)', rupee(c.capitalFund))}
+    ${stat('CIF Outstanding', rupee(c.cif))}
+    ${stat('Revolving Fund', rupee(c.revolvingFund))}
+    ${stat('Total Corpus', '<b>'+rupee(c.total)+'</b>')}
+  </div>
+  <p class="hint" style="margin-top:10px">Total Corpus = Members Savings + Capital Fund + CIF + Revolving Fund, all as on today. Capital Fund = SHG Fund (opening capital) + cumulative surplus from the Income &amp; Expenditure Account since inception.</p>
+  </div>`;
+  return html;
+}
 
 /* ---------------- Rendering shell ---------------- */
 const NAV = [
@@ -656,6 +675,7 @@ const NAV = [
   {id:'loans', label:'Members Loan', icon:'◐'},
   {id:'cif', label:'CIF', icon:'◑'},
   {id:'revolvingfund', label:'Revolving Fund (RF)', icon:'◒'},
+  {id:'corpus', label:'Corpus', icon:'✪'},
   {grp:'Accounting'},
   {id:'transactions', label:'Transactions / Vouchers', icon:'≡'},
   {id:'cashbook', label:'Cash Book', icon:'▤'},
@@ -707,7 +727,7 @@ function render(){
   try{
     html += ({
       dashboard: viewDashboard, profile: viewProfile, members: viewMembers, meetings: viewMeetings,
-      savings: viewSavings, loans: viewLoans, cif: viewCIF, revolvingfund: viewRevolvingFund, transactions: viewTransactions,
+      savings: viewSavings, loans: viewLoans, cif: viewCIF, revolvingfund: viewRevolvingFund, corpus: viewCorpus, transactions: viewTransactions,
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'), upibook: ()=>viewBook('UPI','UPI Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
@@ -1070,7 +1090,7 @@ function meetingWorkflow(){
     <h3 style="margin-top:14px">Attendance</h3>
     <p class="hint">All members are listed below — mark only who is absent; everyone else stays present.</p>
     <div class="tablewrap"><table><thead><tr><th>Member</th><th>Present</th></tr></thead><tbody>
-      ${members.map(m=>`<tr><td>${esc(m.name)}</td><td><input type="checkbox" name="present_${m.id}" checked style="width:auto"></td></tr>`).join('')}
+      ${members.map(m=>`<tr><td>${esc(m.name)}</td><td><input type="checkbox" name="present_${m.id}" id="presentChk_${m.id}" checked style="width:auto" onchange="updateAttendanceSummary()"></td></tr>`).join('')}
     </tbody></table></div>
     <div class="row" style="margin-top:14px"><button type="button" class="btn" onclick="goToMeetingStep(2)">Next: Minutes of Meeting →</button></div>
   </div>
@@ -1078,7 +1098,8 @@ function meetingWorkflow(){
   <!-- STEP 2: Minutes of Meeting -->
   <div class="mstep" data-step="2" style="display:none">
     <h3>Minutes of Meeting</h3>
-    <p class="hint">Add one entry per agenda item. Use the mic to dictate the discussion/decision, or type it directly.</p>
+    <p class="hint">This is the formal proceedings record. Attendance below is filled in automatically by name from Step 1 — it becomes the first line of the Minutes. Add one entry per agenda item below it; use the mic to dictate the discussion/decision, or type it directly.</p>
+    <div class="card" id="attendanceSummaryBlock" style="margin-bottom:10px;background:#F7F9FA">${renderAttendanceSummary(members)}</div>
     <textarea id="minutesJSON" name="minutesJSON" style="display:none">${esc(JSON.stringify(MEETING_AGENDA))}</textarea>
     <div id="agendaList">${renderAgendaList()}</div>
     <div class="row" style="margin-top:6px">
@@ -1139,12 +1160,14 @@ function meetingWorkflow(){
       <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="newloan_inst" value="12"></div>
     </div>
     <div class="hint">A member may take a new loan even while an existing loan is still open — each gets its own Loan ID and independent schedule.</div>
-    <h3 style="margin-top:16px">Meeting Expenses (optional)</h3>
+    <h3 style="margin-top:16px">Meeting Expenses Approved (optional)</h3>
     <div class="row">
       <div class="field"><label>Category</label><select name="exp_cat">${DB.expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></div>
       <div class="field"><label>Amount ₹</label><input type="number" min="0" step="0.01" name="exp_amount" oninput="meetingCalcGrandTotal()"></div>
       <div class="field"><label>Narration</label><input name="exp_narration"></div>
+      <div class="field"><label>Approved By</label><input name="exp_approvedBy" list="approverList" placeholder="e.g. ${esc(DB.profile.president||'President')}"><datalist id="approverList"><option value="${esc(DB.profile.president||'')}"><option value="${esc(DB.profile.secretary||'')}"><option value="${esc(DB.profile.treasurer||'')}"></datalist></div>
     </div>
+    <p class="hint">An expense recorded here must show who in the meeting approved it — this is what "expenses approved" means in the meeting record and appears in Meeting Details.</p>
     <div id="depositSection">
       <h3 style="margin-top:16px">Deposit Meeting Collection into Bank (optional)</h3>
       <p class="hint">Only applies when Collect In is Cash. The deposit is posted together with this meeting — Debit Bank, Credit Cash — as a transfer, never as income or expense.</p>
@@ -1356,7 +1379,26 @@ function goToMeetingStep(n){
   const ind = document.getElementById('meetingStepIndicator'); if(ind) ind.textContent = 'Step '+n+' of 6 — '+MEETING_STEP_NAMES[n-1];
   const prog = document.getElementById('meetingStepDots');
   if(prog) Array.from(prog.children).forEach((d,i)=>{ d.style.background = (i+1===n) ? 'var(--navy-2)' : (i+1<n ? 'var(--green)' : '#D9E1E8'); });
+  if(n===2) updateAttendanceSummary();
   window.scrollTo(0,0);
+}
+// Reads the live state of the Step-1 Present checkboxes and produces a by-name Present/Absent
+// line. This is shown at the top of Step 2 (Minutes) and — via postMeeting()'s own identical
+// computation from presentIds/absentIds — is saved as the first entry of the meeting's actual
+// Minutes/proceedings record, so attendance-by-name is never re-typed by the user.
+function renderAttendanceSummary(members){
+  const present=[], absent=[];
+  members.forEach(m=>{
+    const chk = document.getElementById('presentChk_'+m.id);
+    const isPresent = chk ? chk.checked : true;
+    (isPresent?present:absent).push(m.name);
+  });
+  return `<div style="font-size:13px"><b>Members Present (${present.length}):</b> ${present.map(esc).join(', ')||'—'}</div>
+    <div style="font-size:13px;margin-top:4px"><b>Members Absent (${absent.length}):</b> ${absent.map(esc).join(', ')||'—'}</div>`;
+}
+function updateAttendanceSummary(){
+  const el = document.getElementById('attendanceSummaryBlock'); if(!el) return;
+  el.innerHTML = renderAttendanceSummary(activeMembers());
 }
 /* ---------------- Minutes of Meeting (agenda-wise), with optional voice input/playback ----------------
    Voice is used ONLY for the qualitative minutes text, never for financial amounts — every
@@ -1475,6 +1517,10 @@ function postMeeting(ev){
       });
       if(sav>0||fine>0||loanRows.length) memberEntries.push({m, sav, fine, loanRows});
     });
+    // Attendance-by-name is generated automatically from presentIds/absentIds (never re-typed)
+    // and recorded as the first line of the Minutes/proceedings, ahead of any agenda items.
+    const attendanceNote = 'Present ('+presentIds.length+'): '+(presentIds.map(memberName).join(', ')||'—')+'. Absent ('+absentIds.length+'): '+(absentIds.map(memberName).join(', ')||'—')+'.';
+    minutes = [{topic:'Attendance', discussion: attendanceNote}, ...minutes];
     if(anyOverrideUsed && !adjustmentReason){
       throw new Error('At least one loan exceeds the amount due and the authorised-adjustment box is ticked, but no reason was entered. A reason is required for every authorised adjustment so it stays traceable in the audit trail and reports.');
     }
@@ -1491,7 +1537,12 @@ function postMeeting(ev){
     }
     let expense = null;
     const expAmt = parseFloat(f.get('exp_amount'))||0;
-    if(expAmt>0){ if(expAmt<0) throw new Error('Expense amount cannot be negative.'); expense = { cat:f.get('exp_cat'), amount:expAmt, narration:f.get('exp_narration')||f.get('exp_cat') }; }
+    if(expAmt>0){
+      if(expAmt<0) throw new Error('Expense amount cannot be negative.');
+      const approvedBy = (f.get('exp_approvedBy')||'').trim();
+      if(!approvedBy) throw new Error('Meeting expenses must record who approved them (e.g. President/Secretary) before posting.');
+      expense = { cat:f.get('exp_cat'), amount:expAmt, narration:f.get('exp_narration')||f.get('exp_cat'), approvedBy };
+    }
 
     const totals = {
       savings: Math.round(memberEntries.reduce((s,r)=>s+r.sav,0)*100)/100,
@@ -1550,7 +1601,7 @@ function showMeetingConfirmation(){
       ${stat('Interest Received', rupee(p.totals.interest))}
       ${stat('Fine Received', rupee(p.totals.fines))}
       ${stat('New Loans Disbursed', rupee(p.totals.newLoans))}
-      ${stat('Meeting Expenses', rupee(p.totals.expenses))}
+      ${stat('Meeting Expenses', rupee(p.totals.expenses) + (p.expense&&p.expense.approvedBy?(' <span class="hint">(Approved: '+esc(p.expense.approvedBy)+')</span>'):''))}
       ${stat(p.mode==='CASH'?'Cash Collection':'Bank Collection', rupee(p.totalCollection))}
       ${stat('Proposed Bank Deposit', p.deposit?rupee(p.deposit.amount):'—')}
       ${stat('Net Cash Remaining', p.mode==='CASH'?rupee(Math.round((p.netCash-(p.deposit?p.deposit.amount:0))*100)/100):'—')}
@@ -1592,7 +1643,8 @@ function confirmPostMeeting(){
       logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal)+' (via meeting)');
     }
     if(p.expense){
-      postTxn({date:p.date,type:'Expense',debit:'EXP_'+p.expense.cat,credit:p.mode,amount:p.expense.amount,meetingId,narration:p.expense.narration});
+      const expNarration = p.expense.narration + ' — Approved by ' + p.expense.approvedBy;
+      postTxn({date:p.date,type:'Expense',debit:'EXP_'+p.expense.cat,credit:p.mode,amount:p.expense.amount,meetingId,narration:expNarration});
     }
     if(p.deposit){
       let narration = 'Cash deposited to bank (meeting collection)';
@@ -2793,6 +2845,78 @@ function computeGrading(ym){
   return { ym, indicators, overall, grade, gradePending,
     dqStatus, dqRed, dqAmber, exceptions: dqRed, ruleVersion: DB.grading.ruleVersion };
 }
+/* ---------------- NABARD-format SHG Grading (additive — does not replace the configurable
+   Local Grading Framework above). This reproduces the parameter SET commonly used across the
+   SHG-Bank Linkage Programme for grading before Cash Credit Limit (group size/homogeneity,
+   meeting & attendance regularity, savings & internal-lending regularity, loan recovery,
+   book-keeping, leadership rotation, conflict resolution, group norms). Several of these
+   parameters (homogeneity, leadership rotation, conflict resolution, group norms, purpose-wise
+   loan utilisation) cannot be derived from transaction data — they require an assessor's
+   judgement — so those remain manual inputs, clearly marked, while everything the app already
+   records is filled in automatically from the same central functions used elsewhere
+   (computeGrading, runDataQuality). This is explicitly NOT presented as the official NABARD
+   grading proforma — exact parameters/weights/cut-offs vary by bank and SRLM. */
+const NABARD_GRADING_PARAMS = [
+  {key:'groupSize', label:'Group Size (10–20 members)', auto:true},
+  {key:'meetingRegularity', label:'Regularity of Meetings', auto:true},
+  {key:'attendance', label:'Attendance in Meetings', auto:true},
+  {key:'savingsRegularity', label:'Regularity of Savings', auto:true},
+  {key:'internalLending', label:'Internal Lending / Utilisation of Corpus', auto:true},
+  {key:'loanRecovery', label:'Loan Repayment / Recovery Rate', auto:true},
+  {key:'bookKeeping', label:'Maintenance of Books & Records', auto:true},
+  {key:'homogeneity', label:'Homogeneity of Group Members', auto:false},
+  {key:'leadershipRotation', label:'Rotation of Leadership', auto:false},
+  {key:'conflictResolution', label:'Resolution of Internal Conflicts', auto:false},
+  {key:'groupNorms', label:'Adherence to Group Rules / Norms', auto:false},
+  {key:'loanUtilisation', label:'Purpose-wise Utilisation of Loans', auto:false}
+];
+function computeNabardGrading(ym){
+  const g = computeGrading(ym);
+  const ind = {}; g.indicators.forEach(i=>ind[i.key]=i.value);
+  const totalMembers = activeMembers().length;
+  const groupSizeScore = totalMembers===0 ? 0 : (totalMembers>=10 ? 100 : Math.round(totalMembers/10*100));
+  const membersWithLoan = new Set(DB.loans.map(l=>l.memberId)).size;
+  const internalLending = totalMembers ? Math.min(100, Math.round(membersWithLoan/totalMembers*100)) : 0;
+  const dq = runDataQuality();
+  const dqRed = dq.filter(i=>i.sev==='red').length, dqAmber = dq.filter(i=>i.sev==='amber').length;
+  const bookKeeping = dqRed>0 ? 40 : (dqAmber>0 ? 70 : 100);
+  const manual = (DB.grading.nabard[ym] && DB.grading.nabard[ym].manual) || {};
+  const params = NABARD_GRADING_PARAMS.map(p=>{
+    let value;
+    if(p.key==='groupSize') value = groupSizeScore;
+    else if(p.key==='meetingRegularity') value = ind.meetings;
+    else if(p.key==='attendance') value = ind.attendance;
+    else if(p.key==='savingsRegularity') value = ind.savings;
+    else if(p.key==='internalLending') value = internalLending;
+    else if(p.key==='loanRecovery') value = ind.recovery;
+    else if(p.key==='bookKeeping') value = bookKeeping;
+    else value = (manual[p.key]!=null) ? manual[p.key] : null;
+    return Object.assign({}, p, {value});
+  });
+  const scored = params.filter(p=>p.value!=null);
+  const overall = scored.length ? scored.reduce((s,p)=>s+p.value,0)/scored.length : 0;
+  const grade = scored.length < params.length ? null : (overall>=80?'A':(overall>=60?'B':(overall>=40?'C':'D')));
+  return { ym, params, overall, grade, scoredCount:scored.length, totalCount:params.length, ruleVersion: DB.grading.ruleVersion };
+}
+function saveNabardManual(ev, ym){
+  ev.preventDefault();
+  const f = new FormData(ev.target);
+  if(!DB.grading.nabard) DB.grading.nabard = {};
+  const manual = (DB.grading.nabard[ym] && DB.grading.nabard[ym].manual) || {};
+  NABARD_GRADING_PARAMS.filter(p=>!p.auto).forEach(p=>{
+    const raw = f.get('m_'+p.key);
+    if(raw!=null && raw!==''){
+      let v = parseFloat(raw); if(isNaN(v)) return; if(v<0) v=0; if(v>100) v=100;
+      manual[p.key] = v;
+    }
+  });
+  DB.grading.nabard[ym] = { manual, savedAt: nowStamp() };
+  saveDB();
+  logAudit('NABARD_GRADING_INPUT', ym+': manual assessment scores saved.');
+  flash('ok','NABARD-format grading inputs saved.');
+  render();
+  return false;
+}
 function viewGrading(){
   let html = `<div class="section-title"><h2>SHG Grading</h2></div>`;
   html += `<div class="msg info">Configurable/Local Grading Framework — Not an Official Government Grade. Grading Framework Version: ${esc(DB.grading.ruleVersion)}. If your SRLM/DAY-NRLM issues an official grading format, the weights and indicators below can be reconfigured to match it exactly in Settings.</div>`;
@@ -2826,6 +2950,26 @@ function viewGrading(){
       h.ruleVersion, h.revisions&&h.revisions.length ? `<a style="cursor:pointer;font-size:12px" onclick="showGradeRevisions('${h.ym}')">${h.revisions.length} revision(s)</a>` : ''];
   })) : `<div class="empty">No monthly grades saved yet.</div>`;
   html += `</div>`;
+
+  const ng = computeNabardGrading(ym);
+  html += `<div class="card"><h3>NABARD-Format SHG Grading (Local Reproduction) — ${ym}</h3>
+    <div class="msg info">Reproduces the parameter set commonly used for SHG grading under the SHG-Bank Linkage Programme — group size/homogeneity, meeting &amp; attendance regularity, savings &amp; internal-lending regularity, loan recovery, book-keeping, leadership rotation, conflict resolution and adherence to group norms. This is <b>not</b> the officially prescribed NABARD proforma — exact parameters, weights and cut-offs vary by bank/SRLM. Verify and adjust against your bank's actual grading sheet.</div>
+    <div class="grid cols3">
+      ${ng.grade ? stat('NABARD-Format Grade', ng.grade) : stat('NABARD-Format Grade', 'Pending ('+ng.scoredCount+'/'+ng.totalCount+' assessed)', true)}
+      ${stat('Overall Score', ng.overall.toFixed(1)+'%')}
+      ${stat('Indicators Assessed', ng.scoredCount+' / '+ng.totalCount)}
+    </div>
+    <form onsubmit="return saveNabardManual(event,'${ym}')">
+    <div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Parameter</th><th>Source</th><th>Score (0–100)</th></tr></thead><tbody>
+      ${ng.params.map(p=>`<tr><td>${esc(p.label)}</td><td>${p.auto?'Auto (from records)':'Manual assessment'}</td><td>${
+        p.auto ? rightCell((p.value!=null?p.value.toFixed(1):'0.0')+'%')
+        : `<input type="number" min="0" max="100" step="1" name="m_${p.key}" value="${p.value!=null?p.value:''}" style="width:80px">`
+      }</td></tr>`).join('')}
+    </tbody></table></div>
+    <button class="btn" style="margin-top:8px" type="submit">Save Manual Assessment Scores</button>
+    </form>
+    <p class="hint" style="margin-top:8px">Auto-filled indicators are drawn from the same underlying records as the Local Grading Framework above and Data Quality Check — there is only one set of underlying figures, never separately re-entered.</p>
+  </div>`;
   return html;
 }
 function showGradeRevisions(ym){
@@ -3417,7 +3561,7 @@ function restoreBackup(){
     try{
       const data = JSON.parse(e.target.result);
       if(!data.members || !data.transactions) throw new Error('This does not look like a valid backup file.');
-      DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{}};
+      DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabard:{}}; if(!DB.grading.nabard) DB.grading.nabard={};
       logAudit('BACKUP_RESTORE','Data restored from backup file');
       flash('ok','Backup restored.'); render();
     }catch(err){ alert('Restore failed: '+err.message); }
