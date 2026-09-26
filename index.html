@@ -452,6 +452,20 @@ function flash(type,text){ FLASH={type,text}; }
 /* ---------------- Transaction Engine (double entry) ---------------- */
 function postTxn(t){
   // t: {date, type, debit, credit, amount, memberId, loanId, narration, meetingId, category}
+  // A UPI collection/payment on a normal SHG savings-account UPI ID settles directly into that
+  // linked Bank account in real life — there is no separate pool of money sitting in "UPI"
+  // waiting to be moved. So every NEW posting made against UPI is redirected to BANK here, with
+  // the payment mode kept visible in the narration, exactly the way it would show on the bank
+  // statement. This is the single point where that happens, so every entry point (meeting
+  // collections, CIF/Revolving Fund receipts, loan disbursement/repayment, expenses, journal
+  // vouchers) gets it automatically. The historical UPI account/ledger itself is untouched — any
+  // balance already posted there before this change stays exactly as it was, and can still be
+  // moved out via Transfer Funds (which passes allowLegacyUPI to bypass this redirect, since that
+  // screen genuinely needs to debit/credit the UPI account to close it out).
+  if(!t.allowLegacyUPI){
+    if(t.debit==='UPI'){ t.debit='BANK'; t.narration = (t.narration||'') + ' (via UPI)'; }
+    if(t.credit==='UPI'){ t.credit='BANK'; t.narration = (t.narration||'') + ' (via UPI)'; }
+  }
   if(!t.date) throw new Error('Date is required.');
   if(isPeriodClosed(t.date)) throw new Error('Period '+monthKey(t.date)+' is closed. Reopen it in Settings to post here.');
   if(!ACCOUNTS[t.debit] && !t.debit.startsWith('EXP_')) throw new Error('Unknown debit account: '+t.debit);
@@ -1147,7 +1161,7 @@ function meetingWorkflow(){
     <div class="row">
       <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
       <div class="field"><label>Place / Venue</label><input name="place" placeholder="e.g. Community Hall, Sample Village"></div>
-      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select><span class="hint">A UPI collection posts straight to the Bank Book, exactly as it settles at the bank.</span></div>
     </div>
     <h3 style="margin-top:14px">Attendance</h3>
     <p class="hint">All members are listed below — mark only who is absent; everyone else stays present.</p>
@@ -1807,7 +1821,7 @@ function postDepositToBank(ev){
     if(bankAccount) narration += ' — '+bankAccount;
     if(ref) narration += ' · Ref# '+ref;
     if(remarks) narration += ' · '+remarks;
-    postTxn({date, type:'Fund Transfer', debit:toAcct, credit:fromAcct, amount, narration});
+    postTxn({date, type:'Fund Transfer', debit:toAcct, credit:fromAcct, amount, narration, allowLegacyUPI:true});
     closeModal(); flash('ok','Transfer posted — Cash Book, Bank Book and UPI Book now reconcile automatically.'); render();
   }catch(e){ flash('error', e.message); render(); }
   return false;
@@ -2475,6 +2489,7 @@ function doReverse(id){
 /* ============================================================ CASH / BANK BOOK */
 function viewBook(code,title){
   let html = `<div class="section-title"><h2>${esc(title)}</h2><div class="row">${code==='BANK'?'<button class="btn secondary" onclick="bankInterestForm()">Record Bank Interest Credited</button>':''}<button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button></div></div>`;
+  if(code==='UPI') html += `<div class="msg info">A UPI collection on the SHG's normal savings-account UPI ID settles directly into the linked Bank account — so new "Collect In: UPI" entries now post straight to the Bank Book (tagged "via UPI" in the narration) instead of landing here. This UPI Book only shows entries posted here before that change, plus this SHG's own bank account balance is what to reconcile against, not this figure. Use Transfer Funds above to move out any old balance shown below.</div>`;
   // Opening balance is posted as a real transaction (Debit Cash/Bank, Credit SHG Fund — see
   // postOpeningBalances), so it already appears in the transaction loop below. Starting the
   // running balance at DB.settings.openingCash/openingBank here would double-count it.
