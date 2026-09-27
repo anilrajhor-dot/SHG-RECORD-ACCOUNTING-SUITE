@@ -447,6 +447,10 @@ function loadDB(){
           if(!c.id) c.id = nextId('CIF');
           if(!c.interestMethod) c.interestMethod = 'reducing';
           if(!c.status) c.status = 'Active';
+          // Backfill repayment Frequency for CIF tranches saved before frequency-aware flat/reducing
+          // interest existed — every pre-existing tranche was always scheduled monthly, so 'Monthly'
+          // here is a faithful description of what already happened, not a behaviour change.
+          if(!c.frequency) c.frequency = 'Monthly';
         });
       }
       return;
@@ -1730,7 +1734,11 @@ function postMeeting(ev){
         // arrears) — never against the combined principal+interest arrears figure, so this
         // threshold can't be silently inflated by unrelated principal arrears.
         const interestCeiling = due ? due.totalInterestDue : 0;
-        if(due && ri > interestCeiling+0.5 && interestCeiling>0){
+        // Deliberately does NOT require interestCeiling>0 — a loan with ZERO interest currently
+        // due (e.g. fully prepaid, or between instalments) must still treat ANY positive interest
+        // payment as excess needing the same authorised-adjustment + reason + audit trail, rather
+        // than silently accepting it just because the ceiling itself happens to be zero.
+        if(due && ri > interestCeiling+0.5){
           if(!allowExcess) throw new Error('Interest payment for '+m.name+' on loan '+loan.id+' ('+rupee(ri)+') exceeds the interest currently due on that loan ('+rupee(interestCeiling)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
           override = true;
         }
@@ -2194,7 +2202,12 @@ function generateCIFSchedule(cifId, asOfDate){
   const n = Math.max(1, c.period||1);
   const method = c.interestMethod || 'reducing';
   const principalPerInst = Math.round((c.amount/n)*100)/100;
-  const totalFlatInterest = Math.round(c.amount*(c.rate||0)/100 * (n/12)*100)/100;
+  const freq = c.frequency || 'Monthly';
+  // Flat interest must be pro-rated by the CIF tranche's ACTUAL repayment frequency, never assumed
+  // to be monthly — n instalments at a Weekly frequency span n/52 of a year, not n/12. Mirrors
+  // generateLoanSchedule()'s member-loan calculation exactly, so the same fix applies here too.
+  const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
+  const totalFlatInterest = Math.round(c.amount*(c.rate||0)/100 * (n/periodsPerYear)*100)/100;
   const repayTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && t.debit==='CIF').sort((a,b)=>a.date<b.date?-1:1);
   const interestTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && t.debit==='INTEREST_EXPENSE').sort((a,b)=>a.date<b.date?-1:1);
   let principalPool = repayTx.reduce((s,t)=>s+t.amount,0);
@@ -2202,10 +2215,10 @@ function generateCIFSchedule(cifId, asOfDate){
   let runningOutstanding = c.amount;
   const schedule = [];
   for(let i=1;i<=n;i++){
-    const dueDate = addPeriod(c.date, i, 'Monthly');
+    const dueDate = addPeriod(c.date, i, freq);
     const principalDue = (i===n) ? Math.round((c.amount - principalPerInst*(n-1))*100)/100 : principalPerInst;
     const interestDue = method==='reducing'
-      ? Math.round(runningOutstanding*(c.rate||0)/1200*100)/100
+      ? Math.round(runningOutstanding*(c.rate||0)/100/periodsPerYear*100)/100
       : Math.round((totalFlatInterest/n)*100)/100;
     const principalPaid = Math.min(principalDue, Math.max(0,principalPool));
     const interestPaid = Math.min(interestDue, Math.max(0,interestPool));
@@ -2242,11 +2255,11 @@ function viewCIF(){
   const totalInterestPaid = DB.cif.reduce((s,c)=>s+cifInterestPaidTotal(c.id),0);
   html += `<div class="grid cols3">${stat('Total CIF Received', rupee(DB.cif.reduce((s,c)=>s+(c.amount||0),0)))}${stat('CIF Outstanding (Liability)', rupee(cifOutstanding()))}${stat('Total Interest Paid on CIF', rupee(totalInterestPaid))}</div>`;
   if(!DB.cif.length){ html += `<div class="card"><div class="empty">No CIF recorded yet.</div></div>`; return html; }
-  html += `<div class="card">${tbl(['CIF ID','Date','Source','Amount','Rate %','Period (months)','Received Into','Outstanding','Status',''],
+  html += `<div class="card">${tbl(['CIF ID','Date','Source','Amount','Rate %','Instalments','Frequency','Received Into','Outstanding','Status',''],
     DB.cif.map(c=>{
       const os = cifTrancheOutstanding(c.id);
       const eligible = cifEligibleForClosure(c);
-      return [c.id, fmtDate(c.date), esc(c.source), rightCell(rupee(c.amount)), c.rate+'%', c.period, esc(c.bank),
+      return [c.id, fmtDate(c.date), esc(c.source), rightCell(rupee(c.amount)), c.rate+'%', c.period, esc(c.frequency||'Monthly'), esc(c.bank),
         rightCell(rupee(os)), eligible?badge('Eligible for Closure','amber'):badge(c.status,c.status==='Closed'?'grey':'green'),
         `<button class="btn small secondary" onclick="viewCIFSchedule('${c.id}')">Schedule</button> `+
         (c.status!=='Closed' ? `<button class="btn small secondary" onclick="cifRepaymentForm('${c.id}')">Repay</button>`:'')+
@@ -2261,12 +2274,12 @@ function viewCIFSchedule(cifId){
   const os = cifTrancheOutstanding(cifId);
   const statusColor = s=> s==='Paid' ? 'green' : (s==='Due' ? 'grey' : (s.includes('Overdue') ? 'red' : 'amber'));
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>CIF Repayment Schedule — ${c.id}</h3>
-  <p class="hint">Source: ${esc(c.source)} · Principal ${rupee(c.amount)} · ${c.rate}% p.a. (${c.interestMethod==='flat'?'flat':'reducing balance'}) · ${c.period} monthly instalments<br>
+  <p class="hint">Source: ${esc(c.source)} · Principal ${rupee(c.amount)} · ${c.rate}% p.a. (${c.interestMethod==='flat'?'flat':'reducing balance'}) · ${c.period} ${esc((c.frequency||'Monthly').toLowerCase())} instalments<br>
   Outstanding: <b>${rupee(os)}</b> · Interest paid to date: <b>${rupee(cifInterestPaidTotal(cifId))}</b></p>
   ${tbl(['#','Due Date','Principal Due','Interest Due','Total Due','Principal Paid','Interest Paid','Balance','Status'],
     sched.map(s=>[s.inst, fmtDate(s.dueDate), rightCell(rupee(s.principalDue)), rightCell(rupee(s.interestDue)), rightCell(rupee(s.totalDue)),
       rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
-  <p class="hint" style="margin-top:8px">Interest is shown here on a monthly basis for planning. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>`);
+  <p class="hint" style="margin-top:8px">Interest is shown here per instalment (${esc((c.frequency||'Monthly').toLowerCase())}) for planning, pro-rated by this tranche's actual repayment frequency — never assumed to be monthly. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>`);
 }
 function cifForm(){
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record CIF Received</h3>
@@ -2278,13 +2291,14 @@ function cifForm(){
     <div class="row">
       <div class="field"><label>Amount ₹ *</label><input type="number" min="1" step="0.01" name="amount" required></div>
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="9"></div>
-      <div class="field"><label>Repayment Period (months)</label><input type="number" min="1" step="1" name="period" value="36"></div>
+      <div class="field"><label>Repayment Period (No. of Instalments)</label><input type="number" min="1" step="1" name="period" value="36"></div>
     </div>
     <div class="row">
       <div class="field"><label>Interest Method</label><select name="interestMethod"><option value="reducing">Reducing Balance</option><option value="flat">Flat</option></select></div>
+      <div class="field"><label>Repayment Frequency</label><select name="frequency"><option value="Monthly" selected>Monthly</option><option value="Fortnightly">Fortnightly</option><option value="Weekly">Weekly</option></select></div>
       <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
     </div>
-    <div class="hint">9% p.a., reducing balance, 36 months is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche.</div>
+    <div class="hint">9% p.a., reducing balance, 36 monthly instalments is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche. Flat interest is pro-rated by the frequency actually selected (Weekly = ÷52, Fortnightly = ÷26, Monthly = ÷12 periods per year), never assumed to be monthly.</div>
     <button class="btn" style="margin-top:8px" type="submit">Post CIF Receipt</button>
   </form>`);
 }
@@ -2295,7 +2309,7 @@ function saveCIF(ev){
     const amount = parseFloat(data.amount);
     if(!amount || amount<=0) throw new Error('Enter a valid CIF amount.');
     const c = { id: nextId('CIF'), date:data.date, source:data.source, amount, rate:parseFloat(data.rate)||0,
-      period:parseInt(data.period)||36, interestMethod:data.interestMethod||'reducing', bank:data.mode, status:'Active' };
+      period:parseInt(data.period)||36, interestMethod:data.interestMethod||'reducing', frequency:data.frequency||'Monthly', bank:data.mode, status:'Active' };
     DB.cif.push(c);
     postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount,cifId:c.id,narration:'CIF received from '+data.source+' ('+c.id+')'});
     logAudit('CIF_RECEIVED', c.id+' received from '+data.source+' — '+rupee(amount));
@@ -4151,8 +4165,8 @@ function buildExportData(kind){
     rows: DB.loans.map(l=>{ const due = memberDueInfos(l.memberId, todayStr()).find(d=>d.loan.id===l.id);
       return [l.id,l.memberId,memberName(l.memberId),l.purpose||'',l.principal,l.interestRate,l.interestMethod||'flat',l.instalments,l.frequency||'Monthly',
         loanOutstanding(l.id).principal.toFixed(2), due?due.totalInterestDue.toFixed(2):'0.00', l.status,l.nextDueDate]; })};
-  if(kind==='cif') return {headers:['CIFID','Date','Source','Amount','Rate','InterestMethod','PeriodMonths','OutstandingLiability','InterestPaid','Status'],
-    rows: DB.cif.map(c=>[c.id,c.date,c.source,c.amount,c.rate,c.interestMethod||'reducing',c.period,cifTrancheOutstanding(c.id).toFixed(2),cifInterestPaidTotal(c.id).toFixed(2),c.status||'Active'])};
+  if(kind==='cif') return {headers:['CIFID','Date','Source','Amount','Rate','InterestMethod','Instalments','Frequency','OutstandingLiability','InterestPaid','Status'],
+    rows: DB.cif.map(c=>[c.id,c.date,c.source,c.amount,c.rate,c.interestMethod||'reducing',c.period,c.frequency||'Monthly',cifTrancheOutstanding(c.id).toFixed(2),cifInterestPaidTotal(c.id).toFixed(2),c.status||'Active'])};
   if(kind==='revolvingfund') return {headers:['Date','Source','Amount','Rate','PeriodMonths','OutstandingLiability'],
     rows: DB.revolvingFund.map(c=>[c.date,c.source,c.amount,c.rate,c.period,revolvingFundOutstanding().toFixed(2)])};
   if(kind==='bankloans') return {headers:['FacilityID','LoanAccountNo','Type','SanctionDate','SanctionedAmount','Utilised','NotUtilised','OutstandingPayable','Rate','Status'],
