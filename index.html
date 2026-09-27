@@ -2250,17 +2250,41 @@ function loanForm(){
       <div class="field"><label>Cash / Bank / UPI Out</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
     </div>
     <div class="row">
-      <div class="field"><label>Principal ₹ *</label><input type="number" min="1" step="0.01" name="principal" required></div>
-      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="interestRate" value="12"></div>
-      <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="instalments" value="12"></div>
+      <div class="field"><label>Principal ₹ *</label><input type="number" min="1" step="0.01" name="principal" id="loanPrincipalInput" required oninput="updateLoanEMIPreview()"></div>
+      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="interestRate" id="loanRateInput" value="12" oninput="updateLoanEMIPreview()"></div>
+      <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="instalments" id="loanInstalmentsInput" value="12" oninput="updateLoanEMIPreview()"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Repayment Frequency</label><select name="frequency"><option>Monthly</option><option>Fortnightly</option><option>Weekly</option></select></div>
-      <div class="field"><label>Interest Method</label><select name="interestMethod"><option value="flat">Flat</option><option value="reducing">Reducing Balance</option></select></div>
+      <div class="field"><label>Repayment Frequency</label><select name="frequency" id="loanFrequencySelect" onchange="updateLoanEMIPreview()"><option>Monthly</option><option>Fortnightly</option><option>Weekly</option></select></div>
+      <div class="field"><label>Interest Method</label><select name="interestMethod" id="loanMethodSelect" onchange="updateLoanEMIPreview()"><option value="flat">Flat</option><option value="reducing">Reducing Balance</option></select></div>
     </div>
     <div class="hint">This is a configurable local default (12% p.a., flat, 12 instalments) — not a prescribed official rule. Change it to match your SHG's actual terms or your SRLM's rule if one applies.</div>
+    <div id="loanEMIPreview" class="msg info" style="margin-top:8px;display:none"></div>
     <button class="btn" style="margin-top:8px" type="submit">Disburse Loan</button>
   </form>`);
+  updateLoanEMIPreview();
+}
+// Live "what would the EMI be" preview shown WHILE filling in the New Loan form, so the member/
+// animator can see the instalment amount before committing and adjust Principal/Rate/Instalments
+// to something the member can actually afford — purely informational (reads the in-progress form
+// fields, never touches DB) and reuses the same reference-only computeEMI()/generateEMIReference-
+// Schedule() as the EMI Reference screens on an already-saved loan. The loan itself is still
+// actually disbursed and tracked on the equal-principal flat/reducing basis chosen above; this
+// preview never changes what saveLoan() posts.
+function updateLoanEMIPreview(){
+  const el = document.getElementById('loanEMIPreview'); if(!el) return;
+  const pEl = document.getElementById('loanPrincipalInput'), rEl = document.getElementById('loanRateInput'),
+        nEl = document.getElementById('loanInstalmentsInput'), fEl = document.getElementById('loanFrequencySelect'),
+        mEl = document.getElementById('loanMethodSelect');
+  const p = parseFloat(pEl && pEl.value)||0, r = parseFloat(rEl && rEl.value)||0, n = parseInt(nEl && nEl.value)||0;
+  const freq = (fEl && fEl.value) || 'Monthly'; const method = (mEl && mEl.value)||'flat';
+  if(!p || !n){ el.style.display='none'; el.innerHTML=''; return; }
+  const periodsPerYear = freq==='Weekly'?52:(freq==='Fortnightly'?26:12);
+  const emi = computeEMI(p, r, n, periodsPerYear);
+  const rows = generateEMIReferenceSchedule(p, r, n, freq, todayStr());
+  const totalInterest = Math.round(rows.reduce((s,x)=>s+x.interestComponent,0)*100)/100;
+  el.style.display = '';
+  el.innerHTML = `If repaid as an <b>equal instalment (EMI)</b> of <b>${rupee(emi)}</b> per ${esc(freq.toLowerCase())} instalment, total interest ≈ ${rupee(totalInterest)}, total payable ≈ ${rupee(Math.round((p+totalInterest)*100)/100)}. <span style="color:var(--muted)">Shown for reference so you can adjust Principal/Rate/Instalments to what the member can comfortably pay — this loan will actually be tracked as equal-principal + ${method==='reducing'?'reducing-balance':'flat'} interest, and she may still deposit as per her convenience each meeting.</span>`;
 }
 function saveLoan(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -2395,18 +2419,37 @@ function cifForm(){
       <div class="field"><label>Source</label><input name="source" placeholder="e.g. VO / CLF / NRLM"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Amount ₹ *</label><input type="number" min="1" step="0.01" name="amount" required></div>
-      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="9"></div>
-      <div class="field"><label>Repayment Period (No. of Instalments)</label><input type="number" min="1" step="1" name="period" value="36"></div>
+      <div class="field"><label>Amount ₹ *</label><input type="number" min="1" step="0.01" name="amount" id="cifAmountInput" required oninput="updateCifEMIPreview()"></div>
+      <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" id="cifRateInput" value="9" oninput="updateCifEMIPreview()"></div>
+      <div class="field"><label>Repayment Period (No. of Instalments)</label><input type="number" min="1" step="1" name="period" id="cifPeriodInput" value="36" oninput="updateCifEMIPreview()"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Interest Method</label><select name="interestMethod"><option value="reducing">Reducing Balance</option><option value="flat">Flat</option></select></div>
-      <div class="field"><label>Repayment Frequency</label><select name="frequency"><option value="Monthly" selected>Monthly</option><option value="Fortnightly">Fortnightly</option><option value="Weekly">Weekly</option></select></div>
+      <div class="field"><label>Interest Method</label><select name="interestMethod" id="cifMethodSelect" onchange="updateCifEMIPreview()"><option value="reducing">Reducing Balance</option><option value="flat">Flat</option></select></div>
+      <div class="field"><label>Repayment Frequency</label><select name="frequency" id="cifFrequencySelect" onchange="updateCifEMIPreview()"><option value="Monthly" selected>Monthly</option><option value="Fortnightly">Fortnightly</option><option value="Weekly">Weekly</option></select></div>
       <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
     </div>
     <div class="hint">9% p.a., reducing balance, 36 monthly instalments is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche. Flat interest is pro-rated by the frequency actually selected (Weekly = ÷52, Fortnightly = ÷26, Monthly = ÷12 periods per year), never assumed to be monthly.</div>
+    <div id="cifEMIPreview" class="msg info" style="margin-top:8px;display:none"></div>
     <button class="btn" style="margin-top:8px" type="submit">Post CIF Receipt</button>
   </form>`);
+  updateCifEMIPreview();
+}
+// Same live "what would the EMI be" preview as the New Loan form, shown while entering a CIF
+// tranche's terms — informational only, reads the in-progress form fields, never touches DB.
+function updateCifEMIPreview(){
+  const el = document.getElementById('cifEMIPreview'); if(!el) return;
+  const aEl = document.getElementById('cifAmountInput'), rEl = document.getElementById('cifRateInput'),
+        nEl = document.getElementById('cifPeriodInput'), fEl = document.getElementById('cifFrequencySelect'),
+        mEl = document.getElementById('cifMethodSelect');
+  const a = parseFloat(aEl && aEl.value)||0, r = parseFloat(rEl && rEl.value)||0, n = parseInt(nEl && nEl.value)||0;
+  const freq = (fEl && fEl.value) || 'Monthly'; const method = (mEl && mEl.value)||'reducing';
+  if(!a || !n){ el.style.display='none'; el.innerHTML=''; return; }
+  const periodsPerYear = freq==='Weekly'?52:(freq==='Fortnightly'?26:12);
+  const emi = computeEMI(a, r, n, periodsPerYear);
+  const rows = generateEMIReferenceSchedule(a, r, n, freq, todayStr());
+  const totalInterest = Math.round(rows.reduce((s,x)=>s+x.interestComponent,0)*100)/100;
+  el.style.display = '';
+  el.innerHTML = `If repaid as an <b>equal instalment (EMI)</b> of <b>${rupee(emi)}</b> per ${esc(freq.toLowerCase())} instalment, total interest ≈ ${rupee(totalInterest)}, total payable ≈ ${rupee(Math.round((a+totalInterest)*100)/100)}. <span style="color:var(--muted)">Shown for reference only — this CIF tranche will actually be tracked as equal-principal + ${method==='reducing'?'reducing-balance':'flat'} interest per instalment.</span>`;
 }
 function saveCIF(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
