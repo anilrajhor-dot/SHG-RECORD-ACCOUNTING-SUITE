@@ -666,6 +666,107 @@ function generateLoanSchedule(loanId, asOfDate){
   }
   return schedule;
 }
+// ---------------------------------------------------------------------------------------------
+// EMI Reference Calculator (Member Loans & CIF) — FOR PLANNING/REFERENCE ONLY.
+// This SHG app deliberately does NOT enforce equal-instalment EMI repayment: the actual due/paid
+// ledger above (generateLoanSchedule / generateCIFSchedule) is equal-principal with interest on
+// the reducing or flat basis, and members may deposit instalments as per their own convenience —
+// the real posted amounts always come from actual meeting transactions, never from this plan.
+// What follows is a standard, textbook EMI (equal total instalment) amortisation calculator that
+// a member/animator can use purely to SEE what an equal-instalment plan would look like for
+// comparison or bank-style planning. It never reads or writes DB.transactions/DB.loans/DB.cif —
+// it is a pure, stateless "what-if" calculator layered on top of the real accounting engine.
+function computeEMI(principal, annualRatePct, n, periodsPerYear){
+  principal = Math.max(0, principal||0); n = Math.max(1, Math.round(n||1));
+  const r = (annualRatePct||0)/100/(periodsPerYear||12);
+  if(r<=0) return Math.round((principal/n)*100)/100;
+  const factor = Math.pow(1+r, n);
+  return Math.round((principal * r * factor / (factor-1))*100)/100;
+}
+// Builds the full equal-instalment amortisation table for reference/comparison. Rounding is
+// absorbed into the FINAL instalment (same convention as the real schedule generators above) so
+// the table always reconciles to exactly zero closing balance and total principal == principal.
+function generateEMIReferenceSchedule(principal, annualRatePct, n, freq, startDate){
+  principal = Math.max(0, principal||0); n = Math.max(1, Math.round(n||1));
+  freq = freq || 'Monthly'; startDate = startDate || todayStr();
+  const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
+  const r = (annualRatePct||0)/100/periodsPerYear;
+  const emi = computeEMI(principal, annualRatePct, n, periodsPerYear);
+  let balance = principal;
+  const rows = [];
+  for(let i=1;i<=n;i++){
+    const openingBalance = balance;
+    const interestComponent = Math.round(openingBalance*r*100)/100;
+    let principalComponent = Math.round((emi-interestComponent)*100)/100;
+    let inst = emi;
+    if(i===n){ principalComponent = openingBalance; inst = Math.round((principalComponent+interestComponent)*100)/100; }
+    const closingBalance = Math.max(0, Math.round((openingBalance-principalComponent)*100)/100);
+    rows.push({inst:i, dueDate: addPeriod(startDate,i,freq), openingBalance, emi:inst, principalComponent, interestComponent, closingBalance});
+    balance = closingBalance;
+  }
+  return rows;
+}
+// Small inline SVG stacked-bar chart (principal vs interest per instalment) — reference visual
+// only, no external chart library. Two categorical series (principal / interest), both direct-
+// labelled via the legend and axis so identity never depends on colour alone.
+function emiReferenceChartSVG(rows){
+  if(!rows.length) return '';
+  const W = Math.max(360, Math.min(760, rows.length*26)), H = 190, padL=44, padB=22, padT=10;
+  const plotW = W-padL-12, plotH = H-padT-padB;
+  const maxInst = Math.max(...rows.map(r=>r.emi));
+  const barW = Math.max(3, plotW/rows.length*0.62);
+  const gap = plotW/rows.length;
+  const yScale = v => plotH*(v/maxInst);
+  const bars = rows.map((r,idx)=>{
+    const x = padL + idx*gap + (gap-barW)/2;
+    const pH = yScale(r.principalComponent), iH = yScale(r.interestComponent);
+    const yTop = padT + plotH - pH - iH;
+    return `<g><title>#${r.inst} — Principal ${rupee(r.principalComponent)} + Interest ${rupee(r.interestComponent)} = ${rupee(r.emi)}</title>
+      <rect x="${x}" y="${padT+plotH-iH}" width="${barW}" height="${iH}" fill="#1E62A6" rx="1"/>
+      <rect x="${x}" y="${yTop}" width="${barW}" height="${pH}" fill="#1B7A4C" rx="1"/>
+    </g>`;
+  }).join('');
+  const gridY = [0,0.25,0.5,0.75,1].map(f=>{
+    const y = padT + plotH - plotH*f;
+    return `<line x1="${padL}" y1="${y}" x2="${W-8}" y2="${y}" stroke="#E4E9ED" stroke-width="1"/>
+      <text x="${padL-6}" y="${y+3}" font-size="9" fill="#5B6B7A" text-anchor="end">${rupee(Math.round(maxInst*f))}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" role="img" aria-label="EMI amortisation chart: principal and interest per instalment">
+    ${gridY}${bars}
+    <line x1="${padL}" y1="${padT+plotH}" x2="${W-8}" y2="${padT+plotH}" stroke="#B9C3CC" stroke-width="1"/>
+  </svg>
+  <div style="display:flex;gap:16px;font-size:11.5px;color:var(--muted);margin-top:4px">
+    <span><span style="display:inline-block;width:10px;height:10px;background:#1B7A4C;border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Principal</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#1E62A6;border-radius:2px;margin-right:5px;vertical-align:-1px"></span>Interest</span>
+  </div>`;
+}
+function emiReferenceModalHTML(title, subtitle, principal, ratePct, n, freq, startDate){
+  const rows = generateEMIReferenceSchedule(principal, ratePct, n, freq, startDate);
+  const emi = rows.length ? rows[0].emi : 0;
+  const totalInterest = Math.round(rows.reduce((s,r)=>s+r.interestComponent,0)*100)/100;
+  const totalPayable = Math.round((principal+totalInterest)*100)/100;
+  return `<button class="close" onclick="closeModal()">×</button><h3>${esc(title)}</h3>
+  <div class="msg info">This is a <b>reference-only, equal-instalment (EMI) plan</b> for planning/comparison. It does not change how repayments are actually recorded — members may deposit principal and interest as per their own convenience, and the app's real schedule (Principal Due/Interest Due, tracked against actual meeting postings) remains the one used for dues, arrears and accounting.</div>
+  <p class="hint">${esc(subtitle)}</p>
+  <div class="grid cols3">${stat('Reference EMI / Instalment', rupee(emi))}${stat('Total Interest (Reference)', rupee(totalInterest))}${stat('Total Payable (Reference)', rupee(totalPayable))}</div>
+  <div class="card" style="margin-top:10px">${emiReferenceChartSVG(rows)}</div>
+  ${tbl(['#','Due Date','Opening Balance','EMI','Principal Component','Interest Component','Closing Balance'],
+    rows.map(r=>[r.inst, fmtDate(r.dueDate), rightCell(rupee(r.openingBalance)), rightCell(rupee(r.emi)),
+      rightCell(rupee(r.principalComponent)), rightCell(rupee(r.interestComponent)), rightCell(rupee(r.closingBalance))]))}
+  <p class="hint" style="margin-top:8px">Reference plan only — not posted to any ledger. Actual dues continue to be tracked against real deposits in the Repayment Schedule.</p>`;
+}
+function viewLoanEMIReference(loanId){
+  const loan = DB.loans.find(l=>l.id===loanId); if(!loan) return;
+  openModal(emiReferenceModalHTML('EMI Reference — '+esc(memberName(loan.memberId)),
+    'Loan '+loan.id+' · Principal '+rupee(loan.principal)+' · '+loan.interestRate+'% p.a. · '+loan.instalments+' '+((loan.frequency||'Monthly').toLowerCase())+' instalments (equal-EMI basis, for comparison only — this loan is actually tracked on an equal-principal '+(loan.interestMethod==='reducing'?'reducing-balance':'flat')+' basis).',
+    loan.principal, loan.interestRate, loan.instalments, loan.frequency||'Monthly', loan.disbursementDate));
+}
+function viewCIFEMIReference(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return;
+  openModal(emiReferenceModalHTML('EMI Reference — CIF '+c.id,
+    'Source: '+esc(c.source)+' · Principal '+rupee(c.amount)+' · '+c.rate+'% p.a. · '+c.period+' '+((c.frequency||'Monthly').toLowerCase())+' instalments (equal-EMI basis, for comparison only — this CIF tranche is actually tracked on an equal-principal '+(c.interestMethod==='reducing'?'reducing-balance':'flat')+' basis).',
+    c.amount, c.rate, c.period, c.frequency||'Monthly', c.date));
+}
 // Everything the Meeting module needs to know about ALL of one member's active loans, as on
 // a given date (defaults to today) rather than always "as of now" — so a meeting dated
 // earlier than today shows the position that actually applied on that date. A member can hold
@@ -2085,6 +2186,7 @@ function viewLoans(){
         rightCell(rupee(os)), fmtDate(l.nextDueDate),
         eligibleForClosure ? badge('Eligible for Closure','amber') : (overdue?badge('Overdue','red'):badge(l.status,l.status==='Closed'?'grey':'green')),
         `<button class="btn small secondary" onclick="viewLoanSchedule('${l.id}')">Schedule</button> `+
+        `<button class="btn small secondary" onclick="viewLoanEMIReference('${l.id}')">EMI Reference</button> `+
         (eligibleForClosure ? `<button class="btn small secondary" onclick="closeLoan('${l.id}')">Mark Closed</button>` : '')
       ];
     }));
@@ -2100,7 +2202,8 @@ function viewMemberLoans(memberId){
         const eligibleForClosure = loanEligibleForClosure(l);
         return [l.id, esc(l.purpose), rightCell(rupee(l.principal)), rightCell(rupee(os)), fmtDate(l.nextDueDate),
           eligibleForClosure?badge('Eligible for Closure','amber'):badge('Active','green'),
-          `<button class="btn small secondary" onclick="closeModal();viewLoanSchedule('${l.id}')">Schedule</button>`];
+          `<button class="btn small secondary" onclick="closeModal();viewLoanSchedule('${l.id}')">Schedule</button> `+
+          `<button class="btn small secondary" onclick="closeModal();viewLoanEMIReference('${l.id}')">EMI Reference</button>`];
       }))}`);
 }
 function viewLoanSchedule(loanId){
@@ -2115,7 +2218,8 @@ function viewLoanSchedule(loanId){
     sched.map(s=>[s.inst, fmtDate(s.dueDate), rightCell(rupee(s.principalDue)), rightCell(rupee(s.interestDue)), rightCell(rupee(s.totalDue)),
       rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
   <p class="hint" style="margin-top:8px">This schedule is calculated transparently from the loan's own terms and reconciled against actual repayments posted against this loan — it is never a separate, independently-maintained figure.</p>
-  <button class="btn secondary small" style="margin-top:8px" onclick="shareLoanSchedule('${loan.id}')">Share</button>`;
+  <button class="btn secondary small" style="margin-top:8px" onclick="shareLoanSchedule('${loan.id}')">Share</button>
+  <button class="btn secondary small" style="margin-top:8px" onclick="viewLoanEMIReference('${loan.id}')">EMI Reference (for comparison)</button>`;
   openModal(html);
 }
 function shareLoanSchedule(loanId){
@@ -2262,6 +2366,7 @@ function viewCIF(){
       return [c.id, fmtDate(c.date), esc(c.source), rightCell(rupee(c.amount)), c.rate+'%', c.period, esc(c.frequency||'Monthly'), esc(c.bank),
         rightCell(rupee(os)), eligible?badge('Eligible for Closure','amber'):badge(c.status,c.status==='Closed'?'grey':'green'),
         `<button class="btn small secondary" onclick="viewCIFSchedule('${c.id}')">Schedule</button> `+
+        `<button class="btn small secondary" onclick="viewCIFEMIReference('${c.id}')">EMI Reference</button> `+
         (c.status!=='Closed' ? `<button class="btn small secondary" onclick="cifRepaymentForm('${c.id}')">Repay</button>`:'')+
         (eligible ? ` <button class="btn small secondary" onclick="closeCIF('${c.id}')">Mark Closed</button>` : '')
       ];
@@ -2279,7 +2384,8 @@ function viewCIFSchedule(cifId){
   ${tbl(['#','Due Date','Principal Due','Interest Due','Total Due','Principal Paid','Interest Paid','Balance','Status'],
     sched.map(s=>[s.inst, fmtDate(s.dueDate), rightCell(rupee(s.principalDue)), rightCell(rupee(s.interestDue)), rightCell(rupee(s.totalDue)),
       rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
-  <p class="hint" style="margin-top:8px">Interest is shown here per instalment (${esc((c.frequency||'Monthly').toLowerCase())}) for planning, pro-rated by this tranche's actual repayment frequency — never assumed to be monthly. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>`);
+  <p class="hint" style="margin-top:8px">Interest is shown here per instalment (${esc((c.frequency||'Monthly').toLowerCase())}) for planning, pro-rated by this tranche's actual repayment frequency — never assumed to be monthly. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>
+  <button class="btn secondary small" style="margin-top:8px" onclick="viewCIFEMIReference('${c.id}')">EMI Reference (for comparison)</button>`);
 }
 function cifForm(){
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record CIF Received</h3>
