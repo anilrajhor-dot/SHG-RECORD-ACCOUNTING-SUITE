@@ -129,6 +129,10 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-
 .dot.green{background:var(--green);}.dot.amber{background:var(--amber);}.dot.red{background:var(--red);}
 .helpbox{background:#F5F8FA;border:1px dashed var(--border);border-radius:8px;padding:12px 14px;font-size:13px;color:var(--muted);margin-bottom:12px;}
 footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0 6px;}
+.ai-fab{position:fixed;right:18px;bottom:18px;z-index:50;width:56px;height:56px;border-radius:50%;background:var(--navy-2);color:#fff;
+  border:none;box-shadow:0 4px 14px rgba(18,40,63,.35);font-size:24px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+.ai-fab:hover{background:var(--navy-3);}
+@media print{.ai-fab{display:none !important;}}
 #sidebarScrim{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:35;}
 @media(max-width:880px){
   #sidebar{transform:translateX(-100%);}
@@ -175,6 +179,7 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
     <footer class="byline">Developed by Anil Sharma, Former General Manager, Central Bank of India.</footer>
   </div>
 </div>
+<button id="aiFab" class="ai-fab no-print" onclick="openAiQuickAsk()" title="Ask AI">💬</button>
 <div id="modalRoot"></div>
 
 <script>
@@ -3515,6 +3520,77 @@ function viewGrading(){
   html += viewNabardGrading();
   return html;
 }
+// Explains, in the assessor's own numbers, exactly which indicators are short of full marks,
+// why (drawn from the same figures already computed for the grading table — never a separate
+// guess), and what concrete action would close each gap. This is what "reasons + how to reach
+// 100%" means in practice: every mark lost is accounted for, one row at a time.
+function nabardGradingGaps(g){
+  const gaps = [];
+  const pct = (a,b)=> b>0 ? Math.round(a/b*1000)/10 : 0;
+  if(g.meetingHoldScore < g.cfg.meetingHoldMarks){
+    gaps.push({ label:'Regularity of Meeting — Holding', shortfall: Math.round((g.cfg.meetingHoldMarks-g.meetingHoldScore)*100)/100,
+      reason: g.meetingsHeld+' meeting(s) held out of '+g.meetingsRequired+' required in the period ('+pct(g.meetingsHeld,g.meetingsRequired)+'% hold rate).',
+      suggestion:'Hold and record every scheduled meeting without fail — reschedule rather than skip during festivals/harvest season, and log it the same day even if attendance is thin.' });
+  }
+  if(g.attendanceScore < g.cfg.attendanceMarks){
+    gaps.push({ label:'Regularity of Meeting — Attendance', shortfall: Math.round((g.cfg.attendanceMarks-g.attendanceScore)*100)/100,
+      reason:'Average attendance is '+g.avgAttended.toFixed(1)+' of '+g.totalMembers+' members ('+pct(g.avgAttended,g.totalMembers)+'%).',
+      suggestion:'Follow up personally with members who miss meetings repeatedly; consider a meeting day/time more members can reliably attend.' });
+  }
+  if(g.savingsNA){
+    gaps.push({ label:'Regularity of Savings', shortfall:null,
+      reason:'No Compulsory Savings amount is set in SHG Profile, so this indicator cannot be scored at all.',
+      suggestion:'Set the Compulsory Savings amount per member in SHG Profile — '+g.cfg.savingsMarks+' mark(s) here cannot be earned until it is set.' });
+  } else if(g.savingsScore < g.cfg.savingsMarks){
+    gaps.push({ label:'Regularity of Savings', shortfall: Math.round((g.cfg.savingsMarks-g.savingsScore)*100)/100,
+      reason: rupee(g.savingsDeposited)+' deposited against '+rupee(g.savingsRequired)+' required ('+pct(g.savingsDeposited,g.savingsRequired)+'%).',
+      suggestion:'Ensure every member deposits the full compulsory savings amount at every meeting — a gentle reminder or small fine before the meeting usually closes this gap fastest.' });
+  }
+  if(g.velocityScore < g.cfg.velocityMarks){
+    gaps.push({ label:'Velocity of Lending', shortfall: Math.round((g.cfg.velocityMarks-g.velocityScore)*100)/100,
+      reason:'Velocity of lending (amount lent ÷ average Group Corpus) is '+g.velocity.toFixed(2)+' — below the 1.5 threshold needed for full marks.',
+      suggestion:'Lend out more of the SHG corpus to members with genuine, assessed credit needs (see Micro Credit Plan) rather than letting funds sit idle in savings/bank.' });
+  }
+  if(!g.repaymentNA && g.repaymentScore < g.cfg.repaymentMarks){
+    gaps.push({ label:'Regularity in Repayment', shortfall: Math.round((g.cfg.repaymentMarks-g.repaymentScore)*100)/100,
+      reason: rupee(g.recovery)+' recovered against '+rupee(g.demand)+' demand this period ('+pct(g.recovery,g.demand)+'%) — some instalments fell overdue.',
+      suggestion:'Tighten follow-up on overdue instalments right in the meeting; consider making a member\'s next loan conditional on a clean repayment record on the current one.' });
+  }
+  g.recordRows.forEach(r=>{
+    if(r.earned==null){
+      gaps.push({ label:r.label, shortfall:null, reason:'Not yet assessed.', suggestion:'Confirm in the Record Keeping row above whether '+r.label+' is maintained up to date.' });
+    } else if(r.earned < r.allotted){
+      gaps.push({ label:r.label, shortfall: Math.round((r.allotted-r.earned)*100)/100,
+        reason: r.auto ? 'Open Data Quality issue(s) are affecting this auto-scored register.' : (r.label+' is only partially, or not, maintained.'),
+        suggestion: r.auto ? 'Resolve the critical issues flagged under Data Quality Check — this register then auto-scores full marks on its own.' : ('Bring '+r.label+' fully up to date and re-confirm it above.') });
+    }
+  });
+  if(g.ccOps){
+    if(!g.ccOps.hasCC){
+      gaps.push({ label:'CC/TL Operations (all three parts)', shortfall:null,
+        reason:'No Cash Credit facility is recorded under Bank Loan to SHG, so this entire '+(g.cfg.ccOps.transactionsMarks+g.cfg.ccOps.interestServicingMarks+g.cfg.ccOps.overdrawingMarks)+'-mark section cannot be scored.',
+        suggestion:'Record the SHG\'s Cash Credit/Term Loan facility under Bank Loan to SHG to make this section scoreable.' });
+    } else {
+      if(g.ccOps.txnScore!=null && g.ccOps.txnScore < g.cfg.ccOps.transactionsMarks){
+        gaps.push({ label:'CC/TL Operations — Transaction Frequency', shortfall: Math.round((g.cfg.ccOps.transactionsMarks-g.ccOps.txnScore)*100)/100,
+          reason: g.ccOps.txnCount+' transaction(s) posted on the CC account this period — fewer than the 12 needed for full marks.',
+          suggestion:'Route more of the SHG\'s routine banking activity through the CC account itself so it shows regular Dr/Cr movement.' });
+      }
+      if(g.ccOps.interestScore!=null && g.ccOps.interestScore < g.cfg.ccOps.interestServicingMarks){
+        gaps.push({ label:'CC/TL Operations — Interest Servicing', shortfall: Math.round((g.cfg.ccOps.interestServicingMarks-g.ccOps.interestScore)*100)/100,
+          reason:'Interest on the CC account is being serviced '+({within2:'within 2 months',after2:'more than 2 months after it falls due'}[g.ccOps.interestTier]||'late')+', not within 1 month.'+(g.ccOps.auto?(' (Auto-computed: ₹'+rupee(g.ccOps.auto.totalDue)+' due, ₹'+rupee(g.ccOps.auto.totalPaid)+' paid.)'):''),
+          suggestion:'Pay the CC interest as soon as it is debited/computed — ideally within 1 month — rather than letting it accumulate.' });
+      }
+      if(g.ccOps.overdrawScore!=null && g.ccOps.overdrawScore < g.cfg.ccOps.overdrawingMarks){
+        gaps.push({ label:'CC/TL Operations — Overdrawing', shortfall: Math.round((g.cfg.ccOps.overdrawingMarks-g.ccOps.overdrawScore)*100)/100,
+          reason:'The CC account was overdrawn beyond its sanctioned limit on '+(g.ccOps.auto?(g.ccOps.auto.overdrawnMonths+' occasion(s)'):'more than 2 occasions')+' this period.',
+          suggestion:'Track outstanding balance against the sanctioned limit before every drawal (see the slab-wise interest tool under Bank Loan to SHG) and stay within it.' });
+      }
+    }
+  }
+  gaps.sort((a,b)=> (b.shortfall==null?-1:b.shortfall) - (a.shortfall==null?-1:a.shortfall));
+  return gaps;
+}
 function viewNabardGrading(){
   const u = nabardUI();
   const g = computeNabardOfficialGrading();
@@ -3593,6 +3669,8 @@ function viewNabardGrading(){
     <button class="btn" style="margin-top:8px" onclick="saveNabardOfficialGrading()" ${g.pendingParts.length?'disabled title="Resolve the pending items above first"':''}>Save this Assessment to History</button>
   </div>`;
 
+  html += viewNabardGradingGaps(g);
+
   const hist = (DB.grading.nabardHistory||[]).slice().reverse();
   html += `<div class="card"><h3>NABARD Grading History</h3>`;
   html += hist.length ? tbl(['Saved On','Format','Period','Marks','Grade','Eligible','By'], hist.map(h=>[
@@ -3600,6 +3678,27 @@ function viewNabardGrading(){
     fmtDate(h.from)+' to '+fmtDate(h.to), h.overall.toFixed(2), h.grade||'Pending',
     (h.grade==='A'||h.grade==='B')?badge('Yes','green'):badge('No','amber'), esc(h.savedBy||'—')
   ])) : `<div class="empty">No NABARD-format assessments saved yet.</div>`;
+  html += `</div>`;
+  return html;
+}
+// Renders the reasons-and-suggestions breakdown for every indicator currently short of full
+// marks, plus a straight "what it takes to reach 100%" summary — every number here traces back
+// to computeNabardOfficialGrading()'s own figures, never a separate estimate.
+function viewNabardGradingGaps(g){
+  const gaps = nabardGradingGaps(g);
+  let html = `<div class="card"><h3>Where Marks Are Being Lost — Reasons &amp; How To Improve</h3>`;
+  if(!gaps.length){
+    html += `<div class="msg ok">No shortfall on any indicator — every scoreable line item is already at full marks${g.pendingParts.length?' (aside from the item(s) still pending assessment above)':''}.</div>`;
+    return html+`</div>`;
+  }
+  const quantified = gaps.filter(x=>x.shortfall!=null);
+  const unscored = gaps.filter(x=>x.shortfall==null);
+  const totalShortfall = Math.round(quantified.reduce((s,x)=>s+x.shortfall,0)*100)/100;
+  html += `<div class="msg ${g.pendingParts.length?'err':'info'}">Currently ${g.overall.toFixed(2)} / 100${g.grade?(' (Grade '+g.grade+')'):''}. Closing every gap below would recover ${totalShortfall} mark(s)${unscored.length?(' — plus '+unscored.length+' indicator(s) below that first need something set up before they can be scored at all'):''}, taking this assessment to a full 100/100.</div>`;
+  html += tbl(['Indicator','Marks Lost','Reason','How To Improve'], gaps.map(x=>[
+    esc(x.label), x.shortfall==null?badge('Not scoreable yet','amber'):rightCell('<b>'+x.shortfall+'</b>'), esc(x.reason), esc(x.suggestion)
+  ]));
+  html += `<p class="hint" style="margin-top:8px">Ranked by marks lost, largest first, so the top row is where effort recovers the most marks fastest.</p>`;
   html += `</div>`;
   return html;
 }
@@ -5222,6 +5321,53 @@ function aiAskSubmit(ev){
   return false;
 }
 function aiAskQuick(q){ aiAskProcess(q); }
+// Global "Ask AI" entry point — a floating button visible on every screen (not just the Help
+// Assistant), so a question can be asked without first navigating away from whatever screen is
+// open. It reuses the exact same aiAskProcess()/aiAsk() engine as the full Ask AI screen (Local
+// AI answers immediately from the app's own data; External AI, if configured, enriches it after
+// consent) — this is only a shortcut to that same answer, never a second/different AI path.
+function openAiQuickAsk(){ openModal(aiQuickAskModalHTML()); setTimeout(()=>{ const el=document.getElementById('aiQuickAskInput'); if(el) el.focus(); },0); }
+function aiQuickAskModalHTML(){
+  const last = AI_CHAT.length ? AI_CHAT[AI_CHAT.length-1] : null;
+  const quick = [
+    ['How much cash does the SHG have?','एसएचजी के पास कितना नकद है?'],
+    ['Who has outstanding loans?','किसका ऋण बकाया है?'],
+    ['What is the total savings?','कुल बचत कितनी है?'],
+    ['Can this SHG be graded this month?','क्या इस एसएचजी की इस माह ग्रेडिंग हो सकती है?']
+  ];
+  return `<button class="close" onclick="closeModal()">×</button><h3>💬 ${aiT('Ask AI','एआई से पूछें')}</h3>
+    <p class="hint">${aiT('Ask a plain-language question about this SHG\'s own recorded data, from anywhere in the app.','ऐप में कहीं से भी, इस एसएचजी के अपने दर्ज डेटा के बारे में सरल भाषा में प्रश्न पूछें।')}</p>
+    <form onsubmit="return aiQuickAskSubmit(event)">
+      <div class="row"><div class="field" style="flex:3"><input name="q" id="aiQuickAskInput" placeholder="${aiT('e.g. Who has overdue loans?','जैसे: किसका ऋण बकाया है?')}" autocomplete="off"></div>
+      <button class="btn" type="submit">${aiT('Ask','पूछें')}</button></div>
+    </form>
+    <div class="row" style="flex-wrap:wrap;margin-top:8px">${quick.map(([en,hi])=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiQuickAskUse('${esc(en).replace(/'/g,"\\'")}')">${esc(aiT(en,hi))}</button>`).join('')}</div>
+    ${last ? `<div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)"><div style="font-weight:600;color:var(--navy-2);font-size:13px">${aiT('You asked','आपने पूछा')}</div><div style="font-size:13.5px;margin-bottom:8px">${esc(last.q)}</div>${aiRenderResponse(last.r)}</div>` : ''}
+    <p class="hint" style="margin-top:8px">${aiT('For the full conversation history, open Help Assistant → Ask AI.','पूरी बातचीत के लिए, सहायता सहायक → एआई से पूछें खोलें।')}</p>`;
+}
+// Only refreshes the quick-ask modal's content if it is still the modal currently open — if the
+// user closed it (or opened something else) before External AI responded, this is a no-op rather
+// than popping the modal back up or clobbering whatever is open now.
+function aiQuickAskRefresh(){ if(document.getElementById('aiQuickAskInput')!==null) openModal(aiQuickAskModalHTML()); }
+function aiQuickAskSubmit(ev){
+  ev.preventDefault();
+  const inp = document.getElementById('aiQuickAskInput');
+  const q = inp ? inp.value : '';
+  if(!q.trim()) return false;
+  aiQuickAskProcess(q);
+  return false;
+}
+function aiQuickAskUse(q){ aiQuickAskProcess(q); }
+function aiQuickAskProcess(q){
+  const entry = {q, r: aiAsk(q)};
+  entry.r.source = 'local';
+  AI_CHAT.push(entry);
+  openModal(aiQuickAskModalHTML());
+  if(aiExternalConfigured()){
+    if(AI_EXTERNAL_CONSENTED) aiTryExternal(q, entry, aiQuickAskRefresh);
+    else aiShowExternalConsent(()=>{ AI_EXTERNAL_CONSENTED = true; aiTryExternal(q, entry, aiQuickAskRefresh); });
+  }
+}
 // Every question is answered from Local AI immediately (this never depends on a network call),
 // so the app always has a real, data-verified answer on screen straight away. Only if External
 // AI is selected AND fully configured does it then try to enrich that same entry with a richer
@@ -5294,15 +5440,16 @@ function callExternalAI(promptText, contextObj){
     throw e;
   });
 }
-function aiTryExternal(q, entry){
+function aiTryExternal(q, entry, onDone){
+  const done = onDone || render;
   const c = aiContext();
   callExternalAI(q, aiMinimalContext(c)).then(text=>{
     entry.r = Object.assign({}, entry.r, {answer:text, source:'external',
       confidence: aiT('AI interpretation — phrased by the configured External AI provider, using only the minimal aggregate figures above; the underlying figures still come only from this app\'s own accounting engine.','एआई व्याख्या — कॉन्फ़िगर किए गए बाहरी एआई प्रदाता द्वारा, केवल ऊपर दिए गए न्यूनतम समग्र आँकड़ों के आधार पर तैयार; मूल आँकड़े केवल इस ऐप के अपने लेखांकन इंजन से आते हैं।')});
-    render();
+    done();
   }).catch(e=>{
     entry.r = Object.assign({}, entry.r, {source:'local', note: aiT('External AI is unavailable. Continuing with Local AI.','बाहरी एआई उपलब्ध नहीं है। लोकल एआई से जारी है।')});
-    render();
+    done();
   });
 }
 
