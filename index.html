@@ -1220,8 +1220,8 @@ function viewMembers(){
   else if(activeCountNow<SHG_MIN_MEMBERS) html += `<div class="msg amber">This SHG currently has only ${activeCountNow} active member(s) — DAY-NRLM norms require a minimum of ${SHG_MIN_MEMBERS}. Add more members to meet the minimum group size.</div>`;
   if(!live.length && !deleted.length){ html += `<div class="card"><div class="empty">No members yet. Add your first member to begin.</div></div>`; return html; }
   html += `<div class="card">`;
-  html += live.length ? tbl(['ID','Name','Father/Husband','Mobile','Village','Status','Savings Bal.','Loan O/S',''],
-    live.map(m=>[m.id, esc(m.name), esc(m.fatherHusband), esc(m.mobile), esc(m.village),
+  html += live.length ? tbl(['ID','Name','Father/Husband','Mobile','Email','Village','Status','Savings Bal.','Loan O/S',''],
+    live.map(m=>[m.id, esc(m.name), esc(m.fatherHusband), esc(m.mobile), esc(m.email||'—'), esc(m.village),
       badge(m.status, m.status==='Active'?'green':(m.status==='Exited'?'red':'amber')),
       rightCell(rupee(memberSavingsBalance(m.id))), rightCell(rupee(memberLoanOutstanding(m.id))),
       `<button class="btn small secondary" onclick="memberForm('${m.id}')">Edit</button> <a style="cursor:pointer;font-size:12px" onclick="go('memberstatement');setTimeout(()=>document.getElementById('msMember').value='${m.id}',0)">Statement</a> <button class="btn small danger" onclick="deleteMemberPrompt('${m.id}')">Delete</button>`
@@ -1276,7 +1276,7 @@ function restoreMember(id){
 function badge(text,cls){ return `<span class="badge ${cls}">${esc(text)}</span>`; }
 function memberForm(id){
   if(!id && activeMembers().length>=SHG_MAX_MEMBERS){ flash('error','Cannot add another member — this SHG already has the maximum of '+SHG_MAX_MEMBERS+' active members allowed under DAY-NRLM norms.'); render(); return; }
-  const m = id ? DB.members.find(x=>x.id===id) : {id:'', name:'',fatherHusband:'',relation:'W/o',gender:'Female',mobile:'',village:'',doj:todayStr(),status:'Active',occupation:'',nominee:'',bankAccno:'',bankIfsc:''};
+  const m = id ? DB.members.find(x=>x.id===id) : {id:'', name:'',fatherHusband:'',relation:'W/o',gender:'Female',mobile:'',email:'',village:'',doj:todayStr(),status:'Active',occupation:'',nominee:'',bankAccno:'',bankIfsc:''};
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>${id?'Edit':'Add'} Member</h3>
   <form onsubmit="return saveMember(event,'${id||''}')">
     <div class="row">
@@ -1289,11 +1289,15 @@ function memberForm(id){
     </div>
     <div class="row">
       <div class="field"><label>Mobile</label><input name="mobile" value="${esc(m.mobile)}"></div>
-      <div class="field"><label>Village</label><input name="village" value="${esc(m.village)}"></div>
+      <div class="field"><label>Email ID</label><input type="email" name="email" value="${esc(m.email||'')}"></div>
     </div>
     <div class="row">
+      <div class="field"><label>Village</label><input name="village" value="${esc(m.village)}"></div>
       <div class="field"><label>Date of Joining</label><input type="date" name="doj" value="${esc(m.doj)}"></div>
+    </div>
+    <div class="row">
       <div class="field"><label>Status</label><select name="status">${['Active','Inactive','Exited'].map(s=>`<option ${m.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div class="field"></div>
     </div>
     <div class="row">
       <div class="field"><label>Occupation</label><input name="occupation" value="${esc(m.occupation)}"></div>
@@ -1416,7 +1420,7 @@ function meetingWorkflow(){
     <div class="row">
       <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
       <div class="field"><label>Place / Venue</label><input name="place" placeholder="e.g. Community Hall, Sample Village"></div>
-      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select><span class="hint">A UPI collection posts straight to the Bank Book, exactly as it settles at the bank.</span></div>
+      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
     </div>
     <h3 style="margin-top:14px">Attendance</h3>
     <p class="hint">All members are listed below — mark only who is absent; everyone else stays present.</p>
@@ -2213,7 +2217,7 @@ function viewSavings(){
       <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
       <div class="field"><label>Type</label><select name="dir"><option value="in">Savings Deposit</option><option value="out">Savings Withdrawal</option></select></div>
       <div class="field"><label>Amount ₹</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
-      <div class="field"><label>Cash / Bank / UPI</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+      <div class="field"><label>Cash / Bank</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
     </div>
     <button class="btn" type="submit">Post Entry</button>
   </form></div>`;
@@ -2274,6 +2278,7 @@ function viewLoans(){
         eligibleForClosure ? badge('Eligible for Closure','amber') : (overdue?badge('Overdue','red'):badge(l.status,l.status==='Closed'?'grey':'green')),
         `<button class="btn small secondary" onclick="viewLoanSchedule('${l.id}')">Schedule</button> `+
         `<button class="btn small secondary" onclick="viewLoanEMIReference('${l.id}')">EMI Reference</button> `+
+        `<button class="btn small secondary" onclick="viewLoanAppropriationStatement('${l.id}')">Appropriation Statement</button> `+
         (eligibleForClosure ? `<button class="btn small secondary" onclick="closeLoan('${l.id}')">Mark Closed</button>` : '')
       ];
     }));
@@ -2306,7 +2311,8 @@ function viewLoanSchedule(loanId){
       rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
   <p class="hint" style="margin-top:8px">This schedule is calculated transparently from the loan's own terms and reconciled against actual repayments posted against this loan — it is never a separate, independently-maintained figure.</p>
   <button class="btn secondary small" style="margin-top:8px" onclick="shareLoanSchedule('${loan.id}')">Share</button>
-  <button class="btn secondary small" style="margin-top:8px" onclick="viewLoanEMIReference('${loan.id}')">EMI Reference (for comparison)</button>`;
+  <button class="btn secondary small" style="margin-top:8px" onclick="viewLoanEMIReference('${loan.id}')">EMI Reference (for comparison)</button>
+  <button class="btn secondary small" style="margin-top:8px" onclick="closeModal();viewLoanAppropriationStatement('${loan.id}')">Appropriation Statement</button>`;
   openModal(html);
 }
 function shareLoanSchedule(loanId){
@@ -2319,6 +2325,34 @@ function shareLoanSchedule(loanId){
   sched.forEach(s=>lines.push('#'+s.inst+' due '+fmtDate(s.dueDate)+': Principal '+rupee(s.principalDue)+' + Interest '+rupee(s.interestDue)+' — Paid '+rupee(s.principalPaid+s.interestPaid)+' — '+s.status));
   shareText('Loan Schedule — '+loan.id, lines.join('\n'));
 }
+// Appropriation Statement — a shareable/printable record of how a member loan was granted,
+// generated when the loan is disbursed (saveLoan()) and available on demand afterwards
+// (Loan Register / Schedule screens). "Appropriation" here means how the sanctioned amount has
+// been appropriated/disbursed — principal, terms and the mode/date it was paid out — so the
+// member (and the SHG's own file) has a clear, shareable record of exactly what was granted.
+function loanAppropriationLines(loanId){
+  const loan = DB.loans.find(l=>l.id===loanId); if(!loan) return [];
+  const periodsPerYear = loan.frequency==='Weekly'?52:(loan.frequency==='Fortnightly'?26:12);
+  const emi = computeEMI(loan.principal, loan.interestRate, loan.instalments, periodsPerYear);
+  return [(DB.profile.name||'SHG')+' — Loan Appropriation Statement', '',
+    'Loan ID: '+loan.id, 'Member: '+memberName(loan.memberId), 'Purpose: '+(loan.purpose||'—'), '',
+    'Sanction Date: '+fmtDate(loan.sanctionDate), 'Disbursement Date: '+fmtDate(loan.disbursementDate),
+    'Amount Sanctioned & Disbursed: '+rupee(loan.principal), 'Disbursed Via: '+accountLabel(loan.mode||'CASH'), '',
+    'Interest Rate: '+loan.interestRate+'% p.a. ('+(loan.interestMethod==='reducing'?'Reducing Balance':'Flat')+')',
+    'Repayment: '+loan.instalments+' '+loan.frequency+' instalments (equal-principal + interest)',
+    'Reference EMI (if repaid as equal instalments): '+rupee(emi)+' per '+loan.frequency.toLowerCase()+' instalment', '',
+    'This statement confirms the above amount has been appropriated/disbursed to the member on the terms shown. Actual instalments may be deposited as per the member\'s convenience each meeting.'];
+}
+function viewLoanAppropriationStatement(loanId){
+  const loan = DB.loans.find(l=>l.id===loanId); if(!loan) return;
+  const lines = loanAppropriationLines(loanId);
+  window.__loanAppropriationShareText = lines.join('\n');
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Loan Appropriation Statement</h3>
+    <div class="card" style="white-space:pre-wrap;font-family:var(--mono);font-size:12.5px">${esc(lines.join('\n'))}</div>
+    <button class="btn secondary small" style="margin-top:8px" onclick="shareLoanAppropriationStatement()">Share (WhatsApp/Email)</button>
+    <button class="btn secondary small" style="margin-top:8px" onclick="window.print()">🖨 Print</button>`);
+}
+function shareLoanAppropriationStatement(){ shareText('Loan Appropriation Statement', window.__loanAppropriationShareText||'Not generated yet.'); }
 function loanForm(){
   if(!activeMembers().length){ flash('error','Add a member first.'); render(); return; }
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>New Loan</h3>
@@ -2334,7 +2368,7 @@ function loanForm(){
     <div class="row">
       <div class="field"><label>Sanction Date</label><input type="date" name="sanctionDate" value="${todayStr()}"></div>
       <div class="field"><label>Disbursement Date</label><input type="date" name="disbursementDate" value="${todayStr()}"></div>
-      <div class="field"><label>Cash / Bank / UPI Out</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+      <div class="field"><label>Cash / Bank Out</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
     </div>
     <div class="row">
       <div class="field"><label>Principal ₹ *</label><input type="number" min="1" step="0.01" name="principal" id="loanPrincipalInput" required oninput="updateLoanEMIPreview()"></div>
@@ -2378,7 +2412,7 @@ function saveLoan(ev){
   try{
     const data = Object.fromEntries(f.entries());
     const loan = { id: nextId('LOAN'), memberId:data.memberId, purpose:data.purpose,
-      sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate,
+      sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate, mode:data.mode||'CASH',
       principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
       instalments: parseInt(data.instalments)||12, frequency: data.frequency||'Monthly', interestMethod: data.interestMethod||'flat',
       status:'Active', nextDueDate: addPeriod(data.disbursementDate,1,data.frequency||'Monthly') };
@@ -2386,6 +2420,7 @@ function saveLoan(ev){
     postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:data.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,narration:'Loan disbursed — '+memberName(loan.memberId)});
     logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal));
     closeModal(); flash('ok','Loan disbursed.'); render();
+    viewLoanAppropriationStatement(loan.id);
   }catch(e){ flash('error',e.message); render(); }
   return false;
 }
@@ -2541,6 +2576,7 @@ function viewCIF(){
         rightCell(rupee(os)), eligible?badge('Eligible for Closure','amber'):badge(c.status,c.status==='Closed'?'grey':'green'),
         `<button class="btn small secondary" onclick="viewCIFSchedule('${c.id}')">Schedule</button> `+
         `<button class="btn small secondary" onclick="viewCIFEMIReference('${c.id}')">EMI Reference</button> `+
+        `<button class="btn small secondary" onclick="viewCIFAppropriationStatement('${c.id}')">Appropriation Statement</button> `+
         (c.status!=='Closed' ? `<button class="btn small secondary" onclick="cifRepaymentForm('${c.id}')">Repay</button> `:'')+
         (c.status!=='Closed' && os>0.5 ? `<button class="btn small secondary" onclick="cifForeclosureForm('${c.id}')">Foreclose</button>`:'')+
         (eligible ? ` <button class="btn small secondary" onclick="closeCIF('${c.id}')">Mark Closed</button>` : '')
@@ -2561,6 +2597,7 @@ function viewCIFSchedule(cifId){
       rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
   <p class="hint" style="margin-top:8px">Interest is shown here per instalment (${esc((c.frequency||'Monthly').toLowerCase())}) for planning, pro-rated by this tranche's actual repayment frequency — never assumed to be monthly. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>
   <button class="btn secondary small" style="margin-top:8px" onclick="viewCIFEMIReference('${c.id}')">EMI Reference (for comparison)</button>
+  <button class="btn secondary small" style="margin-top:8px" onclick="closeModal();viewCIFAppropriationStatement('${c.id}')">Appropriation Statement</button>
   ${c.status!=='Closed' && os>0.5 ? `<button class="btn secondary small" style="margin-top:8px" onclick="closeModal();cifForeclosureForm('${c.id}')">Foreclose (close now)</button>` : ''}`);
 }
 // Pre-closure/foreclosure of a CIF tranche BEFORE its full schedule runs out — computes the
@@ -2585,7 +2622,7 @@ function cifForeclosureForm(cifId){
       <div class="field"><label>Interest Paid ₹ (up to date)</label><input type="number" min="0" step="0.01" name="interest" id="cifForecloseInterest" value="${q.totalInterest}" readonly></div>
     </div>
     <p class="hint" id="cifForecloseBreakup">Already-due interest ${rupee(q.interestAlreadyDue)} + interest for the part-period since the last due date ${rupee(q.proRatedInterest)} = ${rupee(q.totalInterest)}.</p>
-    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
     <div class="field"><label>Narration</label><input name="narration" value="Foreclosure"></div>
     <button class="btn" type="submit">Confirm Foreclosure &amp; Close</button>
   </form>`);
@@ -2613,7 +2650,7 @@ function cifForm(){
     <div class="row">
       <div class="field"><label>Interest Method</label><select name="interestMethod" id="cifMethodSelect" onchange="updateCifEMIPreview()"><option value="reducing">Reducing Balance</option><option value="flat">Flat</option></select></div>
       <div class="field"><label>Repayment Frequency</label><select name="frequency" id="cifFrequencySelect" onchange="updateCifEMIPreview()"><option value="Monthly" selected>Monthly</option><option value="Fortnightly">Fortnightly</option><option value="Weekly">Weekly</option></select></div>
-      <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
+      <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
     </div>
     <div class="hint">9% p.a., reducing balance, 36 monthly instalments is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche. Flat interest is pro-rated by the frequency actually selected (Weekly = ÷52, Fortnightly = ÷26, Monthly = ÷12 periods per year), never assumed to be monthly.</div>
     <div id="cifEMIPreview" class="msg info" style="margin-top:8px;display:none"></div>
@@ -2650,6 +2687,7 @@ function saveCIF(ev){
     postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount,cifId:c.id,narration:'CIF received from '+data.source+' ('+c.id+')'});
     logAudit('CIF_RECEIVED', c.id+' received from '+data.source+' — '+rupee(amount));
     closeModal(); flash('ok','CIF receipt posted.'); render();
+    viewCIFAppropriationStatement(c.id);
   }catch(e){ flash('error',e.message); render(); }
   return false;
 }
@@ -2663,7 +2701,7 @@ function cifRepaymentForm(cifId){
       <div class="field"><label>Principal Paid ₹</label><input type="number" min="0" step="0.01" name="principal" value="0"></div>
       <div class="field"><label>Interest Paid ₹</label><input type="number" min="0" step="0.01" name="interest" value="0"></div>
     </div>
-    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
     <div class="field"><label>Narration</label><input name="narration"></div>
     <button class="btn" type="submit">Post Repayment</button>
   </form>`);
@@ -2692,6 +2730,31 @@ function closeCIF(cifId){
   if(!cifEligibleForClosure(c)){ flash('error','This CIF tranche still has an outstanding balance and cannot be closed yet.'); render(); return; }
   c.status='Closed'; logAudit('CIF_CLOSED', cifId+' marked closed'); flash('ok','CIF tranche marked closed.'); render();
 }
+// Appropriation Statement for a CIF tranche received — the same shareable/printable record as a
+// member loan's, generated when the CIF receipt is posted (saveCIF()) and available on demand
+// afterwards from CIF Management / Schedule.
+function cifAppropriationLines(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return [];
+  const periodsPerYear = (c.frequency||'Monthly')==='Weekly'?52:((c.frequency||'Monthly')==='Fortnightly'?26:12);
+  const emi = computeEMI(c.amount, c.rate, c.period, periodsPerYear);
+  return [(DB.profile.name||'SHG')+' — CIF Appropriation Statement', '',
+    'CIF ID: '+c.id, 'Source: '+(c.source||'—'), '',
+    'Date Received: '+fmtDate(c.date), 'Amount Received & Appropriated: '+rupee(c.amount), 'Received Into: '+accountLabel(c.bank||'CASH'), '',
+    'Interest Rate: '+c.rate+'% p.a. ('+(c.interestMethod==='flat'?'Flat':'Reducing Balance')+')',
+    'Repayment: '+c.period+' '+(c.frequency||'Monthly')+' instalments (equal-principal + interest)',
+    'Reference EMI (if repaid as equal instalments): '+rupee(emi)+' per '+(c.frequency||'Monthly').toLowerCase()+' instalment', '',
+    'This statement confirms the above amount has been received and appropriated into the SHG\'s books on the terms shown.'];
+}
+function viewCIFAppropriationStatement(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return;
+  const lines = cifAppropriationLines(cifId);
+  window.__cifAppropriationShareText = lines.join('\n');
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>CIF Appropriation Statement</h3>
+    <div class="card" style="white-space:pre-wrap;font-family:var(--mono);font-size:12.5px">${esc(lines.join('\n'))}</div>
+    <button class="btn secondary small" style="margin-top:8px" onclick="shareCIFAppropriationStatement()">Share (WhatsApp/Email)</button>
+    <button class="btn secondary small" style="margin-top:8px" onclick="window.print()">🖨 Print</button>`);
+}
+function shareCIFAppropriationStatement(){ shareText('CIF Appropriation Statement', window.__cifAppropriationShareText||'Not generated yet.'); }
 
 /* ============================================================ REVOLVING FUND */
 function viewRevolvingFund(){
@@ -2716,7 +2779,7 @@ function rfForm(){
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="0"></div>
       <div class="field"><label>Repayment Period (months)</label><input type="number" min="1" step="1" name="period" value="60"></div>
     </div>
-    <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
+    <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
     <button class="btn" type="submit">Post RF Receipt</button>
   </form>`);
 }
@@ -2872,7 +2935,7 @@ function viewBankLoanInterestCard(b){
   html += `<div class="row" style="margin-top:14px">
     <div class="field"><label>Interest Period From</label><input type="date" value="${u.from}" onchange="updateBankLoanInterestUI('${b.id}','from',this.value)"></div>
     <div class="field"><label>Interest Period To</label><input type="date" value="${u.to}" onchange="updateBankLoanInterestUI('${b.id}','to',this.value)"></div>
-    <div class="field"><label>Debit From (paid via)</label><select onchange="updateBankLoanInterestUI('${b.id}','mode',this.value)"><option value="BANK" ${u.mode==='BANK'?'selected':''}>Bank</option><option value="CASH" ${u.mode==='CASH'?'selected':''}>Cash</option><option value="UPI" ${u.mode==='UPI'?'selected':''}>UPI</option></select></div>
+    <div class="field"><label>Debit From (paid via)</label><select onchange="updateBankLoanInterestUI('${b.id}','mode',this.value)"><option value="BANK" ${u.mode==='BANK'?'selected':''}>Bank</option><option value="CASH" ${u.mode==='CASH'?'selected':''}>Cash</option></select></div>
   </div>`;
   html += `<div class="grid cols3" style="margin-top:8px">${stat('Opening Balance (start of period)', rupee(calc.openingBalance||0))}${stat('Computed Interest (slab-wise, daily balance)', '<b>'+rupee(calc.total)+'</b>')}${stat('Segments used in calculation', calc.segments.length)}</div>`;
   if(calc.bySlab.length>1) html += `<p class="hint" style="margin-top:6px">Slab-wise break-up: `+calc.bySlab.map(s=>s.rate+'% → '+rupee(s.interest)).join(' + ')+` = `+rupee(calc.total)+`</p>`;
@@ -2936,7 +2999,7 @@ function bankLoanDrawalForm(bankLoanId){
     <div class="row">
       <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
       <div class="field"><label>Amount ₹ *</label><input type="number" min="0.01" max="${notUtilised}" step="0.01" name="amount" required></div>
-      <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option><option value="UPI">UPI</option></select></div>
+      <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
     </div>
     <div class="field"><label>Narration</label><input name="narration"></div>
     <button class="btn" type="submit">Post Drawal</button>
@@ -2967,7 +3030,7 @@ function bankLoanRepaymentForm(bankLoanId){
       <div class="field"><label>Principal Paid ₹</label><input type="number" min="0" step="0.01" name="principal" value="0"></div>
       <div class="field"><label>Interest Paid ₹</label><input type="number" min="0" step="0.01" name="interest" value="0"></div>
     </div>
-    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
     <div class="field"><label>Narration</label><input name="narration"></div>
     <button class="btn" type="submit">Post Repayment</button>
   </form>`);
@@ -4852,7 +4915,7 @@ function viewMemberStatement(){
   const sel = document.getElementById && document.getElementById('msMember') ? document.getElementById('msMember').value : DB.members[0].id;
   const m = DB.members.find(x=>x.id===sel) || DB.members[0];
   const memberLoans = DB.loans.filter(l=>l.memberId===m.id);
-  html += `<div class="card"><div class="section-title" style="margin-bottom:8px"><h3>${esc(m.name)}</h3><button class="btn secondary small" onclick="shareMemberStatement('${m.id}')">Share</button></div>
+  html += `<div class="card"><div class="section-title" style="margin-bottom:8px"><h3>${esc(m.name)}</h3></div>
     <div class="grid cols4">
     ${stat('Savings Balance', rupee(memberSavingsBalance(m.id)))}
     ${stat('Loan Outstanding (All Loans)', rupee(memberLoanOutstanding(m.id)))}
@@ -4865,26 +4928,63 @@ function viewMemberStatement(){
         badge(l.status, l.status==='Closed'?'grey':'green')]))}</div>`;
   }
   const loanFilter = window.__msLoanFilter || 'all';
-  let txns = DB.transactions.filter(t=>t.memberId===m.id);
+  let allTxns = DB.transactions.filter(t=>t.memberId===m.id).sort((a,b)=>a.date<b.date?-1:1);
+  // Two separate passbook-style statements, per the member's own request: one for Savings
+  // (deposits/withdrawals into Member Savings), one for Loans (disbursement/principal/interest
+  // against Member Loans) — rather than one combined mixed list.
+  let savingsTxns = allTxns.filter(t=>t.debit==='MEMBER_SAVINGS'||t.credit==='MEMBER_SAVINGS');
+  let loanTxns = allTxns.filter(t=>t.loanId || t.debit==='MEMBER_LOANS' || t.credit==='MEMBER_LOANS');
+  const otherTxns = allTxns.filter(t=>!savingsTxns.includes(t) && !loanTxns.includes(t));
   if(memberLoans.length>1){
-    html += `<div class="card"><label>Filter by Loan</label><select id="msLoanFilter" onchange="window.__msLoanFilter=this.value; render();" style="max-width:280px">
+    html += `<div class="card"><label>Filter Loan Statement by Loan</label><select id="msLoanFilter" onchange="window.__msLoanFilter=this.value; render();" style="max-width:280px">
       <option value="all" ${loanFilter==='all'?'selected':''}>All Loans</option>
       ${memberLoans.map(l=>`<option value="${l.id}" ${loanFilter===l.id?'selected':''}>${l.id} — ${esc(l.purpose||'')}</option>`).join('')}
     </select></div>`;
   }
-  if(memberLoans.length>1 && loanFilter!=='all') txns = txns.filter(t=>t.loanId===loanFilter);
-  txns = txns.sort((a,b)=>a.date<b.date?-1:1);
-  html += `<div class="card"><h3>Transaction History — ${esc(m.name)}</h3>${txns.length?tbl(['Date','Voucher','Type','Loan ID','Debit','Credit','Amount','Narration'],
-    txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)])):`<div class="empty">No transactions for this member.</div>`}</div>`;
-  const lines = [(DB.profile.name||'SHG')+' — Member Statement', m.name+' ('+m.id+')', 'As on '+fmtDate(todayStr()), '',
-    'Savings Balance: '+rupee(memberSavingsBalance(m.id)), 'Loan Outstanding (All Loans): '+rupee(memberLoanOutstanding(m.id)), ''];
-  if(memberLoans.length){ lines.push('Loans:'); memberLoans.forEach(l=>lines.push('  '+l.id+' — '+(l.purpose||'')+' — Principal '+rupee(l.principal)+' — O/S '+rupee(loanOutstanding(l.id).principal)+' — '+l.status)); lines.push(''); }
-  lines.push('Recent Transactions:');
-  txns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+(t.loanId?(' ('+t.loanId+')'):'')+' — '+rupee(t.amount)));
-  window.__memberStatementShareText = lines.join('\n');
+  if(memberLoans.length>1 && loanFilter!=='all') loanTxns = loanTxns.filter(t=>t.loanId===loanFilter);
+  let savRunning = 0;
+  const savRows = savingsTxns.map(t=>{
+    const isCr = t.credit==='MEMBER_SAVINGS';
+    savRunning = Math.round((savRunning+(isCr?t.amount:-t.amount))*100)/100;
+    return [fmtDate(t.date), t.voucherNo, t.type, isCr?rightCell(rupee(t.amount)):'—', !isCr?rightCell(rupee(t.amount)):'—', rightCell(rupee(savRunning)), esc(t.narration)];
+  });
+  html += `<div class="card"><div class="section-title" style="margin-bottom:8px"><h3>Savings Statement — ${esc(m.name)}</h3><button class="btn secondary small" onclick="shareMemberSavingsStatement('${m.id}')">Share</button></div>
+    ${savRows.length?tbl(['Date','Voucher','Type','Deposit','Withdrawal','Balance','Narration'], savRows):`<div class="empty">No savings transactions for this member.</div>`}</div>`;
+  let loanRunning = 0;
+  const loanRows = loanTxns.map(t=>{
+    let delta = 0;
+    if(t.debit==='MEMBER_LOANS') delta = t.amount; // disbursement — increases outstanding
+    else if(t.credit==='MEMBER_LOANS') delta = -t.amount; // principal repayment — decreases outstanding
+    loanRunning = Math.round((loanRunning+delta)*100)/100;
+    return [fmtDate(t.date), t.voucherNo, t.type, t.loanId||'—', t.debit==='MEMBER_LOANS'?rightCell(rupee(t.amount)):'—',
+      t.credit==='MEMBER_LOANS'?rightCell(rupee(t.amount)):'—', t.credit==='INTEREST_INCOME'?rightCell(rupee(t.amount)):'—',
+      rightCell(rupee(loanRunning)), esc(t.narration)];
+  });
+  html += `<div class="card"><div class="section-title" style="margin-bottom:8px"><h3>Loan Statement — ${esc(m.name)}</h3><button class="btn secondary small" onclick="shareMemberLoanStatement('${m.id}')">Share</button></div>
+    ${loanRows.length?tbl(['Date','Voucher','Type','Loan ID','Disbursed','Principal Paid','Interest Paid','Outstanding','Narration'], loanRows):`<div class="empty">No loan transactions for this member.</div>`}</div>`;
+  if(otherTxns.length){
+    html += `<div class="card"><h3>Other (Fine/Penalty, etc.) — ${esc(m.name)}</h3>${tbl(['Date','Voucher','Type','Debit','Credit','Amount','Narration'],
+      otherTxns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)]))}</div>`;
+  }
+  function buildLines(kind){
+    const lines = [(DB.profile.name||'SHG')+' — '+(kind==='savings'?'Savings':'Loan')+' Statement', m.name+' ('+m.id+')', 'As on '+fmtDate(todayStr()), ''];
+    if(kind==='savings'){
+      lines.push('Savings Balance: '+rupee(memberSavingsBalance(m.id)), '', 'Transactions:');
+      savingsTxns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+' — '+rupee(t.amount)));
+    } else {
+      lines.push('Loan Outstanding (All Loans): '+rupee(memberLoanOutstanding(m.id)), '');
+      if(memberLoans.length){ lines.push('Loans:'); memberLoans.forEach(l=>lines.push('  '+l.id+' — '+(l.purpose||'')+' — Principal '+rupee(l.principal)+' — O/S '+rupee(loanOutstanding(l.id).principal)+' — '+l.status)); lines.push(''); }
+      lines.push('Transactions:');
+      loanTxns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+(t.loanId?(' ('+t.loanId+')'):'')+' — '+rupee(t.amount)));
+    }
+    return lines.join('\n');
+  }
+  window.__memberSavingsStatementShareText = buildLines('savings');
+  window.__memberLoanStatementShareText = buildLines('loan');
   return html;
 }
-function shareMemberStatement(){ shareText((DB.profile.name||'SHG')+' — Member Statement', window.__memberStatementShareText||'Not generated yet.'); }
+function shareMemberSavingsStatement(){ shareText((DB.profile.name||'SHG')+' — Savings Statement', window.__memberSavingsStatementShareText||'Not generated yet.'); }
+function shareMemberLoanStatement(){ shareText((DB.profile.name||'SHG')+' — Loan Statement', window.__memberLoanStatementShareText||'Not generated yet.'); }
 
 /* ============================================================ STATEMENT EXTRACT (any Member OR any ledger Head, for any date range) */
 // One general-purpose statement generator: pick either a Member (their own combined
@@ -5079,8 +5179,8 @@ function csvRowsToObjects(rows){
 }
 function downloadMembersImportTemplate(){
   downloadFile('members_import_template.csv', toCSV(
-    ['Name','Gender','Relation','FatherHusband','Mobile','Village','DOJ','Status','Occupation','Nominee','BankAccno','BankIfsc'],
-    [['Sunita Devi','Female','W/o','Ram Lal','9876543210','Rampur','2025-04-01','Active','Agriculture','Geeta Devi','','']]
+    ['Name','Gender','Relation','FatherHusband','Mobile','Email','Village','DOJ','Status','Occupation','Nominee','BankAccno','BankIfsc'],
+    [['Sunita Devi','Female','W/o','Ram Lal','9876543210','sunita.devi@example.com','Rampur','2025-04-01','Active','Agriculture','Geeta Devi','','']]
   ));
 }
 function downloadTransactionsImportTemplate(){
@@ -5109,7 +5209,7 @@ function bulkImportMembersFile(){
       const dupInFile = seenInFile.some(k=>k[0]===nameKey && k[1]===fhKey);
       if(dupExisting || dupInFile) errors.push('Possible duplicate '+(dupInFile?'within this file':'of an existing member')+' (same name & relation name)');
       seenInFile.push([nameKey, fhKey]);
-      return { name:o.Name||'', gender, relation, fatherHusband:o.FatherHusband||'', mobile:o.Mobile||'', village:o.Village||'',
+      return { name:o.Name||'', gender, relation, fatherHusband:o.FatherHusband||'', mobile:o.Mobile||'', email:o.Email||'', village:o.Village||'',
         doj, status, occupation:o.Occupation||'', nominee:o.Nominee||'', bankAccno:o.BankAccno||'', bankIfsc:o.BankIfsc||'', errors };
     });
     render();
