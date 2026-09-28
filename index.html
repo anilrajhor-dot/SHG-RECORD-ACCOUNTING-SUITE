@@ -933,9 +933,18 @@ const NAV = [
   {id:'help', label:'Help & Training', icon:'?'},
   {id:'helpai', label:'Help Assistant', icon:'✦'}
 ];
+// UPI is no longer offered as a selectable entry mode anywhere (see FUND_ACCOUNTS/postTxn), so the
+// UPI Book menu item itself is hidden for the normal case. It only reappears if this SHG's data
+// actually has some legacy UPI history (a non-zero UPI balance or an old UPI-tagged transaction) —
+// so nothing is ever hidden that a user might still need to see/reconcile/move out.
+function hasLegacyUPIData(){
+  if(Math.abs(accountBalance('UPI'))>0.5) return true;
+  return DB.transactions.some(t=>!t.reversed && (t.debit==='UPI'||t.credit==='UPI'));
+}
 function buildNav(){
   const ul = document.getElementById('navlist');
-  ul.innerHTML = NAV.map(n=>{
+  const showUpiBook = hasLegacyUPIData();
+  ul.innerHTML = NAV.filter(n=>n.id!=='upibook' || showUpiBook).map(n=>{
     if(n.grp) return `<li class="grp">${esc(n.grp)}</li>`;
     const isActive = ROUTE===n.id || (n.id==='meetings' && ROUTE==='meetingnew');
     return `<li><a class="${isActive?'active':''}" onclick="go('${n.id}')">${n.icon} &nbsp;<span>${esc(n.label)}</span></a></li>`;
@@ -949,7 +958,7 @@ function render(){
   buildNav();
   document.getElementById('topShgName').textContent = DB.profile.name || 'Unnamed SHG';
   document.getElementById('topStats').innerHTML =
-    `Cash <b>${rupee(accountBalance('CASH'))}</b> &nbsp;·&nbsp; Bank <b>${rupee(accountBalance('BANK'))}</b> &nbsp;·&nbsp; UPI <b>${rupee(accountBalance('UPI'))}</b> &nbsp;·&nbsp; Members <b>${activeMembers().length}</b>`;
+    `Cash <b>${rupee(accountBalance('CASH'))}</b> &nbsp;·&nbsp; Bank <b>${rupee(accountBalance('BANK'))}</b> &nbsp;·&nbsp; ${hasLegacyUPIData()?`UPI <b>${rupee(accountBalance('UPI'))}</b> &nbsp;·&nbsp; `:''}Members <b>${activeMembers().length}</b>`;
   document.getElementById('langToggle').innerHTML = languageToggleHTML();
   const c = document.getElementById('content');
   let html = '';
