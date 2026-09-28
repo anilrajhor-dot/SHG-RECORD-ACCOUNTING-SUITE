@@ -986,8 +986,14 @@ function render(){
   saveDB();
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
-function openModal(html){
-  document.getElementById('modalRoot').innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`;
+// `persistent` (default false) skips the tap-outside-to-close overlay behaviour — used only for
+// a confirmation screen where a careful entry (e.g. a whole meeting: savings, repayments, a new
+// loan) is still sitting unposted and an accidental tap on the backdrop (very easy to do on a
+// phone while scrolling a long review screen) would otherwise silently throw all of it away with
+// no warning. Such a modal must be dismissed only via its own explicit buttons.
+function openModal(html, persistent){
+  const overlayClick = persistent ? '' : ' onclick="if(event.target===this)closeModal()"';
+  document.getElementById('modalRoot').innerHTML = `<div class="overlay"${overlayClick}><div class="modal">${html}</div></div>`;
   translateNode(document.getElementById('modalRoot'));
 }
 
@@ -2007,6 +2013,7 @@ function showMeetingConfirmation(){
   const foreclosingCount = p.memberEntries.reduce((s,r)=>s+r.loanRows.filter(lr=>lr.foreclose).length,0);
   const withdrawingCount = p.memberEntries.filter(r=>r.wd>0).length;
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Summary — ${fmtDate(p.date)}${p.place?(' — '+esc(p.place)):''}</h3>
+    <div class="msg amber" style="margin-top:0"><b>Not posted yet.</b> This is only a review — tap <b>Confirm &amp; Post Meeting</b> below to actually save it to the books. Closing this screen any other way (the × above, tapping outside, or Back to Edit) discards everything entered and posts nothing.</div>
     ${p.minutes && p.minutes.length ? `<p class="hint">Minutes recorded: ${p.minutes.length} agenda item(s)</p>` : ''}
     <div class="grid cols2">
       ${stat('Members Present', p.present+' / '+p.totalMembers)}
@@ -2032,7 +2039,7 @@ function showMeetingConfirmation(){
     <div class="row" style="margin-top:10px">
       <button class="btn" onclick="confirmPostMeeting()">Confirm &amp; Post Meeting</button>
       <button class="btn secondary" onclick="closeModal()">Back to Edit</button>
-    </div>`);
+    </div>`, true);
 }
 // PASS 2: everything below was already validated in postMeeting(), so this loop posts the
 // whole meeting — every loan repayment tagged with its own loanId — in one uninterrupted
