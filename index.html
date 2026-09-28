@@ -1446,15 +1446,17 @@ function meetingWorkflow(){
   <!-- STEP 3: Savings & Fine -->
   <div class="mstep" data-step="3" style="display:none">
     <h3>Members Savings &amp; Fine</h3>
-    <div class="helpbox">Enter each member's savings and any fine — this is the only place savings need to be entered; the Members Savings ledger updates automatically.</div>
+    <div class="helpbox">Enter each member's savings and any fine — this is the only place savings need to be entered; the Members Savings ledger updates automatically. A member who wants to withdraw from her savings this meeting can do so in the same row.</div>
     ${members.map(m=>`<div class="card" style="margin-top:8px;padding:10px 12px">
-      <div style="font-weight:600;margin-bottom:6px">${esc(m.name)}</div>
+      <div style="font-weight:600;margin-bottom:6px">${esc(m.name)} <span class="hint" style="font-weight:normal">· Savings balance: ${rupee(memberSavingsBalance(m.id))}</span></div>
       <div class="row">
         <div class="field"><label>Savings ₹</label><input type="number" min="0" step="0.01" name="sav_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
         <div class="field"><label>Fine ₹</label><input type="number" min="0" step="0.01" name="fine_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
-        <div class="field"><label>Member Total</label><div class="num" id="mtotal_${m.id}" style="padding-top:8px;font-weight:600">₹0.00</div></div>
+        <div class="field"><label>Withdrawal ₹ (if desired)</label><input type="number" min="0" step="0.01" name="wd_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
+        <div class="field"><label>Member Net Total</label><div class="num" id="mtotal_${m.id}" style="padding-top:8px;font-weight:600">₹0.00</div></div>
       </div>
     </div>`).join('')}
+    <p class="hint" style="margin-top:6px">Member Net Total = Savings + Fine + Loan Repayment (Step 4) − Withdrawal. A withdrawal larger than the member's balance (after any deposit entered above) needs the authorised-adjustment checkbox in Step 6, same as an excess loan payment.</p>
     <div class="row" style="margin-top:14px">
       <button type="button" class="btn secondary" onclick="goToMeetingStep(2)">← Back</button>
       <button type="button" class="btn" onclick="goToMeetingStep(4)">Next: Loan Repayment →</button>
@@ -1527,10 +1529,11 @@ function meetingWorkflow(){
       <div class="stat"><div class="lbl">Total Interest</div><div class="val" id="meetingTotInt">₹0.00</div></div>
       <div class="stat"><div class="lbl">Total Fines</div><div class="val" id="meetingTotFine">₹0.00</div></div>
     </div>
-    <div class="grid cols3" style="margin-top:10px">
+    <div class="grid cols4" style="margin-top:10px">
+      <div class="stat"><div class="lbl">Total Savings Withdrawn</div><div class="val" id="meetingTotWd">₹0.00</div></div>
       <div class="stat"><div class="lbl">Present / Saving / Repaying / Multi-Loan</div><div class="val" id="meetingCounts" style="font-size:13px">—</div></div>
       <div class="stat"><div class="lbl">Total Collection</div><div class="val" id="meetingGrandTotal">₹0.00</div></div>
-      <div class="stat"><div class="lbl">Net Collection (after new loans &amp; expenses)</div><div class="val" id="meetingNetCollection">₹0.00</div></div>
+      <div class="stat"><div class="lbl">Net Collection (after new loans, expenses &amp; withdrawals)</div><div class="val" id="meetingNetCollection">₹0.00</div></div>
     </div>
     <div class="row" style="margin-top:10px">
       <div class="field"><label>Actual Cash/Bank Counted Today ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
@@ -1564,7 +1567,7 @@ function renderLoanRepaymentCard(m, asOfDate){
     <details ${totalDue>0.5?'open':''}>
       <summary style="cursor:pointer;font-weight:600;color:var(--navy-2);font-size:13.5px">Loan-wise Repayment (${dues.length} loan${dues.length>1?'s':''})</summary>
       <div class="row" style="margin-top:8px"><button type="button" class="btn small secondary" onclick="meetingAllocateDue('${m.id}')">Fill Due Amounts</button></div>
-      <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Loan ID</th><th>Purpose</th><th>Rate %</th><th>Loan O/S</th><th>Current Principal Due</th><th>Current Interest Due</th><th>Arrears Principal</th><th>Arrears Interest</th><th>Total Principal Due</th><th>Total Interest Due</th><th>Total Amount Due</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Balance</th></tr></thead><tbody>`;
+      <div class="tablewrap" style="margin-top:8px"><table><thead><tr><th>Loan ID</th><th>Purpose</th><th>Rate %</th><th>Loan O/S</th><th>Current Principal Due</th><th>Current Interest Due</th><th>Arrears Principal</th><th>Arrears Interest</th><th>Total Principal Due</th><th>Total Interest Due</th><th>Total Amount Due</th><th>Principal Paid ₹</th><th>Interest Paid ₹</th><th>Balance</th><th>Close Now?</th></tr></thead><tbody>`;
   dues.forEach(d=>{
     html += `<tr>
       <td>${d.loan.id}</td><td>${esc(d.loan.purpose||'—')}</td><td class="num">${d.loan.interestRate}%</td>
@@ -1576,13 +1579,39 @@ function renderLoanRepaymentCard(m, asOfDate){
       <td class="num" id="tpd_${d.loan.id}"><b>${rupee(d.totalPrincipalDue)}</b></td>
       <td class="num" id="tid_${d.loan.id}"><b>${rupee(d.totalInterestDue)}</b></td>
       <td class="num" id="tad_${d.loan.id}"><b>${d.totalDue>0.5?rupee(d.totalDue):'—'}</b></td>
-      <td><input type="number" min="0" step="0.01" name="rp_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
-      <td><input type="number" min="0" step="0.01" name="ri_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
+      <td><input type="number" min="0" step="0.01" name="rp_${d.loan.id}" id="rp_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
+      <td><input type="number" min="0" step="0.01" name="ri_${d.loan.id}" id="ri_${d.loan.id}" style="width:80px" oninput="meetingCalcLoanRow('${d.loan.id}','${m.id}')"></td>
       <td class="num" id="loanbal_${d.loan.id}">${d.totalDue>0.5?rupee(d.totalDue):'—'}</td>
-    </tr>`;
+      <td><label style="display:flex;align-items:center;gap:4px;font-weight:normal;white-space:nowrap"><input type="checkbox" name="foreclose_${d.loan.id}" id="foreclose_${d.loan.id}" style="width:auto" onchange="meetingToggleForeclose('${d.loan.id}','${m.id}')"> Foreclose</label></td>
+    </tr>
+    <tr id="forecloseQuoteRow_${d.loan.id}" style="display:none"><td colspan="15" class="hint" id="forecloseQuoteText_${d.loan.id}"></td></tr>`;
   });
-  html += `</tbody></table></div></details></div>`;
+  html += `</tbody></table></div>
+      <p class="hint" style="margin-top:6px">Tick <b>Foreclose</b> to close a loan today — whether on its scheduled due date or in between instalments. The Principal/Interest boxes are then filled with the full outstanding principal plus interest calculated up to this meeting's date only (never the original full-tenor interest), and the loan is marked Closed once posted.</p>
+    </details></div>`;
   return html;
+}
+// Ticking "Foreclose" fills that loan's own Principal/Interest boxes with a fresh up-to-date
+// closure quote and locks them (so nothing stale or manually mistyped can be posted instead —
+// postMeeting() recomputes this same quote again at submit time regardless); unticking restores
+// the ordinary due-based repayment fields.
+function meetingToggleForeclose(loanId, mid){
+  const chk = document.getElementById('foreclose_'+loanId);
+  const rpEl = document.getElementById('rp_'+loanId), riEl = document.getElementById('ri_'+loanId);
+  const quoteRow = document.getElementById('forecloseQuoteRow_'+loanId), quoteText = document.getElementById('forecloseQuoteText_'+loanId);
+  if(chk && chk.checked){
+    const date = (document.getElementById('meetingDate')||{}).value || todayStr();
+    const q = computeLoanForeclosure(loanId, date);
+    if(rpEl){ rpEl.value = q.principal; rpEl.disabled = true; }
+    if(riEl){ riEl.value = q.totalInterest; riEl.disabled = true; }
+    if(quoteRow) quoteRow.style.display = '';
+    if(quoteText) quoteText.innerHTML = `Foreclosure quote as of ${fmtDate(date)}: Principal ${rupee(q.principal)} + Interest ${rupee(q.totalInterest)} (already-due ${rupee(q.interestAlreadyDue)} + part-period-to-date ${rupee(q.proRatedInterest)}) = <b>${rupee(q.totalAmount)}</b>. This loan will be marked Closed once the meeting is posted.`;
+  } else {
+    if(rpEl){ rpEl.disabled = false; rpEl.value = ''; }
+    if(riEl){ riEl.disabled = false; riEl.value = ''; }
+    if(quoteRow) quoteRow.style.display = 'none';
+  }
+  meetingCalcLoanRow(loanId, mid);
 }
 // Fills every one of this member's loan rows with that loan's own due principal/interest —
 // this is the "Allocate Due Amounts" convenience. Nothing is posted here; the user can still
@@ -1590,6 +1619,11 @@ function renderLoanRepaymentCard(m, asOfDate){
 // default — no repayment is ever assumed or auto-posted against an unspecified loan.
 function meetingAllocateDue(mid){
   memberDueInfos(mid, (document.getElementById('meetingDate')||{}).value || todayStr()).forEach(d=>{
+    // A loan ticked for Foreclosure already shows its own up-to-date closure quote (the full
+    // outstanding balance, not just the current instalment) — leave it exactly as computed by
+    // meetingToggleForeclose() rather than overwriting it with the ordinary due amounts here.
+    const forecloseChk = document.getElementById('foreclose_'+d.loan.id);
+    if(forecloseChk && forecloseChk.checked) return;
     const rpEl = document.querySelector('[name="rp_'+d.loan.id+'"]');
     const riEl = document.querySelector('[name="ri_'+d.loan.id+'"]');
     // Fill the TOTAL unpaid amount (current instalment + arrears), not just the current
@@ -1642,28 +1676,30 @@ function meetingCalcLoanRow(loanId, mid){
 function meetingCalcMemberRow(mid){
   const sav = parseFloat((document.querySelector('[name="sav_'+mid+'"]')||{}).value)||0;
   const fine = parseFloat((document.querySelector('[name="fine_'+mid+'"]')||{}).value)||0;
+  const wd = parseFloat((document.querySelector('[name="wd_'+mid+'"]')||{}).value)||0;
   let loanTotal = 0;
   memberDueInfos(mid).forEach(d=>{
     loanTotal += (parseFloat((document.querySelector('[name="rp_'+d.loan.id+'"]')||{}).value)||0);
     loanTotal += (parseFloat((document.querySelector('[name="ri_'+d.loan.id+'"]')||{}).value)||0);
   });
-  const total = Math.round((sav+fine+loanTotal)*100)/100;
+  const total = Math.round((sav+fine+loanTotal-wd)*100)/100;
   const cell = document.getElementById('mtotal_'+mid);
   if(cell) cell.textContent = rupee(total);
   meetingCalcGrandTotal();
 }
 function meetingCalcGrandTotal(){
   const sum = prefix => { let s=0; document.querySelectorAll('input[name^="'+prefix+'_"]').forEach(el=>s+=parseFloat(el.value)||0); return s; };
-  const totSav = sum('sav'), totFine = sum('fine');
+  const totSav = sum('sav'), totFine = sum('fine'), totWd = sum('wd');
   let totRp=0, totRi=0;
   DB.loans.forEach(l=>{ totRp += parseFloat((document.querySelector('[name="rp_'+l.id+'"]')||{}).value)||0; totRi += parseFloat((document.querySelector('[name="ri_'+l.id+'"]')||{}).value)||0; });
   const grand = Math.round((totSav+totRp+totRi+totFine)*100)/100;
   const newLoanAmt = parseFloat((document.querySelector('[name="newloan_amount"]')||{}).value)||0;
   const expAmt = parseFloat((document.querySelector('[name="exp_amount"]')||{}).value)||0;
   const depositAmt = parseFloat((document.querySelector('[name="depositAmount"]')||{}).value)||0;
-  const netCollection = Math.round((grand - newLoanAmt - expAmt - depositAmt)*100)/100;
+  const netCollection = Math.round((grand - newLoanAmt - expAmt - depositAmt - totWd)*100)/100;
   const setText = (id,v)=>{ const el=document.getElementById(id); if(el) el.textContent = rupee(v); };
   setText('meetingTotSav', totSav); setText('meetingTotPrin', totRp); setText('meetingTotInt', totRi); setText('meetingTotFine', totFine);
+  setText('meetingTotWd', totWd);
   setText('meetingGrandTotal', grand); setText('meetingNetCollection', netCollection);
   let present=0, saving=0, repaying=0, multiLoan=0;
   activeMembers().forEach(m=>{
@@ -1816,12 +1852,39 @@ function postMeeting(ev){
       if(isPresent){ present++; presentIds.push(m.id); } else { absentIds.push(m.id); }
       const sav = parseFloat(f.get('sav_'+m.id))||0;
       const fine = parseFloat(f.get('fine_'+m.id))||0;
-      if(sav<0||fine<0) throw new Error('Negative amounts are not allowed ('+m.name+'). Enter zero or a positive amount.');
+      const wd = parseFloat(f.get('wd_'+m.id))||0;
+      if(sav<0||fine<0||wd<0) throw new Error('Negative amounts are not allowed ('+m.name+'). Enter zero or a positive amount.');
+      let wdOverride = false;
+      if(wd>0){
+        // Withdrawal is checked against the member's balance AFTER this same meeting's own
+        // deposit is credited (sav), not just her balance coming in — a member depositing and
+        // withdrawing in the same meeting is a normal pattern, not an excess.
+        const balanceAfterDeposit = Math.round((memberSavingsBalance(m.id)+sav)*100)/100;
+        if(wd > balanceAfterDeposit+0.5){
+          if(!allowExcess) throw new Error('Savings withdrawal for '+m.name+' ('+rupee(wd)+') exceeds her savings balance ('+rupee(balanceAfterDeposit)+' after today\'s deposit). Reduce the amount, or tick the authorised-adjustment checkbox.');
+          wdOverride = true; anyOverrideUsed = true;
+        }
+      }
       const loans = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed');
       const loanRows = [];
       loans.forEach(loan=>{
-        const rp = parseFloat(f.get('rp_'+loan.id))||0;
-        const ri = parseFloat(f.get('ri_'+loan.id))||0;
+        const foreclose = !!f.get('foreclose_'+loan.id);
+        let rp, ri;
+        if(foreclose){
+          // Foreclosure ALWAYS uses a freshly computed, up-to-date quote — never whatever is
+          // sitting in the Principal/Interest boxes — so a stale auto-fill (e.g. the meeting
+          // date was changed after the boxes were filled) can never close a loan for the wrong
+          // amount. It also deliberately bypasses the normal "exceeds amount due" excess checks
+          // below: closing out the FULL outstanding balance plus its up-to-date interest is the
+          // whole point of a foreclosure, not an excess needing authorised-adjustment.
+          const q = computeLoanForeclosure(loan.id, date);
+          rp = q.principal; ri = q.totalInterest;
+          if(rp<=0 && ri<=0) return;
+          loanRows.push({loan, rp, ri, override:false, foreclose:true, quote:q});
+          return;
+        }
+        rp = parseFloat(f.get('rp_'+loan.id))||0;
+        ri = parseFloat(f.get('ri_'+loan.id))||0;
         if(rp<0||ri<0) throw new Error('Negative amounts are not allowed on loan '+loan.id+' ('+m.name+').');
         if(rp===0 && ri===0) return;
         const due = memberDueInfos(m.id, date).find(d=>d.loan.id===loan.id);
@@ -1850,14 +1913,14 @@ function postMeeting(ev){
         if(dupe) dupWarnings.push(m.name+' — loan '+loan.id+': a principal repayment of '+rupee(rp)+' on '+fmtDate(date)+' already exists.');
         loanRows.push({loan, rp, ri, override});
       });
-      if(sav>0||fine>0||loanRows.length) memberEntries.push({m, sav, fine, loanRows});
+      if(sav>0||fine>0||wd>0||loanRows.length) memberEntries.push({m, sav, fine, wd, wdOverride, loanRows});
     });
     // Attendance-by-name is generated automatically from presentIds/absentIds (never re-typed)
     // and recorded as the first line of the Minutes/proceedings, ahead of any agenda items.
     const attendanceNote = 'Present ('+presentIds.length+'): '+(presentIds.map(memberName).join(', ')||'—')+'. Absent ('+absentIds.length+'): '+(absentIds.map(memberName).join(', ')||'—')+'.';
     minutes = [{topic:'Attendance', discussion: attendanceNote}, ...minutes];
     if(anyOverrideUsed && !adjustmentReason){
-      throw new Error('At least one loan exceeds the amount due and the authorised-adjustment box is ticked, but no reason was entered. A reason is required for every authorised adjustment so it stays traceable in the audit trail and reports.');
+      throw new Error('At least one loan repayment or savings withdrawal exceeds the amount normally allowed and the authorised-adjustment box is ticked, but no reason was entered. A reason is required for every authorised adjustment so it stays traceable in the audit trail and reports.');
     }
 
     let newLoan = null;
@@ -1884,11 +1947,12 @@ function postMeeting(ev){
       principal: Math.round(memberEntries.reduce((s,r)=>s+r.loanRows.reduce((s2,lr)=>s2+lr.rp,0),0)*100)/100,
       interest: Math.round(memberEntries.reduce((s,r)=>s+r.loanRows.reduce((s2,lr)=>s2+lr.ri,0),0)*100)/100,
       fines: Math.round(memberEntries.reduce((s,r)=>s+r.fine,0)*100)/100,
+      withdrawals: Math.round(memberEntries.reduce((s,r)=>s+(r.wd||0),0)*100)/100,
       newLoans: newLoan ? newLoan.amount : 0,
       expenses: expense ? expense.amount : 0
     };
     const totalCollection = Math.round((totals.savings+totals.principal+totals.interest+totals.fines)*100)/100;
-    const netCash = mode==='CASH' ? Math.round((totalCollection - totals.newLoans - totals.expenses)*100)/100 : 0;
+    const netCash = mode==='CASH' ? Math.round((totalCollection - totals.newLoans - totals.expenses - totals.withdrawals)*100)/100 : 0;
 
     let deposit = null;
     const depositAmount = parseFloat(f.get('depositAmount'))||0;
@@ -1922,10 +1986,13 @@ function showMeetingConfirmation(){
   const p = PENDING_MEETING_PLAN; if(!p) return;
   const memberRows = p.memberEntries.map(r=>{
     const loanTotal = r.loanRows.reduce((s,lr)=>s+lr.rp+lr.ri,0);
-    return [esc(r.m.name), rightCell(rupee(r.sav)), rightCell(rupee(loanTotal)), rightCell(rupee(r.fine)), rightCell('<b>'+rupee(r.sav+loanTotal+r.fine)+'</b>')];
+    const net = r.sav+loanTotal+r.fine-(r.wd||0);
+    return [esc(r.m.name), rightCell(rupee(r.sav)), rightCell(rupee(loanTotal)), rightCell(rupee(r.fine)), rightCell(r.wd?rupee(r.wd):'—'), rightCell('<b>'+rupee(net)+'</b>')];
   });
   const loanRows = [];
-  p.memberEntries.forEach(r=> r.loanRows.forEach(lr=>{ if(lr.rp>0||lr.ri>0) loanRows.push([esc(r.m.name), lr.loan.id, rightCell(rupee(lr.rp)), rightCell(rupee(lr.ri)), rightCell('<b>'+rupee(lr.rp+lr.ri)+'</b>'), lr.override?badge('Adjustment','amber'):'']); }));
+  p.memberEntries.forEach(r=> r.loanRows.forEach(lr=>{ if(lr.rp>0||lr.ri>0) loanRows.push([esc(r.m.name), lr.loan.id, rightCell(rupee(lr.rp)), rightCell(rupee(lr.ri)), rightCell('<b>'+rupee(lr.rp+lr.ri)+'</b>'), lr.foreclose?badge('Foreclosure — will Close','red'):(lr.override?badge('Adjustment','amber'):'')]); }));
+  const foreclosingCount = p.memberEntries.reduce((s,r)=>s+r.loanRows.filter(lr=>lr.foreclose).length,0);
+  const withdrawingCount = p.memberEntries.filter(r=>r.wd>0).length;
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Summary — ${fmtDate(p.date)}${p.place?(' — '+esc(p.place)):''}</h3>
     ${p.minutes && p.minutes.length ? `<p class="hint">Minutes recorded: ${p.minutes.length} agenda item(s)</p>` : ''}
     <div class="grid cols2">
@@ -1935,15 +2002,17 @@ function showMeetingConfirmation(){
       ${stat('Principal Recovered', rupee(p.totals.principal))}
       ${stat('Interest Received', rupee(p.totals.interest))}
       ${stat('Fine Received', rupee(p.totals.fines))}
+      ${stat('Savings Withdrawn', rupee(p.totals.withdrawals)+(withdrawingCount?(' <span class="hint">('+withdrawingCount+' member'+(withdrawingCount>1?'s':'')+')</span>'):''))}
       ${stat('New Loans Disbursed', rupee(p.totals.newLoans))}
       ${stat('Meeting Expenses', rupee(p.totals.expenses) + (p.expense&&p.expense.approvedBy?(' <span class="hint">(Approved: '+esc(p.expense.approvedBy)+')</span>'):''))}
       ${stat(p.mode==='CASH'?'Cash Collection':'Bank Collection', rupee(p.totalCollection))}
       ${stat('Proposed Bank Deposit', p.deposit?rupee(p.deposit.amount):'—')}
       ${stat('Net Cash Remaining', p.mode==='CASH'?rupee(Math.round((p.netCash-(p.deposit?p.deposit.amount:0))*100)/100):'—')}
     </div>
-    ${memberRows.length ? `<h4 style="margin-top:12px">Member-wise</h4>${tbl(['Member','Savings','Loan Repayment','Fine','Total'], memberRows)}` : ''}
+    ${memberRows.length ? `<h4 style="margin-top:12px">Member-wise</h4>${tbl(['Member','Savings','Loan Repayment','Fine','Withdrawal','Net Total'], memberRows)}` : ''}
     ${loanRows.length ? `<h4 style="margin-top:10px">Loan-wise</h4>${tbl(['Member','Loan ID','Principal','Interest','Total',''], loanRows)}` : ''}
-    ${p.anyOverrideUsed ? `<div class="msg info" style="margin-top:10px"><b>Authorised Adjustment:</b> ${esc(p.adjustmentReason)}<br>Marked loans above exceed the amount normally due — this reason will be recorded in the audit trail and in that transaction's narration.</div>` : ''}
+    ${foreclosingCount ? `<div class="msg info" style="margin-top:10px"><b>${foreclosingCount} loan(s) will be marked CLOSED</b> on posting — their Principal/Interest above already include up-to-date interest calculated to ${fmtDate(p.date)}, not the original full schedule.</div>` : ''}
+    ${p.anyOverrideUsed ? `<div class="msg info" style="margin-top:10px"><b>Authorised Adjustment:</b> ${esc(p.adjustmentReason)}<br>Marked loan repayments/withdrawals above exceed the amount normally due — this reason will be recorded in the audit trail and in that transaction's narration.</div>` : ''}
     ${p.dupWarnings && p.dupWarnings.length ? `<div class="msg err" style="margin-top:10px">Possible duplicate entr${p.dupWarnings.length>1?'ies':'y'}:<br>${p.dupWarnings.map(esc).join('<br>')}<br>You can still post if this is intentional (e.g. a genuine second payment).</div>` : ''}
     ${p.reconDiff!=null && p.reconDiff!==0 ? `<div class="msg err" style="margin-top:10px">Counted amount (${rupee(p.actualReceived)}) differs from entries by ${rupee(Math.abs(p.reconDiff))}. You can still post — the difference is saved with the meeting for follow-up.</div>` : ''}
     <p class="hint" style="margin-top:10px">Nothing has been posted yet. Review the figures, then confirm to create all accounting entries in one step.</p>
@@ -1964,16 +2033,30 @@ function confirmPostMeeting(){
   // entries, and no ID sequence drift. Transactions and loans are only ever appended (push), so
   // truncating back to their original length removes exactly what this attempt added; the audit
   // log is prepended (unshift), so it is restored by reassigning the whole array back.
-  const snapshot = { txnLen: DB.transactions.length, auditLog: DB.auditLog.slice(), loansLen: DB.loans.length, seq: DB.seq };
+  const snapshot = { txnLen: DB.transactions.length, auditLog: DB.auditLog.slice(), loansLen: DB.loans.length, seq: DB.seq,
+    // A foreclosure mutates an EXISTING loan record's status/nextDueDate in place — a plain
+    // length-truncate (which only undoes pushes) can't undo that, so its previous values are
+    // captured here explicitly and restored in the catch block below if anything later fails.
+    loanStates: p.memberEntries.flatMap(r=>r.loanRows).filter(lr=>lr.foreclose).map(lr=>({loan:lr.loan, status:lr.loan.status, nextDueDate:lr.loan.nextDueDate})) };
   const meetingId = nextId('MTG');
   try{
     p.memberEntries.forEach(r=>{
       if(r.sav>0) postTxn({date:p.date,type:'Savings',debit:p.mode,credit:'MEMBER_SAVINGS',amount:r.sav,memberId:r.m.id,meetingId,narration:'Meeting savings — '+r.m.name});
+      if(r.wd>0){
+        const wdAdjTag = r.wdOverride ? ' [Authorised Adjustment: '+p.adjustmentReason+']' : '';
+        postTxn({date:p.date,type:'Savings Withdrawal',debit:'MEMBER_SAVINGS',credit:p.mode,amount:r.wd,memberId:r.m.id,meetingId,narration:'Savings withdrawal — '+r.m.name+wdAdjTag});
+        if(r.wdOverride) logAudit('AUTHORISED_ADJUSTMENT', 'Savings withdrawal ('+r.m.name+'): '+rupee(r.wd)+' exceeded her available balance — reason: '+p.adjustmentReason);
+      }
       r.loanRows.forEach(lr=>{
-        const adjTag = lr.override ? ' [Authorised Adjustment: '+p.adjustmentReason+']' : '';
-        if(lr.rp>0) postTxn({date:p.date,type:'Loan Repayment',debit:p.mode,credit:'MEMBER_LOANS',amount:lr.rp,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:'Principal repayment — '+r.m.name+' ('+lr.loan.id+')'+adjTag});
-        if(lr.ri>0) postTxn({date:p.date,type:'Interest Received',debit:p.mode,credit:'INTEREST_INCOME',amount:lr.ri,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:'Interest received — '+r.m.name+' ('+lr.loan.id+')'+adjTag});
+        const adjTag = lr.override ? ' [Authorised Adjustment: '+p.adjustmentReason+']' : (lr.foreclose ? ' [Foreclosure — up-to-date interest to '+fmtDate(p.date)+']' : '');
+        if(lr.rp>0) postTxn({date:p.date,type: lr.foreclose?'Loan Foreclosure':'Loan Repayment',debit:p.mode,credit:'MEMBER_LOANS',amount:lr.rp,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:(lr.foreclose?'Foreclosure — principal — ':'Principal repayment — ')+r.m.name+' ('+lr.loan.id+')'+adjTag});
+        if(lr.ri>0) postTxn({date:p.date,type: lr.foreclose?'Loan Foreclosure':'Interest Received',debit:p.mode,credit:'INTEREST_INCOME',amount:lr.ri,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:(lr.foreclose?'Foreclosure — interest to date — ':'Interest received — ')+r.m.name+' ('+lr.loan.id+')'+adjTag});
         if(lr.override) logAudit('AUTHORISED_ADJUSTMENT', 'Loan '+lr.loan.id+' ('+r.m.name+'): principal '+rupee(lr.rp)+' / interest '+rupee(lr.ri)+' exceeded amount due — reason: '+p.adjustmentReason);
+        if(lr.foreclose){
+          lr.loan.status = 'Closed';
+          lr.loan.nextDueDate = '';
+          logAudit('LOAN_FORECLOSURE', 'Loan '+lr.loan.id+' ('+r.m.name+') foreclosed at the meeting on '+p.date+' — principal '+rupee(lr.rp)+' + up-to-date interest '+rupee(lr.ri)+' — loan marked Closed.');
+        }
       });
       if(r.fine>0) postTxn({date:p.date,type:'Fine',debit:p.mode,credit:'FINE_INCOME',amount:r.fine,memberId:r.m.id,meetingId,narration:'Fine/penalty — '+r.m.name});
     });
@@ -2016,6 +2099,10 @@ function confirmPostMeeting(){
     DB.auditLog = snapshot.auditLog;
     DB.loans.length = snapshot.loansLen;
     DB.seq = snapshot.seq;
+    // Undo any foreclosure status change made above — a loan mutated in place is not covered
+    // by truncating DB.loans.length, so it is restored explicitly from the snapshot taken
+    // before this attempt began.
+    snapshot.loanStates.forEach(s=>{ s.loan.status = s.status; s.loan.nextDueDate = s.nextDueDate; });
     flash('error', 'Posting failed: '+e.message+' — no part of this meeting was saved (all changes rolled back).');
     closeModal(); render();
   }
@@ -2314,6 +2401,69 @@ function closeLoan(id){
   if(!loanEligibleForClosure(l)){ flash('error','This loan still has principal or interest outstanding and cannot be closed yet.'); render(); return; }
   l.status='Closed'; logAudit('CLOSE_LOAN', id+' marked closed'); flash('ok','Loan marked closed.'); render();
 }
+// Whole calendar days between two YYYY-MM-DD dates (b-a). Used only for pro-rating a PARTIAL
+// period's interest on foreclosure — every other date calculation in this app works in whole
+// instalment periods (addPeriod), never raw days, and that is left exactly as it is.
+function daysBetween(a,b){
+  return Math.round((new Date(b+'T00:00:00').getTime()-new Date(a+'T00:00:00').getTime())/86400000);
+}
+// ---------------------------------------------------------------------------------------------
+// Pre-closure / Foreclosure quote — Member Loans & CIF.
+// A member (or the SHG, for a CIF tranche) may want to close a loan before its full schedule
+// runs out — either exactly on a due date or between two due dates — and interest must be
+// charged only up to that ACTUAL closure date, never a full remaining instalment's worth and
+// never a flat-interest figure computed for the original full tenor. This is deliberately a
+// pure, read-only quote calculator: it never posts anything or touches DB.loans/DB.cif on its
+// own — only the Meeting posting flow (for loans) / CIF Repayment flow (for CIF), after the
+// user reviews and confirms, actually acts on this figure.
+//   Total interest due on closure = (a) any already-fallen-due, still-unpaid instalment
+//   interest (arrears + current instalment, exactly as the ordinary schedule already tracks),
+//   PLUS (b) interest for the partial period since the last due date (or disbursement, if no
+//   instalment has fallen due yet) up to the closure date, pro-rated by ACTUAL elapsed days
+//   within that period and charged on the CURRENT outstanding principal — never on the original
+//   principal, and never assuming the whole period's interest is owed just because part of it
+//   has elapsed. This applies uniformly to both flat and reducing-balance loans/CIF tranches:
+//   once a loan is being foreclosed, what is actually owed is real interest for real time held.
+function computeLoanForeclosure(loanId, asOfDate){
+  const loan = DB.loans.find(l=>l.id===loanId);
+  if(!loan) return null;
+  asOfDate = asOfDate || todayStr();
+  const principal = Math.max(0, loanOutstanding(loanId).principal);
+  const sched = generateLoanSchedule(loanId, asOfDate);
+  const dueRows = sched.filter(s=>s.dueDate<=asOfDate);
+  const interestAlreadyDue = Math.round(dueRows.reduce((s,r)=>s+Math.max(0,r.interestDue-r.interestPaid),0)*100)/100;
+  const freq = loan.frequency||'Monthly';
+  const periodsPerYear = freq==='Weekly'?52:(freq==='Fortnightly'?26:12);
+  const periodStart = dueRows.length ? dueRows[dueRows.length-1].dueDate : loan.disbursementDate;
+  const periodEnd = addPeriod(periodStart, 1, freq);
+  const daysInPeriod = Math.max(1, daysBetween(periodStart, periodEnd));
+  const daysElapsed = Math.max(0, Math.min(daysInPeriod, daysBetween(periodStart, asOfDate)));
+  const fraction = daysElapsed/daysInPeriod;
+  const proRatedInterest = Math.round(principal*(loan.interestRate||0)/100/periodsPerYear*fraction*100)/100;
+  const totalInterest = Math.round((interestAlreadyDue+proRatedInterest)*100)/100;
+  return { loanId, asOfDate, principal, interestAlreadyDue, proRatedInterest, totalInterest,
+    totalAmount: Math.round((principal+totalInterest)*100)/100 };
+}
+function computeCIFForeclosure(cifId, asOfDate){
+  const c = DB.cif.find(x=>x.id===cifId);
+  if(!c) return null;
+  asOfDate = asOfDate || todayStr();
+  const principal = Math.max(0, cifTrancheOutstanding(cifId));
+  const sched = generateCIFSchedule(cifId, asOfDate);
+  const dueRows = sched.filter(s=>s.dueDate<=asOfDate);
+  const interestAlreadyDue = Math.round(dueRows.reduce((s,r)=>s+Math.max(0,r.interestDue-r.interestPaid),0)*100)/100;
+  const freq = c.frequency||'Monthly';
+  const periodsPerYear = freq==='Weekly'?52:(freq==='Fortnightly'?26:12);
+  const periodStart = dueRows.length ? dueRows[dueRows.length-1].dueDate : c.date;
+  const periodEnd = addPeriod(periodStart, 1, freq);
+  const daysInPeriod = Math.max(1, daysBetween(periodStart, periodEnd));
+  const daysElapsed = Math.max(0, Math.min(daysInPeriod, daysBetween(periodStart, asOfDate)));
+  const fraction = daysElapsed/daysInPeriod;
+  const proRatedInterest = Math.round(principal*(c.rate||0)/100/periodsPerYear*fraction*100)/100;
+  const totalInterest = Math.round((interestAlreadyDue+proRatedInterest)*100)/100;
+  return { cifId, asOfDate, principal, interestAlreadyDue, proRatedInterest, totalInterest,
+    totalAmount: Math.round((principal+totalInterest)*100)/100 };
+}
 
 /* ============================================================ CIF */
 /* ============================================================ CIF (treated as a loan the SHG owes to VO/CLF/NRLM) */
@@ -2391,7 +2541,8 @@ function viewCIF(){
         rightCell(rupee(os)), eligible?badge('Eligible for Closure','amber'):badge(c.status,c.status==='Closed'?'grey':'green'),
         `<button class="btn small secondary" onclick="viewCIFSchedule('${c.id}')">Schedule</button> `+
         `<button class="btn small secondary" onclick="viewCIFEMIReference('${c.id}')">EMI Reference</button> `+
-        (c.status!=='Closed' ? `<button class="btn small secondary" onclick="cifRepaymentForm('${c.id}')">Repay</button>`:'')+
+        (c.status!=='Closed' ? `<button class="btn small secondary" onclick="cifRepaymentForm('${c.id}')">Repay</button> `:'')+
+        (c.status!=='Closed' && os>0.5 ? `<button class="btn small secondary" onclick="cifForeclosureForm('${c.id}')">Foreclose</button>`:'')+
         (eligible ? ` <button class="btn small secondary" onclick="closeCIF('${c.id}')">Mark Closed</button>` : '')
       ];
     }))}</div>`;
@@ -2409,7 +2560,43 @@ function viewCIFSchedule(cifId){
     sched.map(s=>[s.inst, fmtDate(s.dueDate), rightCell(rupee(s.principalDue)), rightCell(rupee(s.interestDue)), rightCell(rupee(s.totalDue)),
       rightCell(rupee(s.principalPaid)), rightCell(rupee(s.interestPaid)), rightCell(rupee(s.balance)), badge(s.status, statusColor(s.status))]))}
   <p class="hint" style="margin-top:8px">Interest is shown here per instalment (${esc((c.frequency||'Monthly').toLowerCase())}) for planning, pro-rated by this tranche's actual repayment frequency — never assumed to be monthly. It is only posted to the books (as Interest Paid on Bank Loan/CIF) when actually paid, the same as every other loan in this app.</p>
-  <button class="btn secondary small" style="margin-top:8px" onclick="viewCIFEMIReference('${c.id}')">EMI Reference (for comparison)</button>`);
+  <button class="btn secondary small" style="margin-top:8px" onclick="viewCIFEMIReference('${c.id}')">EMI Reference (for comparison)</button>
+  ${c.status!=='Closed' && os>0.5 ? `<button class="btn secondary small" style="margin-top:8px" onclick="closeModal();cifForeclosureForm('${c.id}')">Foreclose (close now)</button>` : ''}`);
+}
+// Pre-closure/foreclosure of a CIF tranche BEFORE its full schedule runs out — computes the
+// up-to-date closure quote (outstanding principal + interest actually accrued to the chosen
+// date, never a full remaining instalment or the tranche's original full-tenor flat interest)
+// and pre-fills the SAME repayment form/posting path used for an ordinary CIF repayment, so
+// nothing new needs to be taught to saveCIFRepayment() — it already closes a tranche the moment
+// its outstanding balance reaches zero.
+function cifForeclosureForm(cifId){
+  const c = DB.cif.find(x=>x.id===cifId); if(!c) return;
+  const today = todayStr();
+  const q = computeCIFForeclosure(cifId, today);
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Foreclose CIF — ${c.id}</h3>
+  <div class="msg info">This closes the tranche in full, charging up-to-date interest only up to the closure date you choose — not the original full-tenor interest. Change the date below to recompute.</div>
+  <p class="hint">Outstanding Principal: <b>${rupee(q.principal)}</b></p>
+  <form onsubmit="return saveCIFRepayment(event,'${c.id}')">
+    <div class="row">
+      <div class="field"><label>Closure Date</label><input type="date" name="date" id="cifForecloseDate" value="${today}" oninput="recomputeCifForeclosureQuote('${c.id}')"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Principal Paid ₹</label><input type="number" min="0" step="0.01" name="principal" id="cifForeclosePrincipal" value="${q.principal}" readonly></div>
+      <div class="field"><label>Interest Paid ₹ (up to date)</label><input type="number" min="0" step="0.01" name="interest" id="cifForecloseInterest" value="${q.totalInterest}" readonly></div>
+    </div>
+    <p class="hint" id="cifForecloseBreakup">Already-due interest ${rupee(q.interestAlreadyDue)} + interest for the part-period since the last due date ${rupee(q.proRatedInterest)} = ${rupee(q.totalInterest)}.</p>
+    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option><option value="UPI">UPI</option></select></div>
+    <div class="field"><label>Narration</label><input name="narration" value="Foreclosure"></div>
+    <button class="btn" type="submit">Confirm Foreclosure &amp; Close</button>
+  </form>`);
+}
+function recomputeCifForeclosureQuote(cifId){
+  const dateEl = document.getElementById('cifForecloseDate'); if(!dateEl) return;
+  const q = computeCIFForeclosure(cifId, dateEl.value||todayStr());
+  const pEl = document.getElementById('cifForeclosePrincipal'), iEl = document.getElementById('cifForecloseInterest'), bEl = document.getElementById('cifForecloseBreakup');
+  if(pEl) pEl.value = q.principal;
+  if(iEl) iEl.value = q.totalInterest;
+  if(bEl) bEl.textContent = 'Already-due interest '+rupee(q.interestAlreadyDue)+' + interest for the part-period since the last due date '+rupee(q.proRatedInterest)+' = '+rupee(q.totalInterest)+'.';
 }
 function cifForm(){
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record CIF Received</h3>
