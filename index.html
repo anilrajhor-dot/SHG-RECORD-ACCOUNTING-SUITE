@@ -1500,7 +1500,7 @@ function meetingWorkflow(){
     <h3>New Loan Disbursed at this Meeting (optional)</h3>
     <div class="row">
       <div class="field"><label>Member</label><select name="newloan_member"><option value="">— none —</option>${members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
-      <div class="field"><label>Purpose</label><input name="newloan_purpose"></div>
+      <div class="field"><label>Purpose</label><input name="newloan_purpose" list="newloanPurposeList" placeholder="Pick or type a purpose" autocomplete="off">${loanPurposeDatalistHTML('newloanPurposeList')}</div>
       <div class="field"><label>Principal ₹</label><input type="number" min="0" step="0.01" name="newloan_amount" oninput="meetingCalcGrandTotal()"></div>
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="newloan_rate" value="12"></div>
       <div class="field"><label>Instalments</label><input type="number" min="1" step="1" name="newloan_inst" value="12"></div>
@@ -2362,6 +2362,23 @@ function viewLoanAppropriationStatement(loanId){
     <button class="btn secondary small" style="margin-top:8px" onclick="window.print()">🖨 Print</button>`);
 }
 function shareLoanAppropriationStatement(){ shareText('Loan Appropriation Statement', window.__loanAppropriationShareText||'Not generated yet.'); }
+// Loan Purpose — an editable dropdown rather than a bare free-text box: a small set of common
+// DAY-NRLM loan purposes is always offered, PLUS every distinct purpose already typed for any
+// loan in this SHG's own history (so once a member/animator types a new purpose and the loan is
+// posted, that purpose is immediately available to pick from everywhere else this dropdown
+// appears — Meeting new-loan step and the standalone New Loan form alike). Still a plain text
+// input underneath (via <input list>), so a genuinely new purpose can always be typed instead.
+const LOAN_PURPOSE_DEFAULTS = ['Agriculture / Farm Inputs','Petty Business / Trade','Dairy / Livestock','Cottage Industry / Handicraft','Emergency / Medical','Education','Consumption / Household Need','House Repair','Others'];
+function loanPurposeOptions(){
+  const used = DB.loans.map(l=>(l.purpose||'').trim()).filter(Boolean);
+  const all = LOAN_PURPOSE_DEFAULTS.concat(used);
+  const seen = {}; const out = [];
+  all.forEach(p=>{ const k=p.toLowerCase(); if(!seen[k]){ seen[k]=true; out.push(p); } });
+  return out;
+}
+function loanPurposeDatalistHTML(id){
+  return `<datalist id="${id}">${loanPurposeOptions().map(p=>`<option value="${esc(p)}">`).join('')}</datalist>`;
+}
 function loanForm(){
   if(!activeMembers().length){ flash('error','Add a member first.'); render(); return; }
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>New Loan</h3>
@@ -2372,7 +2389,7 @@ function loanForm(){
         const n = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed').length;
         return `<option value="${m.id}">${esc(m.name)}${n?' ('+n+' existing loan'+(n>1?'s':'')+')':''}</option>`;
       }).join('')}</select></div>
-      <div class="field"><label>Purpose</label><input name="purpose"></div>
+      <div class="field"><label>Purpose</label><input name="purpose" list="loanPurposeList" placeholder="Pick or type a purpose" autocomplete="off">${loanPurposeDatalistHTML('loanPurposeList')}</div>
     </div>
     <div class="row">
       <div class="field"><label>Sanction Date</label><input type="date" name="sanctionDate" value="${todayStr()}"></div>
