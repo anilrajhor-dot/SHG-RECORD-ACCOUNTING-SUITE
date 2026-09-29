@@ -1344,10 +1344,12 @@ function saveMember(ev,id){
 }
 
 /* ============================================================ MEETINGS (guided workflow) */
-function viewMeetings(){
-  let html = `<div class="section-title"><h2>SHG Meetings</h2><div class="row"><button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button><button class="btn" onclick="startNewMeeting()">+ Conduct New Meeting</button></div></div>`;
-  html += `<div class="card">`;
-  html += DB.meetings.length ? tbl(['Date','Place','Attendance','Savings','Principal','Interest','Fine','Total Collection','New Loans','Expenses','Deposit Made','Recon.','Status',''],
+// When starting a new meeting, the wizard is shown FIRST and the (often long, especially with
+// demo data spanning many months) history table is collapsed behind a toggle instead of sitting
+// above it — otherwise a user has to scroll past dozens of past meetings before ever reaching the
+// form, which easily reads as "why is this old list showing, where is my new entry".
+function meetingsHistoryTableHTML(){
+  return DB.meetings.length ? tbl(['Date','Place','Attendance','Savings','Principal','Interest','Fine','Total Collection','New Loans','Expenses','Deposit Made','Recon.','Status',''],
     DB.meetings.slice().reverse().map(mt=>{
       const pct = mt.totalMembers ? Math.round(mt.present/mt.totalMembers*100) : 0;
       // Older meetings (before principal/interest were split) only have a combined totals.repayment.
@@ -1367,8 +1369,15 @@ function viewMeetings(){
       `${mt.absentIds?`<button class="btn small secondary" onclick="viewAttendance('${mt.id}')">Attendance</button> `:''}<button class="btn small secondary" onclick="viewMeetingDetail('${mt.id}')">Details</button>`];
     })) :
     `<div class="empty">No meetings recorded yet.</div>`;
-  html += `</div>`;
-  if(ROUTE==='meetingnew') html += meetingWorkflow();
+}
+function viewMeetings(){
+  let html = `<div class="section-title"><h2>SHG Meetings</h2><div class="row"><button class="btn secondary" onclick="depositToBankForm()">Transfer Funds</button>${ROUTE==='meetingnew'?'':'<button class="btn" onclick="startNewMeeting()">+ Conduct New Meeting</button>'}</div></div>`;
+  if(ROUTE==='meetingnew'){
+    html += meetingWorkflow();
+    html += `<div class="card" style="margin-top:14px"><details><summary style="cursor:pointer;font-weight:600;color:var(--navy-2)">Past Meetings (${DB.meetings.length}) — tap to view</summary><div style="margin-top:10px">${meetingsHistoryTableHTML()}</div></details></div>`;
+  } else {
+    html += `<div class="card">${meetingsHistoryTableHTML()}</div>`;
+  }
   return html;
 }
 function viewAttendance(meetingId){
@@ -6334,11 +6343,15 @@ function seedDemoDataCore(){
       const dateStr = ym+'-04';
       if(dateStr > todayStr()) break; // never post into the future
       if(isPeriodClosed(dateStr)) continue;
-      let present=0, fineTotal=0;
+      // These accumulate the ACTUAL amounts posted below for this month, so the meeting record
+      // pushed at the end (used by the Meetings list/Details screens) reflects real figures
+      // instead of hard-coded zeros that would silently disagree with the real ledger.
+      let present=0, fineTotal=0, savingsTotal=0, principalTotal=0, interestTotal=0, newLoansTotal=0;
       newMembers.forEach((m,idx)=>{
         const isPresent = Math.random()>0.1;
         if(isPresent){ present++;
-          try{ postTxn({date:dateStr,type:'Savings',debit:'CASH',credit:'MEMBER_SAVINGS',amount:100+Math.round(Math.random()*50),memberId:m.id,narration:'DEMO meeting savings — '+m.name}); }catch(e){}
+          const savAmt = 100+Math.round(Math.random()*50);
+          try{ postTxn({date:dateStr,type:'Savings',debit:'CASH',credit:'MEMBER_SAVINGS',amount:savAmt,memberId:m.id,narration:'DEMO meeting savings — '+m.name}); savingsTotal += savAmt; }catch(e){}
           if(Math.random()<0.08){
             const fine = 20+Math.round(Math.random()*30);
             try{ postTxn({date:dateStr,type:'Fine',debit:'CASH',credit:'FINE_INCOME',amount:fine,memberId:m.id,narration:'DEMO late-attendance fine — '+m.name}); fineTotal += fine; }catch(e){}
@@ -6348,22 +6361,26 @@ function seedDemoDataCore(){
           const amt = 5000+idx*1000;
           const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
           DB.loans.push(loan);
-          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); }catch(e){}
+          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); newLoansTotal += amt; }catch(e){}
         }
         // A second wave of loans a year in, so the demo history shows more than one lending cycle.
         if(i===12 && idx>=4 && idx<8){
           const amt = 8000+(idx-4)*1500;
           const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business, cycle 2 (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
           DB.loans.push(loan);
-          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); }catch(e){}
+          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); newLoansTotal += amt; }catch(e){}
         }
         if(i>0){
           const loan = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed' && l.demo && l.disbursementDate<dateStr).sort((a,b)=>a.disbursementDate<b.disbursementDate?1:-1)[0];
           if(loan && Math.random()>0.2){
             const inst = Math.round(loan.principal/loan.instalments);
+            const rp = Math.min(inst, loanOutstanding(loan.id).principal||inst);
+            const ri = Math.round(loan.principal*loan.interestRate/1200);
             try{
-              postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:Math.min(inst,loanOutstanding(loan.id).principal||inst),memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
-              postTxn({date:dateStr,type:'Interest Received',debit:'CASH',credit:'INTEREST_INCOME',amount:Math.round(loan.principal*loan.interestRate/1200),memberId:m.id,loanId:loan.id,narration:'DEMO interest — '+m.name});
+              postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:rp,memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
+              principalTotal += rp;
+              postTxn({date:dateStr,type:'Interest Received',debit:'CASH',credit:'INTEREST_INCOME',amount:ri,memberId:m.id,loanId:loan.id,narration:'DEMO interest — '+m.name});
+              interestTotal += ri;
             }catch(e){}
           }
         }
@@ -6381,7 +6398,8 @@ function seedDemoDataCore(){
         }catch(e){}
       }
       try{ postTxn({date:dateStr,type:'Expense',debit:'EXP_Stationery',credit:'CASH',amount:150,narration:'DEMO stationery expense'}); }catch(e){}
-      DB.meetings.push({id:nextId('MTG'), date:dateStr, totalMembers:newMembers.length, present, totals:{savings:0,repayment:0,newLoans:0,expenses:150,fines:fineTotal}, demo:true});
+      DB.meetings.push({id:nextId('MTG'), date:dateStr, totalMembers:newMembers.length, present,
+        totals:{savings:savingsTotal, principal:principalTotal, interest:interestTotal, newLoans:newLoansTotal, expenses:150, fines:fineTotal}, demo:true});
     }
     DB.settings.demoDataLoaded = true;
     logAudit('LOAD_DEMO','Demo SHG data generated ('+DEMO_START+' to '+todayStr()+')');
