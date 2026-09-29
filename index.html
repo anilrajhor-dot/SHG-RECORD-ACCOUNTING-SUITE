@@ -925,6 +925,7 @@ const NAV = [
   {id:'reports', label:'Reports', icon:'▤'},
   {id:'registers', label:'Registers (Print)', icon:'🖨'},
   {id:'memberstatement', label:'Member Statement', icon:'▤'},
+  {id:'monthlystatements', label:'Monthly Statements', icon:'✉'},
   {id:'statementextract', label:'Statement Extract', icon:'📑'},
   {grp:'System'},
   {id:'bulkimport', label:'Bulk Data Import', icon:'📥'},
@@ -970,7 +971,7 @@ function render(){
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'), upibook: ()=>viewBook('UPI','UPI Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
-      lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement, statementextract: viewStatementExtract,
+      lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement, monthlystatements: viewMonthlyStatements, statementextract: viewStatementExtract,
       bulkimport: viewBulkImport,
       backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI,
       aimanager: viewAIManager, aiask: viewAIAsk, aidaily: viewAIDailyReview, aidq: viewAIDataQuality,
@@ -1047,6 +1048,13 @@ function viewDashboard(){
   } else if(!DB.members.length){
     html += `<div class="card"><h3>Get Started</h3><p class="hint">Set up your SHG Profile and add members to begin, or explore the app first with sample data.</p>
       <div class="row"><button class="btn" onclick="go('profile')">Set Up SHG Profile</button><button class="btn secondary" onclick="go('members')">Add Members</button><button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button></div></div>`;
+  }
+  // A gentle once-a-month nudge — on/after the 1st, if this month's statements haven't been
+  // marked as sent yet, point the animator at the Monthly Statements screen. This app has no
+  // server, so it can never send anything by itself in the background; this banner is the honest
+  // substitute for "automatically on the 1st".
+  if(activeMembers().length && DB.settings.lastMonthlyStatementsYM!==monthKey(todayStr())){
+    html += `<div class="msg amber">It's time to send this month's Savings &amp; Loan statements to members. <a onclick="go('monthlystatements')" style="cursor:pointer">Open Monthly Statements →</a></div>`;
   }
   html += `<div class="grid cols4">
     ${stat('Active Members', activeMembers().length)}
@@ -4594,6 +4602,59 @@ function shareFile(filename, content, mime, title){
   }catch(e){}
   downloadFile(filename, content, mime); // fallback: this device can't share a file directly, so save it instead
 }
+// WhatsApp click-to-chat and mailto: links — the only two dispatch mechanisms a backend-less,
+// offline single-file app can use. Both open the member's own WhatsApp/email app with the message
+// already filled in; ONE tap there is still needed to actually hit Send — there is no way for a
+// page with no server to silently deliver a message to someone else's phone/inbox on its own.
+// Indian mobile numbers are assumed 10 digits and given the +91 country code unless already
+// prefixed with a country code (11+ digits).
+function waLink(mobile, text){
+  const digits = String(mobile||'').replace(/\D/g,'');
+  if(!digits) return '';
+  const withCountry = digits.length===10 ? '91'+digits : digits;
+  return 'https://wa.me/'+withCountry+'?text='+encodeURIComponent(text);
+}
+function mailtoLink(email, subject, body){
+  if(!email) return '';
+  return 'mailto:'+encodeURIComponent(email)+'?subject='+encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+}
+/* ============================================================ MONTHLY STATEMENTS (bulk Savings+Loan statements to every member) */
+// Generates every active member's combined Savings+Loan statement in one go and gives a ready
+// WhatsApp/Email link for each — the closest a client-only, offline app can get to "one click,
+// send to all members": everything is prepared in a single click, but WhatsApp and email both
+// require the SHG's own animator to tap Send once per member/channel from their own device/account
+// (there is no bulk-messaging API available without a server, a paid WhatsApp Business account,
+// and every member's prior opt-in — none of which exist here). A monthly reminder banner (see
+// viewDashboard) nudges the animator to come back and do this on/after the 1st of each month.
+function viewMonthlyStatements(){
+  const members = activeMembers();
+  const ym = monthKey(todayStr());
+  const alreadySentThisMonth = DB.settings.lastMonthlyStatementsYM===ym;
+  let html = `<div class="section-title"><h2>Monthly Statements — Savings &amp; Loan</h2></div>`;
+  html += `<div class="msg info">Generates every active member's Savings + Loan statement below. WhatsApp and email each need one tap per member to actually send (no page without a server can deliver to someone else's phone or inbox on its own) — but everything is pre-filled, so it's a quick tap-through rather than retyping anything.</div>`;
+  if(alreadySentThisMonth) html += `<div class="msg ok">Already marked as sent for ${esc(ym)}. You can still resend to anyone below.</div>`;
+  if(!members.length){ html += `<div class="card"><div class="empty">No active members yet.</div></div>`; return html; }
+  html += `<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
+    <span class="hint">${members.length} active member(s)</span>
+    <button class="btn secondary small" onclick="markMonthlyStatementsSent()">Mark This Month as Sent</button>
+  </div></div>`;
+  html += `<div class="card">${tbl(['Member','Mobile','Email','Savings Bal.','Loan O/S','Send via WhatsApp','Send via Email'],
+    members.map(m=>{
+      const text = memberCombinedStatementText(m.id);
+      const wa = waLink(m.mobile, text);
+      const mail = mailtoLink(m.email, (DB.profile.name||'SHG')+' — Monthly Statement — '+esc(m.name), text);
+      return [esc(m.name), esc(m.mobile||'—'), esc(m.email||'—'), rightCell(rupee(memberSavingsBalance(m.id))), rightCell(rupee(memberLoanOutstanding(m.id))),
+        wa ? `<a class="btn small secondary" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : `<span class="hint">No mobile on file</span>`,
+        mail ? `<a class="btn small secondary" href="${mail}">Email</a>` : `<span class="hint">No email on file</span>`];
+    }))}</div>`;
+  return html;
+}
+function markMonthlyStatementsSent(){
+  const ym = monthKey(todayStr());
+  DB.settings.lastMonthlyStatementsYM = ym;
+  logAudit('MONTHLY_STATEMENTS_SENT', 'Monthly Savings & Loan statements marked as sent for '+ym+' to '+activeMembers().length+' member(s).');
+  flash('ok','Marked — this month\'s statements are recorded as sent.'); render();
+}
 // Single place that builds export rows for every module, using internal field names.
 // Both the plain Reports export and the LokOS-mapped export read from here, so the two
 // can never drift apart or show conflicting figures.
@@ -5008,25 +5069,45 @@ function viewMemberStatement(){
     html += `<div class="card"><h3>Other (Fine/Penalty, etc.) — ${esc(m.name)}</h3>${tbl(['Date','Voucher','Type','Debit','Credit','Amount','Narration'],
       otherTxns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)]))}</div>`;
   }
-  function buildLines(kind){
-    const lines = [(DB.profile.name||'SHG')+' — '+(kind==='savings'?'Savings':'Loan')+' Statement', m.name+' ('+m.id+')', 'As on '+fmtDate(todayStr()), ''];
-    if(kind==='savings'){
-      lines.push('Savings Balance: '+rupee(memberSavingsBalance(m.id)), '', 'Transactions:');
-      savingsTxns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+' — '+rupee(t.amount)));
-    } else {
-      lines.push('Loan Outstanding (All Loans): '+rupee(memberLoanOutstanding(m.id)), '');
-      if(memberLoans.length){ lines.push('Loans:'); memberLoans.forEach(l=>lines.push('  '+l.id+' — '+(l.purpose||'')+' — Principal '+rupee(l.principal)+' — O/S '+rupee(loanOutstanding(l.id).principal)+' — '+l.status)); lines.push(''); }
-      lines.push('Transactions:');
-      loanTxns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+(t.loanId?(' ('+t.loanId+')'):'')+' — '+rupee(t.amount)));
-    }
-    return lines.join('\n');
-  }
-  window.__memberSavingsStatementShareText = buildLines('savings');
-  window.__memberLoanStatementShareText = buildLines('loan');
+  window.__memberSavingsStatementShareText = memberSavingsStatementText(m.id);
+  window.__memberLoanStatementShareText = memberLoanStatementText(m.id);
   return html;
 }
 function shareMemberSavingsStatement(){ shareText((DB.profile.name||'SHG')+' — Savings Statement', window.__memberSavingsStatementShareText||'Not generated yet.'); }
 function shareMemberLoanStatement(){ shareText((DB.profile.name||'SHG')+' — Loan Statement', window.__memberLoanStatementShareText||'Not generated yet.'); }
+// Standalone (DOM-free) statement-text builders — used both by the single-member Member
+// Statement screen above and by the bulk Monthly Statements screen below, so the exact same
+// text a member sees on screen is what actually gets shared, in either place.
+function memberStatementTxnGroups(memberId){
+  const allTxns = DB.transactions.filter(t=>t.memberId===memberId && !t.reversed).sort((a,b)=>a.date<b.date?-1:1);
+  const savingsTxns = allTxns.filter(t=>t.debit==='MEMBER_SAVINGS'||t.credit==='MEMBER_SAVINGS');
+  const loanTxns = allTxns.filter(t=>t.loanId || t.debit==='MEMBER_LOANS' || t.credit==='MEMBER_LOANS');
+  return {allTxns, savingsTxns, loanTxns};
+}
+function memberSavingsStatementText(memberId){
+  const m = DB.members.find(x=>x.id===memberId); if(!m) return '';
+  const {savingsTxns} = memberStatementTxnGroups(memberId);
+  const lines = [(DB.profile.name||'SHG')+' — Savings Statement', m.name+' ('+m.id+')', 'As on '+fmtDate(todayStr()), '',
+    'Savings Balance: '+rupee(memberSavingsBalance(memberId)), '', 'Transactions:'];
+  savingsTxns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+' — '+rupee(t.amount)));
+  return lines.join('\n');
+}
+function memberLoanStatementText(memberId){
+  const m = DB.members.find(x=>x.id===memberId); if(!m) return '';
+  const memberLoans = DB.loans.filter(l=>l.memberId===memberId);
+  const {loanTxns} = memberStatementTxnGroups(memberId);
+  const lines = [(DB.profile.name||'SHG')+' — Loan Statement', m.name+' ('+m.id+')', 'As on '+fmtDate(todayStr()), '',
+    'Loan Outstanding (All Loans): '+rupee(memberLoanOutstanding(memberId)), ''];
+  if(memberLoans.length){ lines.push('Loans:'); memberLoans.forEach(l=>lines.push('  '+l.id+' — '+(l.purpose||'')+' — Principal '+rupee(l.principal)+' — O/S '+rupee(loanOutstanding(l.id).principal)+' — '+l.status)); lines.push(''); }
+  lines.push('Transactions:');
+  loanTxns.slice(-20).forEach(t=>lines.push('  '+fmtDate(t.date)+' — '+t.type+(t.loanId?(' ('+t.loanId+')'):'')+' — '+rupee(t.amount)));
+  return lines.join('\n');
+}
+// One combined message (Savings section + Loan section) — used for the Monthly Statements bulk
+// send, so a member gets ONE WhatsApp message / ONE email covering both, rather than two.
+function memberCombinedStatementText(memberId){
+  return memberSavingsStatementText(memberId) + '\n\n— — — — —\n\n' + memberLoanStatementText(memberId);
+}
 
 /* ============================================================ STATEMENT EXTRACT (any Member OR any ledger Head, for any date range) */
 // One general-purpose statement generator: pick either a Member (their own combined
