@@ -1142,6 +1142,22 @@ function viewDashboard(){
     ${stat('Overdue Loans', overdue.length, overdue.length>0)}
   </div>${multiLoanMemberIds.length?`<p class="hint" style="margin-top:8px">Click "Members with Multiple Loans" to see the breakdown.</p>`:''}</div>`;
 
+  if(activeMembers().length){
+    const ps = computePanchsutra(monthKey(todayStr()));
+    html += `<div class="card"><h3>Panchsutra — The Five Pillars of a Good SHG</h3>
+      <p class="hint">The five DAY-NRLM principles every SHG is expected to follow, scored for ${ps.ym} from this SHG's own records — separate from, and never affecting, the configurable Grading score below.</p>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:18px">
+        ${panchsutraRadarSVG(ps.sutras)}
+      </div>
+      <div style="display:flex;justify-content:center;gap:18px;margin-top:6px;font-size:12px;color:var(--muted)">
+        <span><span style="display:inline-block;width:12px;height:2px;background:#2E6F9E;vertical-align:middle;margin-right:5px"></span>This SHG</span>
+        <span><span style="display:inline-block;width:12px;height:0;border-top:2px dashed #5B6B7A;vertical-align:middle;margin-right:5px"></span>Full compliance (100%)</span>
+      </div>
+      ${tbl(['Sutra','Score',''], ps.sutras.map(s=>[esc(s.label), rightCell(s.value.toFixed(1)+'%'), badge(s.value>=80?'Good':(s.value>=50?'Needs Attention':'Weak'), s.value>=80?'green':(s.value>=50?'amber':'red'))]))}
+      <p class="hint" style="margin-top:6px">Overall Panchsutra Score: <b>${ps.overall.toFixed(1)}%</b></p>
+    </div>`;
+  }
+
   const dq = runDataQuality();
   html += `<div class="card"><h3>Data Quality Snapshot</h3>${dqSummaryRow(dq)}
     <div style="margin-top:8px"><a onclick="go('dataquality')" style="cursor:pointer">Open full Data Quality Check →</a></div></div>`;
@@ -3829,6 +3845,111 @@ function computeGrading(ym){
 
   return { ym, indicators, overall, grade, gradePending,
     dqStatus, dqRed, dqAmber, exceptions: dqRed, ruleVersion: DB.grading.ruleVersion };
+}
+// ---------------------------------------------------------------------------------------------
+// Panchsutra — the five fixed, universally-recognised principles of a good DAY-NRLM SHG (regular
+// meetings, regular savings, regular inter-loaning, timely repayment, and up-to-date books of
+// accounts). Unlike the Local Grading Framework above, this is not configurable — it is the same
+// five sutras everywhere, computed straight from this SHG's own ledgers for the Dashboard's
+// at-a-glance Panchsutra chart. It never feeds into, and is never fed by, the configurable
+// grading score or the official NABARD format above/below — a separate, purely illustrative view.
+function computePanchsutra(ym){
+  const [y,m] = ym.split('-').map(Number);
+  const from = ym+'-01';
+  const lastDay = new Date(y, m, 0).getDate();
+  const to = ym+'-'+String(lastDay).padStart(2,'0');
+  const totalMembers = activeMembers().length || 1;
+
+  // 1. Regular Meetings — meetings actually held this month vs. the SHG's own declared frequency.
+  const monthMeetings = DB.meetings.filter(mt=>mt.date>=from && mt.date<=to);
+  const freq = DB.profile.meetingFrequency||'Monthly';
+  const scheduled = freq==='Weekly'?4:(freq==='Fortnightly'?2:1);
+  const meetings = scheduled ? Math.min(100, monthMeetings.length/scheduled*100) : 100;
+
+  // 2. Regular Savings — share of active members who saved at least once this month.
+  const savers = new Set();
+  DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').forEach(t=>savers.add(t.memberId));
+  const savings = Math.min(100, savers.size/totalMembers*100);
+
+  // 3. Regular Inter-loaning — how actively the group's own corpus is being circulated as loans to
+  // members this month (the same "velocity of lending" idea the official NABARD format scores;
+  // 1.5x the average corpus lent out in a month is treated as full marks, same as that format).
+  const lent = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
+  const avgCorpus = calculateCorpus().total;
+  const interLoaning = avgCorpus>0 ? Math.min(100, (lent/avgCorpus)/1.5*100) : (lent>0?100:0);
+
+  // 4. Timely Repayment — principal actually recovered this month vs. principal that fell due.
+  let demand = 0;
+  DB.loans.forEach(l=>{ generateLoanSchedule(l.id, to).filter(s=>s.dueDate>=from && s.dueDate<=to).forEach(s=>{ demand += s.principalDue; }); });
+  const recovered = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0);
+  const repayment = demand>0.5 ? Math.min(100, recovered/demand*100) : 100;
+
+  // 5. Updated Books of Accounts — this app's own Data Quality Check, the same red/amber/green
+  // status already shown on the Grading and Data Quality screens (never a separate judgement).
+  const dq = runDataQuality();
+  const dqRed = dq.filter(i=>i.sev==='red').length, dqAmber = dq.filter(i=>i.sev==='amber').length;
+  const dqStatus = dqRed>0 ? 'red' : (dqAmber>0 ? 'amber' : 'green');
+  const books = dqStatus==='green' ? 100 : (dqStatus==='amber' ? 70 : 30);
+
+  const sutras = [
+    {key:'meetings', label:'Regular Meetings', value:Math.round(meetings*10)/10},
+    {key:'savings', label:'Regular Savings', value:Math.round(savings*10)/10},
+    {key:'interloaning', label:'Regular Inter-loaning', value:Math.round(interLoaning*10)/10},
+    {key:'repayment', label:'Timely Repayment', value:Math.round(repayment*10)/10},
+    {key:'books', label:'Updated Books of Accounts', value:books}
+  ];
+  const overall = Math.round(sutras.reduce((s,x)=>s+x.value,0)/sutras.length*10)/10;
+  return { ym, sutras, overall, dqStatus };
+}
+// Renders the five Panchsutra scores as a pentagon radar chart — plain inline SVG, no charting
+// library, consistent with the rest of this offline single-file app. Colors are the literal hex
+// values behind this app's own --border/--muted/--text/--green/--amber/--red/--accent tokens
+// (spelled out rather than referenced with var(), so the chart renders correctly even on older
+// mobile browsers that don't resolve CSS custom properties inside plain SVG attributes). Only two
+// polygons are ever drawn (the SHG's actual scores vs. the 100% target) — never more — because a
+// radar chart with many overlapping series is unreadable; every vertex also carries its own
+// number label so the reader never has to eyeball the (visually distortable) polygon area alone.
+// Short axis labels for the chart only — the full formal sutra name (used everywhere else: the
+// table right below the chart, the audit trail, etc.) simply does not fit next to a 5-axis pentagon
+// without running off the edge, which is a known space constraint of this chart shape, not a
+// reason to shorten the name anywhere the name is the point.
+const PANCHSUTRA_SHORT_LABELS = {meetings:'Meetings', savings:'Savings', interloaning:'Inter-loaning', repayment:'Repayment', books:'Bookkeeping'};
+function panchsutraRadarSVG(sutras){
+  const cx=195, cy=165, R=88;
+  const n = sutras.length;
+  const angleFor = i => (-90 + i*(360/n)) * Math.PI/180;
+  const pt = (i, r) => [cx + r*Math.cos(angleFor(i)), cy + r*Math.sin(angleFor(i))];
+  const sevColor = v => v>=80?'#1B7A4C':(v>=50?'#A6650C':'#B23A3A');
+  const ringPolys = [25,50,75,100].map(r=>{
+    const pts = sutras.map((_,i)=>pt(i, R*r/100).map(v=>v.toFixed(1)).join(',')).join(' ');
+    return `<polygon points="${pts}" fill="none" stroke="#D9E1E8" stroke-width="1"/>`;
+  }).join('');
+  const axisLines = sutras.map((_,i)=>{
+    const [x,y] = pt(i,R);
+    return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#D9E1E8" stroke-width="1"/>`;
+  }).join('');
+  const targetPts = sutras.map((_,i)=>pt(i,R).map(v=>v.toFixed(1)).join(',')).join(' ');
+  const actualPts = sutras.map((s,i)=>{ const r = R*Math.max(0,Math.min(100,s.value))/100; return pt(i,r).map(v=>v.toFixed(1)).join(','); }).join(' ');
+  const dots = sutras.map((s,i)=>{
+    const r = R*Math.max(0,Math.min(100,s.value))/100;
+    const [x,y] = pt(i,r);
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${sevColor(s.value)}" stroke="#fff" stroke-width="1.5"><title>${esc(s.label)}: ${s.value.toFixed(1)}%</title></circle>`;
+  }).join('');
+  const labels = sutras.map((s,i)=>{
+    const [x,y] = pt(i, R+32);
+    let anchor='middle';
+    if(x > cx+8) anchor='start'; else if(x < cx-8) anchor='end';
+    const dy = y < cy-8 ? -2 : (y > cy+8 ? 12 : 4);
+    const shortLabel = PANCHSUTRA_SHORT_LABELS[s.key] || s.label;
+    return `<text x="${x.toFixed(1)}" y="${(y+dy).toFixed(1)}" text-anchor="${anchor}" font-size="11" font-weight="600" fill="#1B2733">${esc(shortLabel)}</text>
+      <text x="${x.toFixed(1)}" y="${(y+dy+14).toFixed(1)}" text-anchor="${anchor}" font-size="12.5" font-weight="700" fill="${sevColor(s.value)}">${s.value.toFixed(0)}%</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 390 330" width="100%" style="max-width:400px;height:auto;display:block;margin:0 auto" role="img" aria-label="Panchsutra radar chart comparing this SHG's five sutra scores against the 100% target">
+    ${ringPolys}${axisLines}
+    <polygon points="${targetPts}" fill="none" stroke="#5B6B7A" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <polygon points="${actualPts}" fill="#2E6F9E" fill-opacity="0.18" stroke="#2E6F9E" stroke-width="2"/>
+    ${dots}${labels}
+  </svg>`;
 }
 /* ---------------- Official NABARD SHG Grading — Format 1 (Fresh Linkage) & Format 2 (Repeat
    Linkage), reproduced exactly (indicators, allotted marks, formulas and grade bands) from the
