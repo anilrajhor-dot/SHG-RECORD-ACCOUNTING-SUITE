@@ -157,6 +157,25 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
   .printhead h2{margin:0 0 2px 0;}
   .print-only{display:inline;}
   a{color:inherit;text-decoration:none;}
+  /* Printing a document that is shown inside a modal (Appropriation Statement, Loan/CIF Schedule,
+     MCP, Statement Extract, etc.) is a desktop workflow this app explicitly offers ("share via
+     WhatsApp/Email/Print"), and it must never silently truncate. On screen, .overlay is a
+     position:fixed, viewport-height, overflow-y:auto box so the modal can scroll — but printed
+     output only captures what such a box could show on ONE page, so anything past one screenful
+     (e.g. a 12+ instalment loan schedule, or a member with a long transaction history) was
+     silently cut off in the printed/PDF result with no error and no warning. Printing now lets the
+     modal flow as an ordinary, unclipped block so it paginates fully across as many printed pages
+     as it needs, and its on-screen buttons (Print/Share/Close/Back) — meaningless on paper — are
+     hidden rather than printed. */
+  .overlay{position:static !important;overflow:visible !important;background:#fff !important;padding:0 !important;display:block !important;height:auto !important;inset:auto !important;}
+  .modal{max-width:none !important;width:auto !important;box-shadow:none !important;border-radius:0 !important;padding:0 !important;}
+  .modal button,.modal .close{display:none !important;}
+  /* While a modal/document is open, print ONLY that document — not the screen sitting behind it
+     (see the `modal-open` class set by openModal()/closeModal()). #app is hidden as a whole
+     (rather than just its #content/#topbar) because #app itself carries `min-height:100vh` —
+     hiding only its children left an empty full-height box that pushed the actual document onto
+     a blank leading second page. */
+  body.modal-open #app,body.modal-open #aiFab{display:none !important;}
 }
 </style>
 </head>
@@ -1026,7 +1045,7 @@ function render(){
   c.innerHTML = html;
   translatePage();
 }
-function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
+function closeModal(){ document.getElementById('modalRoot').innerHTML=''; document.body.classList.remove('modal-open'); }
 // `persistent` (default false) skips the tap-outside-to-close overlay behaviour — used only for
 // a confirmation screen where a careful entry (e.g. a whole meeting: savings, repayments, a new
 // loan) is still sitting unposted and an accidental tap on the backdrop (very easy to do on a
@@ -1036,6 +1055,11 @@ function openModal(html, persistent){
   const overlayClick = persistent ? '' : ' onclick="if(event.target===this)closeModal()"';
   document.getElementById('modalRoot').innerHTML = `<div class="overlay"${overlayClick}><div class="modal">${html}</div></div>`;
   translateNode(document.getElementById('modalRoot'));
+  // Marks <body> so print CSS can show ONLY the open document (Appropriation Statement, Loan
+  // Schedule, MCP, etc.) and hide the screen sitting behind it — printing a modal used to also
+  // print whatever page happened to be open underneath, cluttering (and sometimes horizontally
+  // overflowing) the same printout.
+  document.body.classList.add('modal-open');
 }
 
 /* ---------------- Language (English / Hindi) ---------------- */
