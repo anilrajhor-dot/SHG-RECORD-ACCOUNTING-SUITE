@@ -350,6 +350,9 @@ let DEMO_MODE = false; // true only while seedDemoDataCore() is generating sampl
 let HELP_CHAT = []; // in-memory only, not persisted — Help Assistant conversation for this session
 let AI_CHAT = []; // in-memory only, not persisted — "Ask AI" (AI SHG Manager) conversation for this session
 let AI_EXTERNAL_CONSENTED = false; // in-memory only, resets every session/reload — explicit consent is asked again each time External AI is (re)selected
+let LAST_SAVE_ERROR = null; // in-memory only — set by saveDB() whenever persisting to this device fails (e.g. storage full); cleared the moment a save succeeds again. Shown as a persistent banner on every screen until resolved, so a failed save is never silent.
+let DATA_RECOVERY_WARNING = false; // in-memory only — set once by loadDB() if saved data existed but could not be read (corrupted); the unreadable copy is preserved under a rescue key rather than discarded, and this flag drives a one-time explanation banner on the Dashboard.
+let DATA_RECOVERY_KEY = null; // the actual rescue key name, shown to the user so a technician could attempt recovery from browser storage.
 
 /* ---------------- Persistence ---------------- */
 function freshDB(){
@@ -404,8 +407,9 @@ function defaultDoseEligibility(){
   ];
 }
 function loadDB(){
+  let raw = null;
   try{
-    const raw = localStorage.getItem(LS_KEY);
+    raw = localStorage.getItem(LS_KEY);
     if(raw){
       DB = JSON.parse(raw);
       if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]};
@@ -455,10 +459,40 @@ function loadDB(){
       }
       return;
     }
-  }catch(e){}
+  }catch(e){
+    // Saved data existed but could not be read (corrupted JSON, a partial write, etc.) — this must
+    // NEVER be silently discarded. Before starting fresh, best-effort preserve the raw unreadable
+    // string under a separate rescue key so it isn't lost forever, and remember to tell the user
+    // plainly what happened (a wiped SHG ledger with no explanation would be a disaster for the
+    // animator) instead of quietly handing back an empty app that looks like a fresh install.
+    if(raw){
+      try{
+        DATA_RECOVERY_KEY = LS_KEY+'_recovery_'+Date.now();
+        localStorage.setItem(DATA_RECOVERY_KEY, raw);
+      }catch(e2){ DATA_RECOVERY_KEY = null; }
+      DATA_RECOVERY_WARNING = true;
+    }
+    console.error('loadDB: saved data could not be read, starting fresh', e);
+  }
   DB = freshDB();
 }
-function saveDB(){ localStorage.setItem(LS_KEY, JSON.stringify(DB)); }
+function saveDB(){
+  try{
+    localStorage.setItem(LS_KEY, JSON.stringify(DB));
+    LAST_SAVE_ERROR = null; // this and every future render's banner clears the moment a save succeeds again
+  }catch(e){
+    // Never let a failed save crash the app or silently lose data — everything just entered is
+    // still sitting safely in memory and fully visible; only the copy persisted to this device
+    // failed to update. Record the failure so render() can show an unmissable, persistent warning
+    // until the user backs up and frees space, or storage becomes writable again — silence here is
+    // exactly how an animator could lose a whole meeting's entries without ever being told.
+    const full = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014);
+    LAST_SAVE_ERROR = full
+      ? 'Device storage is full — this change has NOT been saved. Export a backup now (Backup & Restore), then free up space or use another device, before entering anything else.'
+      : 'Could not save to this device (' + (e&&e.message||e) + '). Your entries are still on screen but will be LOST if you close this tab/app — export a backup now if possible.';
+    console.error('saveDB failed', e);
+  }
+}
 function nextId(prefix){ DB.seq = (DB.seq||1)+1; return prefix+'-'+String(DB.seq).padStart(5,'0'); }
 function nowStamp(){ return new Date().toISOString(); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
@@ -982,9 +1016,15 @@ function render(){
     html += `<div class="msg err">Error rendering this screen: ${esc(e.message)}</div>`;
     console.error(e);
   }
+  saveDB();
+  if(LAST_SAVE_ERROR){
+    html = `<div class="msg err" style="font-weight:600">⚠ ${esc(LAST_SAVE_ERROR)}</div>` + html;
+  }
+  if(DATA_RECOVERY_WARNING){
+    html = `<div class="msg err"><b>Your previously saved data on this device could not be read</b> and could not be restored automatically — this app has started with a blank/fresh set of records so it stays usable. The original unreadable copy was NOT deleted${DATA_RECOVERY_KEY?(' — it is still present in this browser\'s storage under the name <code>'+esc(DATA_RECOVERY_KEY)+'</code>'):''}; a technician may be able to recover it from there. If you have a recent exported backup (.json), restore it now from Backup &amp; Restore. <button class="btn small secondary" style="margin-left:8px" onclick="DATA_RECOVERY_WARNING=false;render();">Dismiss</button></div>` + html;
+  }
   c.innerHTML = html;
   translatePage();
-  saveDB();
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; }
 // `persistent` (default false) skips the tap-outside-to-close overlay behaviour — used only for
@@ -2063,6 +2103,14 @@ function showMeetingConfirmation(){
 // pass. The meeting record is only saved if every posting succeeds.
 function confirmPostMeeting(){
   const p = PENDING_MEETING_PLAN; if(!p) return;
+  // Claim this plan immediately, before doing anything else — this is what actually protects
+  // against "Confirm & Post Meeting" being fired twice for the same tap (a real risk on some touch
+  // devices, which can occasionally dispatch a duplicate click event for a single physical tap):
+  // whichever call runs first sees PENDING_MEETING_PLAN still set and claims it by nulling it right
+  // away, so a second call — however it arrives, and even if this function later throws partway
+  // through posting — always finds PENDING_MEETING_PLAN already null and returns immediately at the
+  // guard above, rather than re-posting the same meeting a second time.
+  PENDING_MEETING_PLAN = null;
   // True all-or-nothing posting: snapshot every structure this pass can mutate BEFORE doing
   // anything, so that if postTxn() throws partway through (e.g. a period was closed in another
   // tab between validation and confirmation), the catch block below can restore DB to EXACTLY
@@ -2125,7 +2173,6 @@ function confirmPostMeeting(){
     let msg = 'Meeting posted. All registers, ledgers, loan positions and grading update automatically.';
     if(p.reconDiff!=null && p.reconDiff!==0) msg += ' Counted-vs-entries difference of '+rupee(Math.abs(p.reconDiff))+' was saved with the meeting.';
     if(p.mode==='CASH' && !p.deposit && p.totalCollection>0) msg += ' Remember to deposit cash collected when convenient (Transfer Funds).';
-    PENDING_MEETING_PLAN = null;
     MEETING_STEP = 1; MEETING_AGENDA = [{topic:'', discussion:''}];
     closeModal();
     flash('ok', msg);
@@ -2140,6 +2187,8 @@ function confirmPostMeeting(){
     // by truncating DB.loans.length, so it is restored explicitly from the snapshot taken
     // before this attempt began.
     snapshot.loanStates.forEach(s=>{ s.loan.status = s.status; s.loan.nextDueDate = s.nextDueDate; });
+    // PENDING_MEETING_PLAN was already claimed (set to null) at the very top of this function, so
+    // there is no stale plan left sitting around to be accidentally re-confirmed.
     flash('error', 'Posting failed: '+e.message+' — no part of this meeting was saved (all changes rolled back).');
     closeModal(); render();
   }
@@ -6523,6 +6572,27 @@ function clearDemoData(){
 }
 
 /* ============================================================ INIT ============================================================ */
+// Last-resort safety net: every user-triggered action already has its own try/catch (each form
+// submit / button handler catches its own errors, flashes a message and re-renders), but this
+// single-file app has many small onclick="..." handlers, and a bug in any one of them — or a
+// rejected Promise anywhere — would otherwise surface as a silently frozen or blank screen with
+// no way back except losing whatever was on screen by reloading. These two handlers catch
+// anything that slips through, tell the user plainly instead of going silent, and try to recover
+// the current screen rather than leaving it dead. A small re-entrancy guard stops this from
+// looping forever if the recovery render() itself throws.
+let HANDLING_GLOBAL_ERROR = false;
+function handleUncaughtError(err){
+  console.error('Unhandled error', err);
+  if(HANDLING_GLOBAL_ERROR) return; // avoid looping if recovery itself fails
+  HANDLING_GLOBAL_ERROR = true;
+  try{
+    flash('error', 'Something went wrong and was stopped before it could cause further problems: ' + ((err&&err.message)||err||'unknown error') + '. Nothing you had entered on this screen was saved by this action — please check and redo it if needed.');
+    render();
+  }catch(e2){ console.error('Recovery render also failed', e2); }
+  finally{ HANDLING_GLOBAL_ERROR = false; }
+}
+window.addEventListener('error', function(ev){ handleUncaughtError(ev && ev.error || (ev&&ev.message)); });
+window.addEventListener('unhandledrejection', function(ev){ handleUncaughtError(ev && ev.reason); });
 loadDB();
 if(location.hash) ROUTE = location.hash.replace('#','')||'dashboard';
 window.addEventListener('hashchange', ()=>{ ROUTE = location.hash.replace('#','')||'dashboard'; render(); });
