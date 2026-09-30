@@ -1846,6 +1846,9 @@ function meetingCalcGrandTotal(){
 // PASS 2 (confirmPostMeeting, after the user reviews the summary): only then are transactions
 //   actually created, in one go.
 let PENDING_MEETING_PLAN = null;
+// Holds a Journal Voucher's data while the user is being asked to confirm a possible duplicate
+// (see saveManualTxn/showJVDuplicateConfirm/confirmJVDuplicate below) — null the rest of the time.
+let PENDING_JV_DATA = null;
 // Step-wizard state for the meeting entry form. Kept as plain module variables (not DOM
 // state) because the wizard is one continuous <form> with CSS-toggled sections — no step
 // change ever calls the global render(), so every field the user has already typed stays
@@ -3331,12 +3334,44 @@ function saveManualTxn(ev){
       const ceiling = due ? due.totalInterestDue : 0;
       if(amt > ceiling+0.5) throw new Error('This interest payment ('+rupee(amt)+') exceeds the interest currently due on loan '+data.loanId+' ('+rupee(ceiling)+'). Over-posting is not allowed here — reduce the amount, or record a genuine authorised excess via Meetings (Authorised Adjustment).');
     }
+    // Possible-duplicate check: an identical, un-reversed voucher (same date, debit, credit,
+    // amount, and member/loan if given) already exists. This never blocks — a genuine second
+    // payment on the same day for the same amount is entirely possible — it just stops and asks
+    // for confirmation first, the same pattern already used in the Meeting wizard's review screen.
+    const amt = parseFloat(data.amount)||0;
+    const dupTxn = DB.transactions.find(t=>!t.reversed && t.date===data.date && t.debit===data.debit && t.credit===data.credit
+      && Math.abs(t.amount-amt)<0.5 && (t.memberId||'')===(data.memberId||'') && (t.loanId||'')===(data.loanId||''));
+    if(dupTxn){
+      PENDING_JV_DATA = data;
+      showJVDuplicateConfirm(dupTxn);
+      return false;
+    }
+    postJVData(data);
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+// Shared by saveManualTxn (first attempt) and confirmJVDuplicate (after the user has confirmed
+// a possible duplicate is intentional) — actually creates the transaction.
+function postJVData(data){
+  try{
     const typeByNature = {expense:'Expense', income:'Other Income', transfer:'Fund Transfer', advanced:'Journal'};
     data.type = typeByNature[data.nature] || 'Journal';
     postTxn(data);
     closeModal(); flash('ok','Voucher posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
-  return false;
+}
+function showJVDuplicateConfirm(dupTxn){
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Possible Duplicate Entry</h3>
+    <div class="msg err">An identical, un-reversed entry already exists:<br>${fmtDate(dupTxn.date)} — ${esc(dupTxn.narration||dupTxn.type)} — ${rupee(dupTxn.amount)} (Voucher ${esc(dupTxn.voucherNo)}).<br>Post this one anyway only if it's genuinely a second, separate entry (e.g. a real second payment on the same day) — not the same entry typed in twice.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" onclick="confirmJVDuplicate()">Post Anyway</button>
+      <button class="btn secondary" onclick="PENDING_JV_DATA=null; closeModal();">Cancel — Don't Post</button>
+    </div>`, true);
+}
+function confirmJVDuplicate(){
+  const data = PENDING_JV_DATA; PENDING_JV_DATA = null;
+  if(!data) return;
+  postJVData(data);
 }
 function doReverse(id){
   const reason = prompt('Reason for reversal (optional):','');
