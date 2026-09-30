@@ -366,6 +366,7 @@ let DB = null;
 let ROUTE = 'dashboard';
 let FLASH = null;
 let DEMO_MODE = false; // true only while seedDemoDataCore() is generating sample records
+let SAMPLE_MODE = false; // true only while seedCompleteSampleData() is generating the deterministic, fully-filled Complete Sample Data set — a separate, independently loadable/clearable dataset from the randomised Demo Data above (see postTxn's `sample` tag and clearSampleData())
 let HELP_CHAT = []; // in-memory only, not persisted — Help Assistant conversation for this session
 let AI_CHAT = []; // in-memory only, not persisted — "Ask AI" (AI SHG Manager) conversation for this session
 let AI_EXTERNAL_CONSENTED = false; // in-memory only, resets every session/reload — explicit consent is asked again each time External AI is (re)selected
@@ -568,6 +569,20 @@ function postTxn(t){
   if(t.debit===t.credit) throw new Error('Debit and credit accounts must be different — "'+accountLabel(t.debit)+'" was selected on both sides.');
   const amt = Math.round((parseFloat(t.amount)||0)*100)/100;
   if(amt<=0) throw new Error('Amount must be greater than zero.');
+  // Physical cash in hand can never go below zero — you cannot pay out currency notes you don't
+  // actually have, unlike a bank account which can carry an agreed overdraft/CC limit. This is
+  // the single central point every cash-reducing entry across the whole app posts through
+  // (expenses, savings withdrawals, loan disbursements in cash, bank deposits of cash, journal
+  // vouchers, etc.), so the check lives here rather than being repeated at each screen. A
+  // reversal (t.reversalOf set) is exempt — it is a correction of an earlier entry, already
+  // audit-trailed, and blocking it would leave the user unable to fix the very mistake that
+  // caused the problem in the first place.
+  if(t.credit==='CASH' && !t.reversalOf){
+    const cashAvailable = accountBalance('CASH');
+    if(Math.round((cashAvailable-amt)*100)/100 < -0.005){
+      throw new Error('This would take Cash in Hand below zero (available '+rupee(cashAvailable)+', attempting to pay out '+rupee(amt)+'). Cash in hand can never be negative — reduce the amount, route it via Bank/UPI instead if that fits, or deposit/collect more cash first.');
+    }
+  }
   const txn = {
     id: nextId('TXN'),
     date: t.date,
@@ -579,7 +594,7 @@ function postTxn(t){
     createdBy: DB.settings.currentUserName, createdAt: nowStamp(),
     modifiedBy:'', modifiedAt:'',
     reversed:false, reversalOf: t.reversalOf||'',
-    demo: !!DEMO_MODE
+    demo: !!DEMO_MODE, sample: !!SAMPLE_MODE
   };
   DB.transactions.push(txn);
   logAudit('POST_TXN', txn.voucherNo+' Dr '+txn.debit+' / Cr '+txn.credit+' '+rupee(amt));
@@ -1041,6 +1056,38 @@ function render(){
   }
   if(DATA_RECOVERY_WARNING){
     html = `<div class="msg err"><b>Your previously saved data on this device could not be read</b> and could not be restored automatically — this app has started with a blank/fresh set of records so it stays usable. The original unreadable copy was NOT deleted${DATA_RECOVERY_KEY?(' — it is still present in this browser\'s storage under the name <code>'+esc(DATA_RECOVERY_KEY)+'</code>'):''}; a technician may be able to recover it from there. If you have a recent exported backup (.json), restore it now from Backup &amp; Restore. <button class="btn small secondary" style="margin-left:8px" onclick="DATA_RECOVERY_WARNING=false;render();">Dismiss</button></div>` + html;
+  }
+  // A Bank Loan (TL/CC) instalment or interest due to the bank — shown on EVERY screen, not just
+  // the Dashboard, exactly like the two banners above, so it is the first thing seen whenever the
+  // app is opened AND stays visible no matter which screen is being used — until the facility's
+  // Next Due Date itself moves forward, which only happens when a Drawal/Repayment is actually
+  // posted against it (see saveBankLoanDrawal/saveBankLoanRepayment). Nothing else dismisses it.
+  const bankDueNow = bankLoanDueReminders();
+  if(bankDueNow.length){
+    const lines = bankDueNow.map(d=>{
+      const b = d.loan;
+      const facilityName = (b.type==='TL'?'Term Loan':'Cash Credit')+' '+b.id+' (A/c '+(b.loanAccountNo||'—')+')';
+      const whenText = d.overdueDays>0 ? (d.overdueDays+' day(s) overdue — was due '+fmtDate(b.nextDueDate)) : ('due today, '+fmtDate(b.nextDueDate));
+      return esc(facilityName)+' — '+esc(whenText);
+    });
+    html = `<div class="msg err" style="font-weight:600">⚠ Bank Loan/CC instalment or interest due (${bankDueNow.length}):<br>${lines.join('<br>')}<br>
+      <a onclick="go('bankloan')" style="cursor:pointer;color:inherit;text-decoration:underline">Open Bank Loan to SHG →</a> to record the deposit/repayment. This message stays on every screen until it is paid and posted.</div>` + html;
+  }
+  // Auto Data Quality check — runs after EVERY entry (render() is called at the end of every
+  // save/post action across the app), so a mismatch is caught and shown right away rather than
+  // only when the user happens to open Data Quality Check on their own. Critical (red) issues are
+  // banner-worthy — they are genuine accounting mismatches (negative balance, Trial Balance out,
+  // an orphaned/misposted transaction) — each shown with its own concrete suggested fix, not just
+  // a description of the problem. Amber "needs attention" items stay in the full Data Quality
+  // Check screen so the banner never nags about non-critical gaps on every single screen.
+  if(ROUTE!=='dataquality'){
+    const dqNow = runDataQuality().filter(i=>i.sev==='red');
+    if(dqNow.length){
+      const top = dqNow.slice(0,3);
+      const lines = top.map(i=>'<b>'+esc(i.text)+'</b>'+(i.fix?('<br><span style="font-weight:400">→ '+esc(i.fix)+'</span>'):''));
+      html = `<div class="msg err" style="font-weight:600">⚠ Data Quality auto-check found ${dqNow.length} issue(s) needing attention:<br><br>${lines.join('<br><br>')}${dqNow.length>top.length?('<br><br>...and '+(dqNow.length-top.length)+' more.'):''}<br><br>
+        <a onclick="go('dataquality')" style="cursor:pointer;color:inherit;text-decoration:underline">Open Data Quality Check →</a> for the full list with suggested fixes. This message stays until every issue is resolved.</div>` + html;
+    }
   }
   c.innerHTML = html;
   translatePage();
@@ -2191,7 +2238,7 @@ function confirmPostMeeting(){
     if(p.newLoan){
       const loan = { id: nextId('LOAN'), memberId:p.newLoan.memberId, purpose:p.newLoan.purpose,
         sanctionDate:p.date, disbursementDate:p.date, principal:p.newLoan.amount, interestRate:p.newLoan.rate,
-        instalments:p.newLoan.inst, frequency:'Monthly', interestMethod:'flat', status:'Active', nextDueDate: addPeriod(p.date,1,'Monthly') };
+        instalments:p.newLoan.inst, frequency:'Monthly', interestMethod:'reducing', status:'Active', nextDueDate: addPeriod(p.date,1,'Monthly') };
       DB.loans.push(loan);
       postTxn({date:p.date,type:'Disbursement',debit:'MEMBER_LOANS',credit:p.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,meetingId,narration:'Loan disbursed — '+memberName(loan.memberId)});
       logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal)+' (via meeting)');
@@ -2318,10 +2365,15 @@ function addMonths(dateStr,n){
   const d = new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10);
 }
 // Advances a date by n instalment periods according to a loan's repayment frequency
-// (Weekly/Fortnightly/Monthly). Used for both nextDueDate and the full repayment schedule.
+// (Weekly/Fortnightly/Monthly for member loans; Monthly/Quarterly/Half-Yearly/Yearly also used
+// by Bank Loan (TL/CC) facilities, whose instalment/interest cycles run longer). Used for
+// nextDueDate on both member loans and bank facilities, and for the member loan repayment schedule.
 function addPeriod(dateStr, n, frequency){
   if(frequency==='Weekly'){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+7*n); return d.toISOString().slice(0,10); }
   if(frequency==='Fortnightly'){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+14*n); return d.toISOString().slice(0,10); }
+  if(frequency==='Quarterly') return addMonths(dateStr, 3*n);
+  if(frequency==='Half-Yearly') return addMonths(dateStr, 6*n);
+  if(frequency==='Yearly') return addMonths(dateStr, 12*n);
   return addMonths(dateStr, n);
 }
 
@@ -2519,9 +2571,9 @@ function loanForm(){
     </div>
     <div class="row">
       <div class="field"><label>Repayment Frequency</label><select name="frequency" id="loanFrequencySelect" onchange="updateLoanEMIPreview()"><option>Monthly</option><option>Fortnightly</option><option>Weekly</option></select></div>
-      <div class="field"><label>Interest Method</label><select name="interestMethod" id="loanMethodSelect" onchange="updateLoanEMIPreview()"><option value="flat">Flat</option><option value="reducing">Reducing Balance</option></select></div>
+      <div class="field"><label>Interest Method</label><input type="hidden" name="interestMethod" id="loanMethodSelect" value="reducing"><input type="text" value="Reducing Balance" disabled style="background:var(--bg-2)"></div>
     </div>
-    <div class="hint">This is a configurable local default (12% p.a., flat, 12 instalments) — not a prescribed official rule. Change it to match your SHG's actual terms or your SRLM's rule if one applies.</div>
+    <div class="hint">This is a configurable local default (12% p.a., 12 instalments) — not a prescribed official rule. Change it to match your SHG's actual terms or your SRLM's rule if one applies. Interest is always on the <b>Reducing Balance</b> method — charged only on the principal actually outstanding, never a flat rate on the original amount.</div>
     <div id="loanEMIPreview" class="msg info" style="margin-top:8px;display:none"></div>
     <button class="btn" style="margin-top:8px" type="submit">Disburse Loan</button>
   </form>`);
@@ -2540,14 +2592,14 @@ function updateLoanEMIPreview(){
         nEl = document.getElementById('loanInstalmentsInput'), fEl = document.getElementById('loanFrequencySelect'),
         mEl = document.getElementById('loanMethodSelect');
   const p = parseFloat(pEl && pEl.value)||0, r = parseFloat(rEl && rEl.value)||0, n = parseInt(nEl && nEl.value)||0;
-  const freq = (fEl && fEl.value) || 'Monthly'; const method = (mEl && mEl.value)||'flat';
+  const freq = (fEl && fEl.value) || 'Monthly'; const method = (mEl && mEl.value)||'reducing';
   if(!p || !n){ el.style.display='none'; el.innerHTML=''; return; }
   const periodsPerYear = freq==='Weekly'?52:(freq==='Fortnightly'?26:12);
   const emi = computeEMI(p, r, n, periodsPerYear);
   const rows = generateEMIReferenceSchedule(p, r, n, freq, todayStr());
   const totalInterest = Math.round(rows.reduce((s,x)=>s+x.interestComponent,0)*100)/100;
   el.style.display = '';
-  el.innerHTML = `If repaid as an <b>equal instalment (EMI)</b> of <b>${rupee(emi)}</b> per ${esc(freq.toLowerCase())} instalment, total interest ≈ ${rupee(totalInterest)}, total payable ≈ ${rupee(Math.round((p+totalInterest)*100)/100)}. <span style="color:var(--muted)">Shown for reference so you can adjust Principal/Rate/Instalments to what the member can comfortably pay — this loan will actually be tracked as equal-principal + ${method==='reducing'?'reducing-balance':'flat'} interest, and she may still deposit as per her convenience each meeting.</span>`;
+  el.innerHTML = `If repaid as an <b>equal instalment (EMI)</b> of <b>${rupee(emi)}</b> per ${esc(freq.toLowerCase())} instalment, total interest ≈ ${rupee(totalInterest)}, total payable ≈ ${rupee(Math.round((p+totalInterest)*100)/100)}. <span style="color:var(--muted)">Shown for reference so you can adjust Principal/Rate/Instalments to what the member can comfortably pay — this loan will actually be tracked as equal-principal + reducing-balance interest, and she may still deposit as per her convenience each meeting.</span>`;
 }
 function saveLoan(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -2556,7 +2608,7 @@ function saveLoan(ev){
     const loan = { id: nextId('LOAN'), memberId:data.memberId, purpose:data.purpose,
       sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate, mode:data.mode||'CASH',
       principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
-      instalments: parseInt(data.instalments)||12, frequency: data.frequency||'Monthly', interestMethod: data.interestMethod||'flat',
+      instalments: parseInt(data.instalments)||12, frequency: data.frequency||'Monthly', interestMethod: 'reducing',
       status:'Active', nextDueDate: addPeriod(data.disbursementDate,1,data.frequency||'Monthly') };
     DB.loans.push(loan);
     postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:data.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,narration:'Loan disbursed — '+memberName(loan.memberId)});
@@ -2790,11 +2842,11 @@ function cifForm(){
       <div class="field"><label>Repayment Period (No. of Instalments)</label><input type="number" min="1" step="1" name="period" id="cifPeriodInput" value="36" oninput="updateCifEMIPreview()"></div>
     </div>
     <div class="row">
-      <div class="field"><label>Interest Method</label><select name="interestMethod" id="cifMethodSelect" onchange="updateCifEMIPreview()"><option value="reducing">Reducing Balance</option><option value="flat">Flat</option></select></div>
+      <div class="field"><label>Interest Method</label><input type="hidden" name="interestMethod" id="cifMethodSelect" value="reducing"><input type="text" value="Reducing Balance" disabled style="background:var(--bg-2)"></div>
       <div class="field"><label>Repayment Frequency</label><select name="frequency" id="cifFrequencySelect" onchange="updateCifEMIPreview()"><option value="Monthly" selected>Monthly</option><option value="Fortnightly">Fortnightly</option><option value="Weekly">Weekly</option></select></div>
       <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
     </div>
-    <div class="hint">9% p.a., reducing balance, 36 monthly instalments is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche. Flat interest is pro-rated by the frequency actually selected (Weekly = ÷52, Fortnightly = ÷26, Monthly = ÷12 periods per year), never assumed to be monthly.</div>
+    <div class="hint">9% p.a., reducing balance, 36 monthly instalments is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche. Interest is always on the <b>Reducing Balance</b> method — charged only on the principal actually outstanding.</div>
     <div id="cifEMIPreview" class="msg info" style="margin-top:8px;display:none"></div>
     <button class="btn" style="margin-top:8px" type="submit">Post CIF Receipt</button>
   </form>`);
@@ -2815,7 +2867,7 @@ function updateCifEMIPreview(){
   const rows = generateEMIReferenceSchedule(a, r, n, freq, todayStr());
   const totalInterest = Math.round(rows.reduce((s,x)=>s+x.interestComponent,0)*100)/100;
   el.style.display = '';
-  el.innerHTML = `If repaid as an <b>equal instalment (EMI)</b> of <b>${rupee(emi)}</b> per ${esc(freq.toLowerCase())} instalment, total interest ≈ ${rupee(totalInterest)}, total payable ≈ ${rupee(Math.round((a+totalInterest)*100)/100)}. <span style="color:var(--muted)">Shown for reference only — this CIF tranche will actually be tracked as equal-principal + ${method==='reducing'?'reducing-balance':'flat'} interest per instalment.</span>`;
+  el.innerHTML = `If repaid as an <b>equal instalment (EMI)</b> of <b>${rupee(emi)}</b> per ${esc(freq.toLowerCase())} instalment, total interest ≈ ${rupee(totalInterest)}, total payable ≈ ${rupee(Math.round((a+totalInterest)*100)/100)}. <span style="color:var(--muted)">Shown for reference only — this CIF tranche will actually be tracked as equal-principal + reducing-balance interest per instalment.</span>`;
 }
 function saveCIF(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -2824,7 +2876,7 @@ function saveCIF(ev){
     const amount = parseFloat(data.amount);
     if(!amount || amount<=0) throw new Error('Enter a valid CIF amount.');
     const c = { id: nextId('CIF'), date:data.date, source:data.source, amount, rate:parseFloat(data.rate)||0,
-      period:parseInt(data.period)||36, interestMethod:data.interestMethod||'reducing', frequency:data.frequency||'Monthly', bank:data.mode, status:'Active' };
+      period:parseInt(data.period)||36, interestMethod:'reducing', frequency:data.frequency||'Monthly', bank:data.mode, status:'Active' };
     DB.cif.push(c);
     postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount,cifId:c.id,narration:'CIF received from '+data.source+' ('+c.id+')'});
     logAudit('CIF_RECEIVED', c.id+' received from '+data.source+' — '+rupee(amount));
@@ -2953,6 +3005,17 @@ function bankLoanOutstanding(bankLoanId){
   const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return 0;
   return Math.max(0, accountBalance(bankLoanAcct(loan.type), {bankLoanId}));
 }
+// Every Active facility with a nextDueDate on or before today is "due" — a Term Loan instalment
+// or Cash Credit interest payment the SHG owes the bank. Returned oldest-due-first so the most
+// overdue facility leads the reminder banner. A facility with no nextDueDate set yet (nothing
+// drawn against it so far, or the user hasn't entered a schedule) is never flagged — there is
+// nothing concrete to be reminded of until money has actually been drawn.
+function bankLoanDueReminders(){
+  const today = todayStr();
+  return (DB.bankLoans||[]).filter(b=>b.status!=='Closed' && b.nextDueDate && b.nextDueDate<=today)
+    .map(b=>({loan:b, overdueDays: Math.max(0, daysBetween(b.nextDueDate, today))}))
+    .sort((a,b)=>b.overdueDays-a.overdueDays);
+}
 // The rate actually applicable to a given calendar date is whichever slab has the LATEST
 // fromDate that is still <= that date — i.e. banks apply the new rate to interest accruing from
 // the day it takes effect onward, never retroactively re-rating days already passed.
@@ -3044,13 +3107,15 @@ function viewBankLoanToSHG(){
     ${stat('Total Bank Loan Outstanding', rupee(accountBalance('BANK_TL')+accountBalance('BANK_CC')))}
   </div>`;
   if(!DB.bankLoans.length){ html += `<div class="card"><div class="empty">No TL/CC facility recorded yet.</div></div>`; return html; }
-  html += `<div class="card">${tbl(['Facility ID','Bank A/c No.','Type','Sanction Date','Sanctioned Amount','Utilised','Not Utilised','Outstanding Payable','Current Rate %',''],
+  html += `<div class="card">${tbl(['Facility ID','Bank A/c No.','Type','Sanction Date','Sanctioned Amount','Utilised','Not Utilised','Outstanding Payable','Current Rate %','Next Due',''],
     DB.bankLoans.map(b=>{
       const utilised = bankLoanUtilised(b.id);
       const notUtilised = Math.max(0, Math.round((b.sanctionedAmount-utilised)*100)/100);
+      const overdue = b.status!=='Closed' && b.nextDueDate && b.nextDueDate<=todayStr();
+      const nextDueCell = b.nextDueDate ? (overdue ? badge(fmtDate(b.nextDueDate)+' — Due', 'red') : fmtDate(b.nextDueDate)) : '<span class="hint">Not set</span>';
       return [b.id, esc(b.loanAccountNo||'—'), b.type, fmtDate(b.sanctionDate), rightCell(rupee(b.sanctionedAmount)), rightCell(rupee(utilised)),
-        rightCell(notUtilised>0?rupee(notUtilised):'—'), rightCell(rupee(bankLoanOutstanding(b.id))), bankLoanRateOnDate(b, todayStr())+'%',
-        `<button class="btn small secondary" onclick="bankLoanDrawalForm('${b.id}')">Drawal</button> <button class="btn small secondary" onclick="bankLoanRepaymentForm('${b.id}')">Repay</button>`];
+        rightCell(notUtilised>0?rupee(notUtilised):'—'), rightCell(rupee(bankLoanOutstanding(b.id))), bankLoanRateOnDate(b, todayStr())+'%', nextDueCell,
+        `<button class="btn small secondary" onclick="bankLoanDrawalForm('${b.id}')">Drawal</button> <button class="btn small secondary" onclick="bankLoanRepaymentForm('${b.id}')">Repay</button> <button class="btn small secondary" onclick="bankLoanScheduleForm('${b.id}')">Set/Edit Due</button>`];
     }))}</div>`;
 
   DB.bankLoans.forEach(b=>{ html += viewBankLoanInterestCard(b); });
@@ -3110,7 +3175,13 @@ function bankLoanSanctionForm(){
       <div class="field"><label>Tenure (months, for TL)</label><input type="number" min="1" step="1" name="tenureMonths" value="60"></div>
       <div class="field"><label>Bank Account</label><select name="bankAccount">${(DB.profile.banks||[]).length ? DB.profile.banks.map(b=>`<option value="${esc(b.bank+' - '+b.accno)}">${esc(b.bank)} — ${esc(b.accno)}</option>`).join('') : `<option value="">Not specified</option>`}</select></div>
     </div>
+    <div class="row">
+      <div class="field"><label>Instalment / Interest Frequency</label><select name="repayFrequency"><option value="Monthly" selected>Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-Yearly">Half-Yearly</option><option value="Yearly">Yearly</option></select></div>
+      <div class="field"><label>Instalment Amount ₹ <span class="hint">(EMI for TL; expected interest for CC — optional)</span></label><input type="number" min="0" step="0.01" name="instalmentAmount"></div>
+      <div class="field"><label>Next Due Date <span class="hint">(leave blank to set automatically from the first Drawal)</span></label><input type="date" name="nextDueDate"></div>
+    </div>
     <div class="field"><label>Narration</label><input name="narration"></div>
+    <p class="hint">Once a Next Due Date is set (here, or after the first Drawal), the app will keep reminding you — right from the moment the app opens, on every screen — as soon as that instalment/interest falls due, until a Repayment is posted against this facility.</p>
     <button class="btn" type="submit">Save Sanction</button>
   </form>`);
 }
@@ -3124,6 +3195,8 @@ function saveBankLoanSanction(ev){
     const rate0 = parseFloat(data.rate)||0;
     const loan = { id: nextId('BKLN'), type:data.type, loanAccountNo:(data.loanAccountNo||'').trim(), sanctionDate:data.sanctionDate, sanctionedAmount,
       rate: rate0, tenureMonths: parseInt(data.tenureMonths)||60, bankAccount:data.bankAccount||'',
+      repayFrequency: data.repayFrequency||'Monthly', instalmentAmount: parseFloat(data.instalmentAmount)||0,
+      nextDueDate: data.nextDueDate||'',
       narration:data.narration||'', status:'Active',
       interestSlabs: [{fromDate:data.sanctionDate, rate:rate0}] };
     DB.bankLoans.push(loan);
@@ -3136,6 +3209,7 @@ function bankLoanDrawalForm(bankLoanId){
   const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return;
   const notUtilised = Math.max(0, Math.round((loan.sanctionedAmount-bankLoanUtilised(loan.id))*100)/100);
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record Drawal / Utilisation — ${loan.id} (${loan.type})</h3>
+  <p class="hint">Facility A/c No.: <b>${esc(loan.loanAccountNo||'—')}</b>${loan.bankAccount?(' &nbsp;·&nbsp; Linked Bank Account: <b>'+esc(loan.bankAccount)+'</b>'):''}</p>
   <p class="hint">Sanctioned: ${rupee(loan.sanctionedAmount)} · Not yet utilised: <b>${rupee(notUtilised)}</b></p>
   <form onsubmit="return saveBankLoanDrawal(event,'${loan.id}')">
     <div class="row">
@@ -3156,8 +3230,16 @@ function saveBankLoanDrawal(ev, bankLoanId){
     if(amount<=0) throw new Error('Enter a drawal amount greater than zero.');
     const notUtilised = Math.max(0, Math.round((loan.sanctionedAmount-bankLoanUtilised(loan.id))*100)/100);
     if(amount > notUtilised+0.5) throw new Error('Drawal amount ('+rupee(amount)+') exceeds the un-utilised sanctioned amount ('+rupee(notUtilised)+').');
+    // The facility's own Loan/CC Account Number (and, when drawn into Bank, the SHG's linked
+    // account it lands in) is folded into the narration automatically — so it shows on the Bank
+    // Book, General Ledger and printed vouchers without having to be re-typed every time, and
+    // without needing to cross-reference the facility ID back to the sanction record to find it.
+    const acctNote = ' [A/c No. '+(loan.loanAccountNo||'—')+(data.mode==='BANK' && loan.bankAccount ? ' → '+loan.bankAccount : '')+']';
     postTxn({date:data.date, type:'Bank Loan Drawal', debit:data.mode, credit:bankLoanAcct(loan.type), amount, bankLoanId,
-      narration:'Drawal against '+loan.id+' ('+loan.type+')'+(data.narration?(' — '+data.narration):'')});
+      narration:'Drawal against '+loan.id+' ('+loan.type+')'+acctNote+(data.narration?(' — '+data.narration):'')});
+    // Starts the due-reminder schedule the moment money is first actually drawn, if a Next Due
+    // Date wasn't already set at sanction — nothing to be reminded of before that.
+    if(!loan.nextDueDate) loan.nextDueDate = addPeriod(data.date, 1, loan.repayFrequency||'Monthly');
     closeModal(); flash('ok','Drawal posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
@@ -3165,6 +3247,7 @@ function saveBankLoanDrawal(ev, bankLoanId){
 function bankLoanRepaymentForm(bankLoanId){
   const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return;
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Record Repayment — ${loan.id} (${loan.type})</h3>
+  <p class="hint">Facility A/c No.: <b>${esc(loan.loanAccountNo||'—')}</b>${loan.bankAccount?(' &nbsp;·&nbsp; Linked Bank Account: <b>'+esc(loan.bankAccount)+'</b>'):''}</p>
   <p class="hint">Outstanding Payable: <b>${rupee(bankLoanOutstanding(loan.id))}</b></p>
   <form onsubmit="return saveBankLoanRepayment(event,'${loan.id}')">
     <div class="row">
@@ -3187,12 +3270,49 @@ function saveBankLoanRepayment(ev, bankLoanId){
     if(principal===0 && interest===0) throw new Error('Enter a principal and/or interest amount.');
     const outstanding = bankLoanOutstanding(loan.id);
     if(principal > outstanding+0.5) throw new Error('Principal repayment ('+rupee(principal)+') exceeds the outstanding payable ('+rupee(outstanding)+').');
+    // Same account-number folding as the Drawal form above, so a repayment paid FROM Bank also
+    // shows the facility account number and the SHG's own linked account it was paid from.
+    const acctNote = ' [A/c No. '+(loan.loanAccountNo||'—')+(data.mode==='BANK' && loan.bankAccount ? ' ← '+loan.bankAccount : '')+']';
     if(principal>0) postTxn({date:data.date, type:'Bank Loan Repayment', debit:bankLoanAcct(loan.type), credit:data.mode, amount:principal, bankLoanId,
-      narration:'Principal repaid — '+loan.id+' ('+loan.type+')'+(data.narration?(' — '+data.narration):'')});
+      narration:'Principal repaid — '+loan.id+' ('+loan.type+')'+acctNote+(data.narration?(' — '+data.narration):'')});
     if(interest>0) postTxn({date:data.date, type:'Bank Loan Interest', debit:'INTEREST_EXPENSE', credit:data.mode, amount:interest, bankLoanId,
-      narration:'Interest paid — '+loan.id+' ('+loan.type+')'+(data.narration?(' — '+data.narration):'')});
-    if(bankLoanOutstanding(loan.id)<=0.5) loan.status='Closed';
+      narration:'Interest paid — '+loan.id+' ('+loan.type+')'+acctNote+(data.narration?(' — '+data.narration):'')});
+    // A payment (principal and/or interest) is treated as clearing whatever was currently due —
+    // this is what actually makes the due-reminder banner go away "till its deposit": either the
+    // facility is now fully closed (nothing left to ever be reminded about), or the due date
+    // rolls forward one instalment/interest cycle so the reminder stays quiet until the next one.
+    if(bankLoanOutstanding(loan.id)<=0.5){ loan.status='Closed'; loan.nextDueDate=''; }
+    else if(loan.nextDueDate){ loan.nextDueDate = addPeriod(loan.nextDueDate, 1, loan.repayFrequency||'Monthly'); }
     closeModal(); flash('ok','Repayment posted.'); render();
+  }catch(e){ flash('error',e.message); render(); }
+  return false;
+}
+// Lets the Next Due Date / Instalment Amount / Frequency be set or corrected directly — for a
+// facility sanctioned before a schedule was known, or when the bank revises the EMI/interest
+// cycle. Posts nothing to the ledger; it only changes when the due-reminder banner will next fire.
+function bankLoanScheduleForm(bankLoanId){
+  const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return;
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>Set / Edit Due Schedule — ${loan.id} (${loan.type})</h3>
+  <p class="hint">Facility A/c No.: <b>${esc(loan.loanAccountNo||'—')}</b></p>
+  <p class="hint">This only controls when the "instalment/interest due" reminder appears — it never posts anything to the ledger. Use Repay to actually record a payment.</p>
+  <form onsubmit="return saveBankLoanSchedule(event,'${loan.id}')">
+    <div class="row">
+      <div class="field"><label>Next Due Date</label><input type="date" name="nextDueDate" value="${loan.nextDueDate||''}"></div>
+      <div class="field"><label>Instalment / Interest Frequency</label><select name="repayFrequency">${['Monthly','Quarterly','Half-Yearly','Yearly'].map(fq=>`<option value="${fq}" ${(loan.repayFrequency||'Monthly')===fq?'selected':''}>${fq}</option>`).join('')}</select></div>
+      <div class="field"><label>Instalment Amount ₹</label><input type="number" min="0" step="0.01" name="instalmentAmount" value="${loan.instalmentAmount||''}"></div>
+    </div>
+    <button class="btn" type="submit">Save</button>
+  </form>`);
+}
+function saveBankLoanSchedule(ev, bankLoanId){
+  ev.preventDefault(); const f=new FormData(ev.target);
+  try{
+    const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) throw new Error('Facility not found.');
+    const data = Object.fromEntries(f.entries());
+    loan.nextDueDate = data.nextDueDate||'';
+    loan.repayFrequency = data.repayFrequency||'Monthly';
+    loan.instalmentAmount = parseFloat(data.instalmentAmount)||0;
+    closeModal(); flash('ok','Due schedule updated.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
 }
@@ -3690,95 +3810,99 @@ function saveReconciliation(){
 }
 
 /* ============================================================ DATA QUALITY */
+// Every issue below carries a `fix` — a concrete, actionable next step in plain language, not
+// just a description of what's wrong — so a mismatch is never just flagged, it also tells the
+// user exactly what to do about it (surfaced both here in Data Quality Check and in the
+// post-entry auto-check banner in render()).
 function runDataQuality(){
   const issues = [];
   // negative balances
-  if(accountBalance('CASH')<0) issues.push({sev:'red', text:'Cash balance is negative.'});
-  if(accountBalance('BANK')<0) issues.push({sev:'red', text:'Bank balance is negative.'});
-  if(accountBalance('UPI')<0) issues.push({sev:'red', text:'UPI balance is negative.'});
+  if(accountBalance('CASH')<0) issues.push({sev:'red', text:'Cash balance is negative.', fix:'Open Cash Book and find which entry pushed cash below zero — usually an expense/withdrawal/deposit posted before the cash to cover it was actually received. Correct or reverse that entry.'});
+  if(accountBalance('BANK')<0) issues.push({sev:'red', text:'Bank balance is negative.', fix:'Open Bank Book and find which entry pushed the bank balance below zero — usually a withdrawal, loan drawal or repayment recorded before a deposit that should have preceded it. Correct or reverse that entry.'});
+  if(accountBalance('UPI')<0) issues.push({sev:'red', text:'UPI balance is negative.', fix:'Check recent UPI transactions for one posted out of order or for the wrong amount, and reverse or correct it.'});
   // trial balance (reuses the same central calculation as the Trial Balance screen)
-  if(generateTrialBalance().diff !== 0) issues.push({sev:'red', text:'Trial Balance does not match.'});
+  if(generateTrialBalance().diff !== 0) issues.push({sev:'red', text:'Trial Balance does not match.', fix:'This should never happen since every voucher enforces equal debit and credit at posting — it usually means a backup was restored over live data, or the data file was edited outside the app. Open Trial Balance to see the exact difference, or restore your last known-good backup.'});
   // duplicate members
   const seen = {};
   DB.members.forEach(m=>{ const key=(m.name||'').trim().toLowerCase()+'|'+(m.fatherHusband||'').trim().toLowerCase();
-    if(key.trim()!=='|'){ if(seen[key]) issues.push({sev:'amber', text:'Possible duplicate member: '+m.name}); seen[key]=true; } });
+    if(key.trim()!=='|'){ if(seen[key]) issues.push({sev:'amber', text:'Possible duplicate member: '+m.name, fix:'Open Members and compare the two records with this name/father-husband combination — if one is a genuine duplicate, keep the one with real transaction history and do not post any further entries against the other.'}); seen[key]=true; } });
   // missing mandatory fields
-  DB.members.forEach(m=>{ if(!m.mobile) issues.push({sev:'amber', text:'Member '+m.name+' has no mobile number on file.'}); });
-  if(!DB.profile.name) issues.push({sev:'red', text:'SHG Profile: name is not set.'});
-  if(!DB.profile.banks || !DB.profile.banks.length) issues.push({sev:'amber', text:'No bank account recorded in SHG Profile.'});
+  DB.members.forEach(m=>{ if(!m.mobile) issues.push({sev:'amber', text:'Member '+m.name+' has no mobile number on file.', fix:'Open '+m.name+'\'s member record and fill in the mobile number.'}); });
+  if(!DB.profile.name) issues.push({sev:'red', text:'SHG Profile: name is not set.', fix:'Open SHG Profile and fill in the SHG\'s name — several reports and the grading screens depend on it.'});
+  if(!DB.profile.banks || !DB.profile.banks.length) issues.push({sev:'amber', text:'No bank account recorded in SHG Profile.', fix:'Open SHG Profile and add the SHG\'s bank account — needed for Bank Book, deposits and grading.'});
   // loan issues — every check operates on one Loan ID at a time, never a member-level merge
   const loanIdCounts = {};
   const memberIdSetEarly = new Set(DB.members.map(m=>m.id));
   DB.loans.forEach(l=>{
-    if(!l.memberId) issues.push({sev:'red', text:'Loan '+l.id+' has no Member ID linked to it.'});
-    else if(!memberIdSetEarly.has(l.memberId)) issues.push({sev:'red', text:'Loan '+l.id+' is linked to a member that no longer exists.'});
-    if(!l.principal || l.principal<=0) issues.push({sev:'red', text:'Loan '+l.id+' has no valid principal amount.'});
-    if(!l.disbursementDate || isNaN(new Date(l.disbursementDate+'T00:00:00').getTime())) issues.push({sev:'red', text:'Loan '+l.id+' has a missing or invalid disbursement date.'});
-    if(!l.interestRate && l.interestRate!==0) issues.push({sev:'amber', text:'Loan '+l.id+' has no interest rate set.'});
-    if(l.interestRate<0) issues.push({sev:'red', text:'Loan '+l.id+' has a negative interest rate.'});
-    if(!['Weekly','Fortnightly','Monthly'].includes(l.frequency||'Monthly')) issues.push({sev:'amber', text:'Loan '+l.id+' has an unrecognised repayment frequency.'});
-    if(!l.instalments || l.instalments<1) issues.push({sev:'red', text:'Loan '+l.id+' has an invalid number of instalments.'});
+    if(!l.memberId) issues.push({sev:'red', text:'Loan '+l.id+' has no Member ID linked to it.', fix:'Open Loan Register, find '+l.id+', and correct the member it should be linked to.'});
+    else if(!memberIdSetEarly.has(l.memberId)) issues.push({sev:'red', text:'Loan '+l.id+' is linked to a member that no longer exists.', fix:'Open Loan Register, find '+l.id+', and either relink it to the correct existing member, or restore the deleted member record.'});
+    if(!l.principal || l.principal<=0) issues.push({sev:'red', text:'Loan '+l.id+' has no valid principal amount.', fix:'Open Loan Register and correct the principal amount recorded for '+l.id+'.'});
+    if(!l.disbursementDate || isNaN(new Date(l.disbursementDate+'T00:00:00').getTime())) issues.push({sev:'red', text:'Loan '+l.id+' has a missing or invalid disbursement date.', fix:'Open Loan Register and set a valid disbursement date for '+l.id+'.'});
+    if(!l.interestRate && l.interestRate!==0) issues.push({sev:'amber', text:'Loan '+l.id+' has no interest rate set.', fix:'Open Loan Register and set the agreed interest rate (% p.a.) for '+l.id+'.'});
+    if(l.interestRate<0) issues.push({sev:'red', text:'Loan '+l.id+' has a negative interest rate.', fix:'Open Loan Register and correct the interest rate for '+l.id+' — it cannot be negative.'});
+    if(!['Weekly','Fortnightly','Monthly'].includes(l.frequency||'Monthly')) issues.push({sev:'amber', text:'Loan '+l.id+' has an unrecognised repayment frequency.', fix:'Open Loan Register and set the repayment frequency for '+l.id+' to Weekly, Fortnightly or Monthly.'});
+    if(!l.instalments || l.instalments<1) issues.push({sev:'red', text:'Loan '+l.id+' has an invalid number of instalments.', fix:'Open Loan Register and correct the number of instalments for '+l.id+' — it must be at least 1.'});
     // loanOutstanding() itself clamps to zero (Math.max(0, ...)), so checking its return value
     // here could never fire — it was dead code. Checking the raw, unclamped ledger balance
     // instead actually catches the real problem: more principal recorded as repaid than was
     // ever disbursed against this loan (a duplicate or misposted repayment).
     const rawLoanBalance = accountBalance('MEMBER_LOANS',{loanId:l.id});
-    if(rawLoanBalance<-0.5) issues.push({sev:'red', text:'Loan '+l.id+' has been repaid '+rupee(Math.abs(rawLoanBalance))+' more than its recorded principal — check for a duplicate or misposted repayment.'});
+    if(rawLoanBalance<-0.5) issues.push({sev:'red', text:'Loan '+l.id+' has been repaid '+rupee(Math.abs(rawLoanBalance))+' more than its recorded principal — check for a duplicate or misposted repayment.', fix:'Open the Loan Ledger for '+l.id+' and look for a repayment posted twice, or for the wrong loan — reverse the extra/wrong entry via Journal Voucher → Reverse.'});
     loanIdCounts[l.id] = (loanIdCounts[l.id]||0)+1;
     // Cross-check: outstanding from the ledger must agree with outstanding derived from the
     // loan's own schedule — these are two different views of the same data (item 16/17); if
     // they ever disagree it signals a genuine bug rather than a normal data-entry issue.
     const schedule = generateLoanSchedule(l.id);
     const scheduleOutstanding = Math.max(0, Math.round((l.principal - schedule.reduce((s,r)=>s+r.principalPaid,0))*100)/100);
-    if(Math.abs(scheduleOutstanding - loanOutstanding(l.id).principal) > 1) issues.push({sev:'red', text:'Loan '+l.id+': ledger balance and repayment schedule disagree — data may need review.'});
+    if(Math.abs(scheduleOutstanding - loanOutstanding(l.id).principal) > 1) issues.push({sev:'red', text:'Loan '+l.id+': ledger balance and repayment schedule disagree — data may need review.', fix:'Open the Loan Ledger for '+l.id+' and compare it against the Repayment Schedule tab — look for a repayment posted against the wrong loan or with the wrong amount.'});
   });
-  Object.keys(loanIdCounts).forEach(id=>{ if(loanIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate Loan ID detected: '+id+' appears more than once.'}); });
+  Object.keys(loanIdCounts).forEach(id=>{ if(loanIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate Loan ID detected: '+id+' appears more than once.', fix:'This points to a corrupted import/restore — re-check the source file, or contact support before posting anything further against '+id+'.'}); });
   // CIF tranches — same category of checks as loans, since CIF is now a loan sub-ledger too.
   const cifIdCounts = {};
   DB.cif.forEach(c=>{
-    if(!c.amount || c.amount<=0) issues.push({sev:'red', text:'CIF '+c.id+' has no valid amount.'});
-    if(!c.date || isNaN(new Date(c.date+'T00:00:00').getTime())) issues.push({sev:'red', text:'CIF '+c.id+' has a missing or invalid date.'});
-    if(c.rate<0) issues.push({sev:'red', text:'CIF '+c.id+' has a negative interest rate.'});
-    if(!c.period || c.period<1) issues.push({sev:'red', text:'CIF '+c.id+' has an invalid repayment period.'});
+    if(!c.amount || c.amount<=0) issues.push({sev:'red', text:'CIF '+c.id+' has no valid amount.', fix:'Open CIF and correct the amount recorded for '+c.id+'.'});
+    if(!c.date || isNaN(new Date(c.date+'T00:00:00').getTime())) issues.push({sev:'red', text:'CIF '+c.id+' has a missing or invalid date.', fix:'Open CIF and set a valid receipt date for '+c.id+'.'});
+    if(c.rate<0) issues.push({sev:'red', text:'CIF '+c.id+' has a negative interest rate.', fix:'Open CIF and correct the interest rate for '+c.id+' — it cannot be negative.'});
+    if(!c.period || c.period<1) issues.push({sev:'red', text:'CIF '+c.id+' has an invalid repayment period.', fix:'Open CIF and correct the repayment period (number of instalments) for '+c.id+'.'});
     cifIdCounts[c.id] = (cifIdCounts[c.id]||0)+1;
   });
-  Object.keys(cifIdCounts).forEach(id=>{ if(cifIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate CIF ID detected: '+id+' appears more than once.'}); });
+  Object.keys(cifIdCounts).forEach(id=>{ if(cifIdCounts[id]>1) issues.push({sev:'red', text:'Duplicate CIF ID detected: '+id+' appears more than once.', fix:'This points to a corrupted import/restore — re-check the source file, or contact support before posting anything further against '+id+'.'}); });
   // orphan transactions: a loanId or memberId that no longer matches any real record
   const loanIdSet = new Set(DB.loans.map(l=>l.id)), memberIdSet = new Set(DB.members.map(m=>m.id)), cifIdSet = new Set(DB.cif.map(c=>c.id));
   DB.transactions.forEach(t=>{
-    if(t.loanId && !loanIdSet.has(t.loanId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references loan '+t.loanId+', which no longer exists.'});
-    if(t.cifId && !cifIdSet.has(t.cifId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references CIF '+t.cifId+', which no longer exists.'});
-    if(t.memberId && !memberIdSet.has(t.memberId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references a member that no longer exists.'});
+    if(t.loanId && !loanIdSet.has(t.loanId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references loan '+t.loanId+', which no longer exists.', fix:'Open Transactions/Vouchers, find '+t.voucherNo+', and reverse it via Journal Voucher → Reverse (it can no longer be attributed to a real loan).'});
+    if(t.cifId && !cifIdSet.has(t.cifId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references CIF '+t.cifId+', which no longer exists.', fix:'Open Transactions/Vouchers, find '+t.voucherNo+', and reverse it via Journal Voucher → Reverse (it can no longer be attributed to a real CIF tranche).'});
+    if(t.memberId && !memberIdSet.has(t.memberId)) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' references a member that no longer exists.', fix:'Open Transactions/Vouchers, find '+t.voucherNo+', and reverse it, or restore the deleted member record.'});
     // A repayment/interest transaction's memberId must match the loan it's tagged against.
     if(t.loanId && t.memberId && (t.credit==='MEMBER_LOANS'||t.credit==='INTEREST_INCOME')){
       const loan = DB.loans.find(l=>l.id===t.loanId);
-      if(loan && loan.memberId!==t.memberId) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' posts to loan '+t.loanId+' but that loan belongs to a different member.'});
+      if(loan && loan.memberId!==t.memberId) issues.push({sev:'red', text:'Transaction '+t.voucherNo+' posts to loan '+t.loanId+' but that loan belongs to a different member.', fix:'Open Transactions/Vouchers, find '+t.voucherNo+', reverse it, and re-post it against the correct loan/member.'});
     }
     // A principal or interest repayment posted with no Loan ID at all cannot be attributed to
     // any specific loan's sub-ledger — this breaks loan-wise accounting and is always critical.
     if(!t.reversed && !t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')){
-      issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no Loan ID — it cannot be attributed to a specific loan.'});
+      issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no Loan ID — it cannot be attributed to a specific loan.', fix:'Reverse '+t.voucherNo+' via Journal Voucher → Reverse and re-post the repayment from Members Loan → Collect Repayment, which always attaches the correct Loan ID.'});
     }
     if(!t.reversed && !t.cifId && (t.type==='CIF Repayment'||t.type==='CIF Interest')){
-      issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no CIF ID — it cannot be attributed to a specific CIF tranche.'});
+      issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no CIF ID — it cannot be attributed to a specific CIF tranche.', fix:'Reverse '+t.voucherNo+' via Journal Voucher → Reverse and re-post it from the CIF screen, which always attaches the correct CIF ID.'});
     }
   });
   // repayment posted against a loan that is now closed (the loan may have been closed after this posting)
   DB.transactions.filter(t=>!t.reversed && t.loanId && t.credit==='MEMBER_LOANS').forEach(t=>{
     const loan = DB.loans.find(l=>l.id===t.loanId);
-    if(loan && loan.status==='Closed' && loanOutstanding(loan.id).principal<-0.5) issues.push({sev:'amber', text:'Loan '+t.loanId+' is closed but shows an overpaid/negative position — check repayment history.'});
+    if(loan && loan.status==='Closed' && loanOutstanding(loan.id).principal<-0.5) issues.push({sev:'amber', text:'Loan '+t.loanId+' is closed but shows an overpaid/negative position — check repayment history.', fix:'Open the Loan Ledger for '+t.loanId+' and check whether a repayment was posted after closure, or twice — reverse the extra entry if so.'});
   });
   // possible duplicate transactions: same loan, date, type and amount posted more than once
   const txKeySeen = {};
   DB.transactions.filter(t=>!t.reversed && t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')).forEach(t=>{
     const key = t.loanId+'|'+t.date+'|'+t.type+'|'+t.amount;
-    if(txKeySeen[key]) issues.push({sev:'amber', text:'Possible duplicate: loan '+t.loanId+' has two '+t.type+' entries of '+rupee(t.amount)+' on '+fmtDate(t.date)+'.'});
+    if(txKeySeen[key]) issues.push({sev:'amber', text:'Possible duplicate: loan '+t.loanId+' has two '+t.type+' entries of '+rupee(t.amount)+' on '+fmtDate(t.date)+'.', fix:'Open the Loan Ledger for '+t.loanId+' and check both entries dated '+fmtDate(t.date)+' — if one is a genuine duplicate, reverse it via Journal Voucher → Reverse.'});
     txKeySeen[key] = true;
   });
   // meetings without any postings
   // unposted / unbalanced transactions can't occur since engine enforces equal dr=cr per entry
-  if(!DB.members.length) issues.push({sev:'amber', text:'No members registered yet.'});
-  if(!DB.meetings.length) issues.push({sev:'amber', text:'No meetings have been recorded yet.'});
+  if(!DB.members.length) issues.push({sev:'amber', text:'No members registered yet.', fix:'Open Members → Add Member to register the SHG\'s members.'});
+  if(!DB.meetings.length) issues.push({sev:'amber', text:'No meetings have been recorded yet.', fix:'Open Meetings → New Meeting to record the SHG\'s first meeting.'});
   return issues;
 }
 function dqSummaryRow(issues){
@@ -3794,7 +3918,7 @@ function viewDataQuality(){
   html += `<div class="card">${dqSummaryRow(issues)}</div>`;
   if(!issues.length){ html += `<div class="card"><div class="empty">No issues found. Records look clean.</div></div>`; return html; }
   html += `<div class="grid cols2">`;
-  issues.forEach(i=>{ html += `<div class="qcard"><span class="status" style="color:var(--${i.sev==='red'?'red':(i.sev==='amber'?'amber':'green')})"><span class="dot ${i.sev}"></span>${i.sev==='red'?'Error':'Attention Required'}</span><div style="margin-top:5px">${esc(i.text)}</div></div>`; });
+  issues.forEach(i=>{ html += `<div class="qcard"><span class="status" style="color:var(--${i.sev==='red'?'red':(i.sev==='amber'?'amber':'green')})"><span class="dot ${i.sev}"></span>${i.sev==='red'?'Error':'Attention Required'}</span><div style="margin-top:5px">${esc(i.text)}</div>${i.fix?`<div class="hint" style="margin-top:5px"><b>Suggested fix:</b> ${esc(i.fix)}</div>`:''}</div>`; });
   html += `</div>`;
   return html;
 }
@@ -3881,11 +4005,19 @@ function computeGrading(ym){
   DB.transactions.filter(t=>t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').forEach(t=>principalRecovered+=t.amount);
   DB.loans.filter(l=>l.status!=='Closed' && l.nextDueDate && l.nextDueDate>=from && l.nextDueDate<=to).forEach(l=>principalDue += (l.principal/(l.instalments||1)));
   const loanRecovery = principalDue>0 ? Math.min(100, principalRecovered/principalDue*100) : 100;
+  // Each indicator carries its own `basis` — the exact source figures and formula behind the
+  // percentage, in the assessor's own numbers, so where every mark came from is always visible,
+  // not just when a score falls short (see viewGrading()). Never a separate estimate — every
+  // number here is the same one already used to compute `value` just above it.
   const indicators = [
-    {key:'meetings', label:'Meeting Regularity', value:meetingRegularity},
-    {key:'attendance', label:'Attendance', value:attendancePct},
-    {key:'savings', label:'Savings Regularity', value:savingsRegularity},
-    {key:'recovery', label:'Loan Recovery', value:loanRecovery}
+    {key:'meetings', label:'Meeting Regularity', value:meetingRegularity,
+      basis: monthMeetings.length+' meeting(s) held ÷ '+scheduled+' scheduled this month (meeting frequency: '+freq+') = '+meetingRegularity.toFixed(1)+'%. From Meetings dated '+from+' to '+to+'.'},
+    {key:'attendance', label:'Attendance', value:attendancePct,
+      basis: monthMeetings.length ? (attendanceSum+' member-visits recorded across '+monthMeetings.length+' meeting(s) ÷ '+(monthMeetings.length*totalMembers)+' possible ('+totalMembers+' active members × '+monthMeetings.length+' meeting(s)) = '+attendancePct.toFixed(1)+'%.') : 'No meetings recorded this month, so attendance cannot be computed (shown as 0%).'},
+    {key:'savings', label:'Savings Regularity', value:savingsRegularity,
+      basis: savers.size+' of '+totalMembers+' active member(s) made at least one savings entry (credit to Member Savings) between '+from+' and '+to+' = '+savingsRegularity.toFixed(1)+'%.'},
+    {key:'recovery', label:'Loan Recovery', value:loanRecovery,
+      basis: principalDue>0 ? (rupee(principalRecovered)+' principal recovered (Loan Repayment entries, '+from+' to '+to+') ÷ '+rupee(principalDue)+' due (loans with a next-instalment due date falling in this month) = '+loanRecovery.toFixed(1)+'%.') : 'No loan instalment fell due this month, so full marks are given by default (nothing to recover against).'}
   ];
   const overall = indicators.reduce((s,i)=>s+i.value,0)/indicators.length;
 
@@ -4208,6 +4340,7 @@ function viewGrading(){
     <div style="margin-top:12px">${g.indicators.map(i=>{
       const sev = i.value>=80?'green':(i.value>=50?'amber':'red');
       return `<div class="qcard" style="margin-bottom:8px"><span class="dot ${sev}"></span><b>${esc(i.label)}</b> — ${i.value.toFixed(1)}%
+        ${i.basis?`<div class="hint" style="margin-top:4px"><b>How this was calculated:</b> ${esc(i.basis)}</div>`:''}
         ${i.value<80?`<div class="hint" style="margin-top:4px">${gradingAction(i.key)}</div>`:''}</div>`;
     }).join('')}
     <div class="qcard" style="margin-bottom:8px"><span class="dot ${g.dqStatus}"></span><b>Data Quality (Bookkeeping)</b> — ${g.dqStatus==='green'?'No issues':(g.dqRed+' critical, '+g.dqAmber+' warning(s)')}
@@ -5711,11 +5844,17 @@ function viewBackup(){
   html += `<div class="card"><h3>Restore from Backup</h3><p class="hint">Restoring replaces ALL current data on this device. Export a backup first if unsure.</p>
     <input type="file" id="restoreFile" accept="application/json">
     <button class="btn danger" style="margin-top:8px" onclick="restoreBackup()">Restore from File</button></div>`;
-  html += `<div class="card"><h3>Import / Upload Additional Data (Merge)</h3><p class="hint">Adds members, loans, transactions, meetings and CIF entries from a JSON file to what's already here — existing data is kept, nothing is overwritten. Use this to bring in more test entries (e.g. an edited copy of a sample data file) without starting over. Records whose ID already exists are skipped, not duplicated.</p>
+  html += `<div class="card"><h3>Import / Upload Additional Data (Merge)</h3><p class="hint">Adds members, loans, transactions, meetings, CIF, Revolving Fund and Bank Loan (TL/CC) entries from a JSON file to what's already here — existing data is kept, nothing is overwritten. Use this to bring in more test entries (e.g. an edited copy of a sample data file, or the file downloaded from Complete Sample Data below) without starting over. Records whose ID already exists are skipped, not duplicated.</p>
     <input type="file" id="importFile" accept="application/json">
     <button class="btn secondary" style="margin-top:8px" onclick="importMergeJSON()">Import &amp; Merge</button></div>`;
   html += `<div class="card"><h3>Sample Demo Data</h3><p class="hint">${DB.settings.demoDataLoaded ? 'Demo data is currently loaded in the app.' : 'Adds a clearly-labelled DEMO SHG with sample members, meetings, savings and loans so you can explore the app before entering real records.'}</p>
     ${DB.settings.demoDataLoaded ? `<button class="btn secondary danger" onclick="clearDemoData()">Clear Demo Data</button>` : `<button class="btn secondary" onclick="loadDemoData()">Load Sample Demo Data</button>`}</div>`;
+  html += `<div class="card"><h3>Complete Sample Data (Learning — every field filled)</h3><p class="hint">${DB.settings.sampleDataLoaded ? 'Complete Sample Data is currently loaded in the app.' : 'A separate, fully-filled sample SHG (independent of the Sample Demo Data above): 15 members with every field completed, monthly meetings with agenda from 1-Apr-2025 to date, ₹100/member/month savings, member loans with repayments, a Revolving Fund receipt (₹20,000), a CIF tranche (₹1,50,000) and BOTH a Term Loan and a Cash Credit facility borrowed by the SHG — clearly tagged internally as SAMPLE.'}</p>
+    <div class="row">
+      ${DB.settings.sampleDataLoaded ? `<button class="btn secondary danger" onclick="clearSampleData()">Clear Sample Data</button>` : `<button class="btn secondary" onclick="loadCompleteSampleData()">Load Complete Sample Data</button>`}
+      <button class="btn secondary" onclick="downloadSampleDataJSON()">Download Sample Data (.json)</button>
+    </div>
+    <p class="hint" style="margin-top:6px">After clearing it from the app, the downloaded file can be brought back in any time via "Import / Upload Additional Data (Merge)" above, purely for verification/learning.</p></div>`;
   html += `<div class="card"><h3>Reset Application</h3><p class="hint">Permanently erases all data on this device and starts fresh.</p>
     <button class="btn danger" onclick="resetApp()">Erase All Data</button></div>`;
   return html;
@@ -5730,7 +5869,7 @@ function importMergeJSON(){
   reader.onload = function(e){
     try{
       const data = JSON.parse(e.target.result);
-      const counts = {members:0, loans:0, transactions:0, meetings:0, cif:0, skipped:0};
+      const counts = {members:0, loans:0, transactions:0, meetings:0, cif:0, revolvingFund:0, bankLoans:0, skipped:0};
       let maxSeq = DB.seq||1;
       const bumpSeq = id => { const m = String(id).match(/(\d+)$/); if(m) maxSeq = Math.max(maxSeq, parseInt(m[1],10)+1); };
 
@@ -5747,6 +5886,15 @@ function importMergeJSON(){
         DB.meetings.push(mt); counts.meetings++; bumpSeq(mt.id);
       });
       (data.cif||[]).forEach(c=>{ DB.cif.push(c); counts.cif++; });
+      // Revolving Fund entries carry no id of their own (same as when entered through Record RF
+      // Received), so — like CIF above — they are simply appended, never de-duplicated by id.
+      (data.revolvingFund||[]).forEach(r=>{ DB.revolvingFund.push(r); counts.revolvingFund++; });
+      // Bank Loan (TL/CC) facilities DO carry their own id (BKLN-...), so they are de-duplicated
+      // the same way Members/Loans/Meetings/Transactions are.
+      (data.bankLoans||[]).forEach(b=>{
+        if(DB.bankLoans.some(x=>x.id===b.id)){ counts.skipped++; return; }
+        DB.bankLoans.push(b); counts.bankLoans++; bumpSeq(b.id);
+      });
       (data.transactions||[]).forEach(t=>{
         if(DB.transactions.some(x=>x.id===t.id)){ counts.skipped++; return; }
         DB.transactions.push(t); counts.transactions++; bumpSeq(t.id);
@@ -5756,8 +5904,8 @@ function importMergeJSON(){
       DB.seq = maxSeq;
 
       const tb = generateTrialBalance();
-      logAudit('IMPORT_MERGE', counts.members+' member(s), '+counts.loans+' loan(s), '+counts.meetings+' meeting(s), '+counts.transactions+' transaction(s) imported; '+counts.skipped+' duplicate(s) skipped');
-      let msg = 'Imported '+counts.members+' member(s), '+counts.loans+' loan(s), '+counts.meetings+' meeting(s), '+counts.transactions+' transaction(s)'+(counts.skipped?(' — '+counts.skipped+' duplicate id(s) skipped'):'')+'.';
+      logAudit('IMPORT_MERGE', counts.members+' member(s), '+counts.loans+' loan(s), '+counts.meetings+' meeting(s), '+counts.bankLoans+' bank facility(ies), '+counts.transactions+' transaction(s) imported; '+counts.skipped+' duplicate(s) skipped');
+      let msg = 'Imported '+counts.members+' member(s), '+counts.loans+' loan(s), '+counts.meetings+' meeting(s), '+counts.cif+' CIF tranche(s), '+counts.revolvingFund+' Revolving Fund entr(y/ies), '+counts.bankLoans+' bank facility(ies), '+counts.transactions+' transaction(s)'+(counts.skipped?(' — '+counts.skipped+' duplicate id(s) skipped'):'')+'.';
       if(tb.diff!==0) msg += ' Note: Trial Balance now shows a difference of '+rupee(Math.abs(tb.diff))+' — check Data Quality if you imported transactions without their related records.';
       flash(tb.diff!==0?'error':'ok', msg);
       render();
@@ -6065,6 +6213,36 @@ function aiAsk(qRaw){
       figures:[aiT('Income (month): ','आय (माह): ')+rupee(mIe.income), aiT('Expenditure (month): ','व्यय (माह): ')+rupee(mIe.expenditure), aiT('Surplus/(Deficit): ','अधिशेष/(घाटा): ')+rupee(mIe.surplus)],
       evidence:[aiT('From incomeExpenditure(), the same function behind Financial Statements','incomeExpenditure() से, जो वित्तीय विवरण के पीछे भी वही फ़ंक्शन है')]});
   }
+  if(has('meeting','collection','counted','मीटिंग','संग्रह','गिनती') && has('difference','mismatch','not match','not tally','discrepancy','अंतर','बेमेल','फर्क')) {
+    const withDiff = DB.meetings.filter(mt=>mt.actualReceived!=null).map(mt=>{
+      const entryTotal = Math.round((mt.totals.savings+mt.totals.principal+mt.totals.interest+mt.totals.fines)*100)/100;
+      const diff = Math.round((mt.actualReceived-entryTotal)*100)/100;
+      return {mt, entryTotal, diff};
+    }).filter(x=>x.diff!==0).sort((a,b)=>b.mt.date<a.mt.date?-1:1);
+    if(!withDiff.length) return Object.assign({}, base, {answer: aiT('No meeting shows a difference between cash actually counted and what was entered — every meeting with a counted amount reconciles exactly.','किसी भी मीटिंग में गिने गए नकद और दर्ज प्रविष्टियों के बीच कोई अंतर नहीं है — गिनती वाली हर मीटिंग पूरी तरह मेल खाती है।')});
+    const top = withDiff.slice(0,10);
+    return Object.assign({}, base, {
+      answer: aiT(`${withDiff.length} meeting(s) show a counted-vs-entries difference, totalling ${rupee(top.reduce((s,x)=>s+Math.abs(x.diff),0))} on the meetings shown below.`, `${withDiff.length} मीटिंग(ओं) में गिनती और प्रविष्टियों के बीच अंतर है।`),
+      figures: top.map(x=>fmtDate(x.mt.date)+' — Entries total '+rupee(x.entryTotal)+', Counted '+rupee(x.mt.actualReceived)+', Difference '+rupee(x.diff)+' ('+x.mt.id+')'),
+      evidence:[aiT('Computed as Meeting.actualReceived − (savings+principal+interest+fines), the same reconciliation shown when the meeting was posted','मीटिंग पोस्ट करते समय दिखाई गई उसी सुलह गणना से — Meeting.actualReceived − (savings+principal+interest+fines)')],
+      action: aiT('Open the meeting in Meetings → Details to see the entry-wise breakup and correct whichever entry caused the difference.','मीटिंग में गई गलत प्रविष्टि को ठीक करने के लिए मीटिंग्स → विवरण खोलें।')});
+  }
+  if(has('difference','mismatch','not match','not tally','discrepancy','अंतर','बेमेल','फर्क') && !has('trial balance','तलपट')) {
+    const meetingDiffs = DB.meetings.filter(mt=>mt.actualReceived!=null).filter(mt=>{
+      const entryTotal = mt.totals.savings+mt.totals.principal+mt.totals.interest+mt.totals.fines;
+      return Math.round((mt.actualReceived-entryTotal)*100)/100 !== 0;
+    }).length;
+    const parts = [];
+    if(c.tb.diff!==0) parts.push(aiT('Trial Balance is out by '+rupee(Math.abs(c.tb.diff)), 'तलपट में '+rupee(Math.abs(c.tb.diff))+' का अंतर है'));
+    if(meetingDiffs>0) parts.push(aiT(meetingDiffs+' meeting(s) have a counted-vs-entries difference', meetingDiffs+' मीटिंग(ओं) में गिनती-प्रविष्टि अंतर है'));
+    if(c.dqRed>0) parts.push(aiT(c.dqRed+' critical Data Quality issue(s) — several are exactly this kind of mismatch', c.dqRed+' गंभीर डेटा गुणवत्ता समस्याएँ'));
+    if(!parts.length) return Object.assign({}, base, {answer: aiT('No difference or mismatch was found anywhere this app checks — Trial Balance is matched, every meeting with a counted amount reconciles, and Data Quality Check shows no critical issues.','इस ऐप द्वारा जाँची गई किसी भी जगह कोई अंतर/बेमेल नहीं मिला — तलपट मेल खाता है, गिनती वाली हर मीटिंग सुलझी हुई है, और डेटा गुणवत्ता जाँच में कोई गंभीर समस्या नहीं है।')});
+    return Object.assign({}, base, {
+      answer: aiT('Here is every difference/mismatch this app currently finds: '+parts.join('; ')+'.', 'इस ऐप को मिले सभी अंतर/बेमेल: '+parts.join('; ')+'।'),
+      figures: c.dq.filter(i=>i.sev==='red').slice(0,10).map(i=>'['+i.sev.toUpperCase()+'] '+i.text+(i.fix?(' → '+i.fix):'')),
+      evidence:[aiT('Cross-checked from generateTrialBalance(), each meeting\'s own actualReceived vs entries, and runDataQuality() — the same functions behind Trial Balance, Meetings and Data Quality Check','generateTrialBalance(), हर मीटिंग के actualReceived बनाम प्रविष्टियाँ, और runDataQuality() से क्रॉस-चेक किया गया')],
+      action: aiT('Open Data Quality Check for the full list with a suggested fix for each item, or ask "why is the Trial Balance not matching" / "meeting collection difference" for more detail on either.','हर मद के लिए सुझाए गए सुधार सहित पूरी सूची हेतु डेटा गुणवत्ता जाँच खोलें।')});
+  }
   if(has('trial balance','तलपट') && has('why','not match','mismatch','wrong','not matching','not balanced','क्यों','मेल नहीं','बेमेल')) return Object.assign({}, base, {
     answer: c.tb.diff===0 ? aiT('The Trial Balance is matched — Total Debit equals Total Credit.','तलपट (Trial Balance) मेल खा रहा है — कुल डेबिट, कुल क्रेडिट के बराबर है।') : aiT(`The Trial Balance does not match by ${rupee(Math.abs(c.tb.diff))}. This should never happen since every voucher enforces equal debit and credit at the time of posting.`, `तलपट (Trial Balance) ${rupee(Math.abs(c.tb.diff))} से मेल नहीं खा रहा। ऐसा कभी नहीं होना चाहिए, क्योंकि हर वाउचर पोस्ट करते समय डेबिट-क्रेडिट बराबर होना अनिवार्य है।`),
     figures:[aiT('Total Debit: ','कुल डेबिट: ')+rupee(c.tb.totalDr), aiT('Total Credit: ','कुल क्रेडिट: ')+rupee(c.tb.totalCr), aiT('Difference: ','अंतर: ')+rupee(c.tb.diff)],
@@ -6123,6 +6301,7 @@ function viewAIAsk(){
     ['What was the income this month?','इस माह की आय कितनी थी?'],
     ['What is the total savings?','कुल बचत कितनी है?'],
     ['Why is the Trial Balance not matching?','तलपट मेल क्यों नहीं खा रहा?'],
+    ['Are there any differences or mismatches in my data?','मेरे डेटा में कोई अंतर या बेमेल है?'],
     ['Which members have not paid this month?','इस माह किन सदस्यों ने जमा नहीं किया?'],
     ['Explain the financial position of this SHG.','इस एसएचजी की वित्तीय स्थिति समझाएँ।'],
     ['What data is missing?','कौन सा डेटा गायब है?'],
@@ -6687,14 +6866,14 @@ function seedDemoDataCore(){
         }
         if(i===0 && idx<4){
           const amt = 5000+idx*1000;
-          const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
+          const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, interestMethod:'reducing', status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
           DB.loans.push(loan);
           try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); newLoansTotal += amt; }catch(e){}
         }
         // A second wave of loans a year in, so the demo history shows more than one lending cycle.
         if(i===12 && idx>=4 && idx<8){
           const amt = 8000+(idx-4)*1500;
-          const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business, cycle 2 (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
+          const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business, cycle 2 (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, interestMethod:'reducing', status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
           DB.loans.push(loan);
           try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); newLoansTotal += amt; }catch(e){}
         }
@@ -6711,7 +6890,7 @@ function seedDemoDataCore(){
           if(loan && Math.random()>0.2 && outstandingBefore>0.5){
             const inst = Math.round(loan.principal/loan.instalments);
             const rp = Math.min(inst, outstandingBefore);
-            const ri = Math.round(loan.principal*loan.interestRate/1200);
+            const ri = Math.round(outstandingBefore*loan.interestRate/1200);
             try{
               postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:rp,memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
               principalTotal += rp;
@@ -6775,6 +6954,372 @@ function clearDemoData(){
   logAudit('CLEAR_DEMO','All demo records removed');
   flash('ok','Demo data cleared.');
   ROUTE='dashboard'; render();
+}
+
+/* ============================================================ COMPLETE SAMPLE DATA (LEARNING) ============================================================ */
+// A SEPARATE, fully deterministic dataset from the randomised "Load Sample Demo Data" above —
+// every field on every record is filled in (not just the minimum needed to make a screen work),
+// so a user can see every part of the app populated with realistic, complete records: 15 members
+// with every Member field filled, an SHG Profile with every field filled, monthly meetings from
+// 1-Apr-2025 to date each with a filled agenda (not just attendance), ₹100/member/month savings,
+// member loans with real repayments, a Revolving Fund receipt (₹20,000), a CIF tranche
+// (₹1,50,000, with a repayment), and BOTH a Term Loan and a Cash Credit facility borrowed by the
+// SHG itself from the bank, each drawn down and partly repaid. Tagged `sample:true` throughout
+// (see postTxn's SAMPLE_MODE tag) — entirely independent of the `demo:true` Load/Clear Demo Data
+// feature above, so either, both or neither can be loaded at the same time without interfering.
+//
+// Deliberately built by constructing the same record shapes the real screens themselves save
+// (Member, Meeting, Loan, CIF, Revolving Fund, Bank Loan) and posting through postTxn()/logAudit()
+// directly — exactly the pattern already used by seedDemoDataCore() above — rather than by faking
+// FormData through the on-screen forms, which would mean temporarily replacing the real, global
+// window.FormData constructor in a function that ships in the production app.
+const SAMPLE_AGENDA_TOPICS = [
+  {topic:'Collection of Monthly Savings', discussion:'Monthly savings of ₹100 per member collected and entered in individual passbooks; running balances read out for verification by members present.'},
+  {topic:'Review of Loan Repayments', discussion:'Instalment-wise recovery position reviewed member-wise; members with an instalment due next month reminded to keep it ready.'},
+  {topic:'Loan Applications & Sanction', discussion:'Loan applications received from members discussed for purpose, amount and repayment capacity; eligible applications sanctioned by group consensus.'},
+  {topic:'CIF / Bank Linkage Update', discussion:'Status of the Community Investment Fund and the SHG\'s bank credit linkage (Term Loan/Cash Credit) shared with members; utilisation and repayment discipline discussed.'},
+  {topic:'Revolving Fund Utilisation Review', discussion:'Use of the Revolving Fund support received from the Village Organisation reviewed, to ensure it continues to strengthen the group\'s internal-lending corpus.'},
+  {topic:'Attendance & Group Discipline', discussion:'Importance of regular attendance and timely savings/repayment discussed; members appreciated for consistent participation this month.'},
+  {topic:'Health & Social Awareness', discussion:'Brief awareness discussion on hygiene, nutrition and government welfare schemes relevant to member households.'},
+  {topic:'Book-keeping & Records Review', discussion:'Cashbook, ledger and member passbooks reviewed and reconciled with the bookkeeper before closing the meeting.'},
+  {topic:'Preparation for Grading / Audit', discussion:'Members briefed on the upcoming SHG grading/audit process and the importance of keeping books accurate and up to date.'},
+  {topic:'Livelihood & Income Generation', discussion:'Members shared updates on their individual/group livelihood activities; ideas for skill training and market linkage discussed.'}
+];
+function seedCompleteSampleData(){
+  SAMPLE_MODE = true;
+  try{
+    if(!DB.profile.name){
+      Object.assign(DB.profile, {
+        name:'Saraswati Mahila SHG', shgId:'SHG-SAMPLE-001', state:'Haryana', district:'Gurugram', block:'Farrukhnagar',
+        gp:'Kasan Gram Panchayat', village:'Kasan', voClf:'Kasan Village Organisation',
+        formationDate:'2025-04-01', meetingDay:'Monday', meetingFrequency:'Monthly', financialYearStart:'04-01',
+        president:'Sunita Devi', secretary:'Rekha Kumari', treasurer:'Meena Yadav', contact:'9811100001'
+      });
+      DB.settings.sampleProfileApplied = true;
+    }
+    if(!DB.profile.banks.length){
+      DB.profile.banks.push({bank:'State Bank of India', branch:'Farrukhnagar', accno:'38921456700', ifsc:'SBIN0007865', upiId:'saraswatishg@sbi', upiLinked:true});
+      DB.settings.sampleBankApplied = true;
+    }
+    const bankAcctStr = DB.profile.banks.length ? (DB.profile.banks[0].bank+' - '+DB.profile.banks[0].accno) : '';
+    const meetingPlace = (DB.profile.village||'Kasan')+' Community Hall';
+
+    // --- 15 Members, every field filled ---
+    const memberSeed = [
+      {name:'Sunita Devi',   husband:'Ram Kumar',       occupation:'Dairy Farming',   nominee:'Ram Kumar (Husband)'},
+      {name:'Rekha Kumari',  husband:'Suresh Chand',    occupation:'Tailoring',       nominee:'Suresh Chand (Husband)'},
+      {name:'Meena Yadav',   husband:'Vijay Singh',     occupation:'Agriculture',     nominee:'Vijay Singh (Husband)'},
+      {name:'Kamla Devi',    husband:'Om Prakash',      occupation:'Petty Shop',      nominee:'Om Prakash (Husband)'},
+      {name:'Pooja Sharma',  husband:'Ashok Kumar',     occupation:'Handicrafts',     nominee:'Ashok Kumar (Husband)'},
+      {name:'Anita Rani',    husband:'Rajesh Kumar',    occupation:'Dairy Farming',   nominee:'Rajesh Kumar (Husband)'},
+      {name:'Savita Devi',   husband:'Mahender Singh',  occupation:'Agriculture',     nominee:'Mahender Singh (Husband)'},
+      {name:'Geeta Kumari',  husband:'Naresh Kumar',    occupation:'Tailoring',       nominee:'Naresh Kumar (Husband)'},
+      {name:'Radha Devi',    husband:'Satpal Singh',    occupation:'Petty Shop',      nominee:'Satpal Singh (Husband)'},
+      {name:'Suman Lata',    husband:'Jai Bhagwan',     occupation:'Handicrafts',     nominee:'Jai Bhagwan (Husband)'},
+      {name:'Kavita Rani',   husband:'Dharmender',      occupation:'Dairy Farming',   nominee:'Dharmender (Husband)'},
+      {name:'Neelam Devi',   husband:'Ravinder Singh',  occupation:'Agriculture',     nominee:'Ravinder Singh (Husband)'},
+      {name:'Usha Rani',     husband:'Baljeet Singh',   occupation:'Poultry Farming', nominee:'Baljeet Singh (Husband)'},
+      {name:'Vimla Devi',    husband:'Krishan Kumar',   occupation:'Tailoring',       nominee:'Krishan Kumar (Husband)'},
+      {name:'Shanti Devi',   husband:'Hoshiyar Singh',  occupation:'Petty Shop',      nominee:'Hoshiyar Singh (Husband)'}
+    ];
+    const newMembers = memberSeed.map((s,idx)=>({
+      id: nextId('MEM'), name:s.name, fatherHusband:s.husband, relation:'W/o', gender:'Female',
+      mobile:'98111'+String(10001+idx).padStart(5,'0'),
+      email:s.name.toLowerCase().replace(/[^a-z]+/g,'.')+'@sample-shg.in',
+      village: DB.profile.village||'Kasan', doj:'2025-04-01', status:'Active', occupation:s.occupation, nominee:s.nominee,
+      bankAccno:'3892145'+String(6800+idx).padStart(4,'0'), bankIfsc:'SBIN0007865', sample:true
+    }));
+    DB.members = DB.members.concat(newMembers);
+
+    // --- Opening balances (only if this device has no cash/bank figures yet) ---
+    if(accountBalance('CASH')===0 && accountBalance('BANK')===0){
+      try{ postOpeningBalances(20000, 80000, '2025-04-01'); DB.settings.sampleOpeningApplied = true; }catch(e){}
+    }
+
+    // --- Revolving Fund — ₹20,000 (RF has no repayment feature in this app; a receipt is the whole record) ---
+    const RF_DATE = '2025-04-07';
+    DB.revolvingFund.push({date:RF_DATE, source:(DB.profile.voClf||'Village Organisation'), amount:20000, rate:0, period:60, bank:'BANK', sample:true});
+    try{ postTxn({date:RF_DATE, type:'Revolving Fund Receipt', debit:'BANK', credit:'REVOLVING_FUND', amount:20000, narration:'Revolving Fund received from '+(DB.profile.voClf||'Village Organisation')}); }catch(e){}
+
+    // --- CIF — ₹1,50,000, received then partly repaid ---
+    const CIF_DATE = '2025-05-02';
+    const cifRec = { id: nextId('CIF'), date:CIF_DATE, source:(DB.profile.voClf||'Village Organisation')+'/CLF', amount:150000, rate:9,
+      period:36, interestMethod:'reducing', frequency:'Monthly', bank:'BANK', status:'Active', sample:true };
+    DB.cif.push(cifRec);
+    try{ postTxn({date:CIF_DATE, type:'CIF Receipt', debit:'BANK', credit:'CIF', amount:150000, cifId:cifRec.id, narration:'CIF received from '+cifRec.source+' ('+cifRec.id+')'}); }catch(e){}
+    const CIF_REPAY_DATE = '2026-02-02';
+    if(CIF_REPAY_DATE<=todayStr()){
+      try{
+        const cifOut = cifTrancheOutstanding(cifRec.id);
+        const cifRP = Math.min(15000, cifOut);
+        const cifRI = Math.round(cifOut*cifRec.rate/1200);
+        if(cifRP>0) postTxn({date:CIF_REPAY_DATE, type:'CIF Repayment', debit:'CIF', credit:'BANK', amount:cifRP, cifId:cifRec.id,
+          narration:'Principal repaid — '+cifRec.id+' — instalment repayment to '+cifRec.source});
+        if(cifRI>0) postTxn({date:CIF_REPAY_DATE, type:'CIF Interest', debit:'INTEREST_EXPENSE', credit:'BANK', amount:cifRI, cifId:cifRec.id,
+          narration:'Interest paid — '+cifRec.id});
+        if(cifTrancheOutstanding(cifRec.id)<=0.5) cifRec.status='Closed';
+      }catch(e){}
+    }
+
+    // --- Bank Loan to SHG: Term Loan ---
+    const tl = { id: nextId('BKLN'), type:'TL', loanAccountNo:'TL-SBI-778899', sanctionDate:'2025-04-05', sanctionedAmount:300000,
+      rate:9.5, tenureMonths:36, bankAccount:bankAcctStr, repayFrequency:'Monthly', instalmentAmount:9500, nextDueDate:'',
+      narration:'Term Loan availed for group livelihood & income-generation activities', status:'Active',
+      interestSlabs:[{fromDate:'2025-04-05', rate:9.5}], sample:true };
+    DB.bankLoans.push(tl);
+    logAudit('BANK_LOAN_SANCTIONED', tl.id+' (TL, A/c No. '+tl.loanAccountNo+') sanctioned — '+rupee(300000));
+    try{
+      postTxn({date:'2025-04-07', type:'Bank Loan Drawal', debit:'BANK', credit:'BANK_TL', amount:200000, bankLoanId:tl.id,
+        narration:'Drawal against '+tl.id+' (TL) [A/c No. '+tl.loanAccountNo+' → '+bankAcctStr+'] — full disbursement received into SHG bank account'});
+      tl.nextDueDate = addPeriod('2025-04-07',1,'Monthly');
+    }catch(e){}
+    [['2025-07-10',15000,4750], ['2026-01-10',15000,4275], ['2026-07-10',15000,3800]].forEach(([d,pr,it])=>{
+      if(d>todayStr() || tl.status==='Closed') return;
+      try{
+        const outstanding = bankLoanOutstanding(tl.id);
+        const rp = Math.min(pr, outstanding);
+        if(rp<=0) return;
+        postTxn({date:d, type:'Bank Loan Repayment', debit:'BANK_TL', credit:'BANK', amount:rp, bankLoanId:tl.id,
+          narration:'Principal repaid — '+tl.id+' (TL) [A/c No. '+tl.loanAccountNo+' ← '+bankAcctStr+'] — instalment repayment'});
+        if(it>0) postTxn({date:d, type:'Bank Loan Interest', debit:'INTEREST_EXPENSE', credit:'BANK', amount:it, bankLoanId:tl.id,
+          narration:'Interest paid — '+tl.id+' (TL) [A/c No. '+tl.loanAccountNo+' ← '+bankAcctStr+'] — instalment interest'});
+        if(bankLoanOutstanding(tl.id)<=0.5){ tl.status='Closed'; tl.nextDueDate=''; }
+        else tl.nextDueDate = addPeriod(d, 1, tl.repayFrequency||'Monthly');
+      }catch(e){}
+    });
+
+    // --- Bank Loan to SHG: Cash Credit ---
+    const cc = { id: nextId('BKLN'), type:'CC', loanAccountNo:'CC-SBI-556677', sanctionDate:'2025-04-05', sanctionedAmount:150000,
+      rate:11, tenureMonths:12, bankAccount:bankAcctStr, repayFrequency:'Quarterly', instalmentAmount:4125, nextDueDate:'',
+      narration:'Cash Credit facility for working-capital support to internal lending', status:'Active',
+      interestSlabs:[{fromDate:'2025-04-05', rate:11}], sample:true };
+    DB.bankLoans.push(cc);
+    logAudit('BANK_LOAN_SANCTIONED', cc.id+' (CC, A/c No. '+cc.loanAccountNo+') sanctioned — '+rupee(150000));
+    try{
+      postTxn({date:'2025-04-09', type:'Bank Loan Drawal', debit:'BANK', credit:'BANK_CC', amount:80000, bankLoanId:cc.id,
+        narration:'Drawal against '+cc.id+' (CC) [A/c No. '+cc.loanAccountNo+' → '+bankAcctStr+'] — working-capital drawdown'});
+      cc.nextDueDate = addPeriod('2025-04-09',1,'Quarterly');
+    }catch(e){}
+    let lastCCInt = '2025-04-09';
+    ['2025-07-09','2026-01-09','2026-07-09'].forEach(d=>{
+      if(d>todayStr()) return;
+      try{
+        const calc = computeBankLoanInterestSlabwise(cc.id, lastCCInt, d);
+        if(calc.total>0) postTxn({date:d, type:'Bank Loan Interest', debit:'INTEREST_EXPENSE', credit:'BANK', bankLoanId:cc.id, amount:calc.total,
+          narration:'Interest paid — '+cc.id+' (CC) [A/c No. '+cc.loanAccountNo+' ← '+bankAcctStr+'] — slab-wise interest'});
+        lastCCInt = d;
+        cc.nextDueDate = addPeriod(d, 1, cc.repayFrequency||'Quarterly');
+      }catch(e){}
+    });
+    if('2026-02-09'<=todayStr()){
+      try{
+        const ccOut = bankLoanOutstanding(cc.id);
+        const ccRP = Math.min(20000, ccOut);
+        if(ccRP>0){
+          postTxn({date:'2026-02-09', type:'Bank Loan Repayment', debit:'BANK_CC', credit:'BANK', amount:ccRP, bankLoanId:cc.id,
+            narration:'Principal repaid — '+cc.id+' (CC) [A/c No. '+cc.loanAccountNo+' ← '+bankAcctStr+'] — partial CC principal repayment'});
+          if(bankLoanOutstanding(cc.id)<=0.5){ cc.status='Closed'; cc.nextDueDate=''; }
+        }
+      }catch(e){}
+    }
+
+    // --- Member Loans: three "standalone" disbursement waves (like a real New Loan entry, not
+    // tied to a specific meeting) covering 14 of the 15 members; the 15th member's loan is
+    // sanctioned live in a meeting below (Wave C), so both disbursement paths are demonstrated ---
+    // Disbursed via BANK, not cash-in-hand — these standalone waves total well beyond the SHG's
+    // modest opening cash of ₹20,000 (a realistic amount for a village meeting's cash box), and
+    // cash-in-hand can never go negative (postTxn() itself refuses that). A bank transfer for a
+    // sanctioned loan is also simply how most SHGs actually disburse a larger loan in practice.
+    function disburseSampleLoan(member, principal, rate, instalments, purpose, dateStr){
+      if(dateStr>todayStr()) return null;
+      const loan = { id: nextId('LOAN'), memberId:member.id, purpose, sanctionDate:dateStr, disbursementDate:dateStr, mode:'BANK',
+        principal, interestRate:rate, instalments, frequency:'Monthly', interestMethod:'reducing', status:'Active',
+        nextDueDate: addPeriod(dateStr,1,'Monthly'), sample:true };
+      DB.loans.push(loan);
+      try{
+        postTxn({date:dateStr, type:'Disbursement', debit:'MEMBER_LOANS', credit:'BANK', amount:principal, memberId:member.id, loanId:loan.id,
+          narration:'Loan disbursed (Bank transfer) — '+member.name});
+        logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+member.name+' — '+rupee(principal));
+      }catch(e){}
+      return loan;
+    }
+    const wavePurposes = ['Dairy animal purchase','Tailoring equipment','Agricultural inputs','Petty shop stock','Handicraft raw material','Dairy animal purchase','Agricultural inputs','Petty shop stock'];
+    newMembers.slice(0,8).forEach((m,idx)=>disburseSampleLoan(m, 6000+idx*1000, 12, 10, wavePurposes[idx], '2025-04-02'));
+    const wavePurposesB = ['Poultry farming','Handicraft raw material','Dairy animal purchase','Agricultural inputs'];
+    newMembers.slice(8,12).forEach((m,idx)=>disburseSampleLoan(m, 8000+idx*1500, 12, 10, wavePurposesB[idx], '2025-10-02'));
+    disburseSampleLoan(newMembers[13], 9000, 13, 6, 'Tailoring equipment upgrade', '2026-06-02');
+    disburseSampleLoan(newMembers[14], 9500, 13, 6, 'Petty shop expansion', '2026-06-02');
+
+    // --- Monthly meetings: 1-Apr-2025 through the current month, ₹100/member/month savings,
+    // full attendance, loan repayments, a filled agenda every time, plus periodic expense,
+    // fine, withdrawal, bank deposit and reconciliation entries so every optional field on the
+    // Meeting record is exercised at least once across the run. ---
+    const ymAdd = (ym,n)=>{ const [y,m]=ym.split('-').map(Number); const d=new Date(y,m-1+n,1); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); };
+    const monthsBetweenYM = (a,b)=>{ const [ay,am]=a.split('-').map(Number); const [by,bm]=b.split('-').map(Number); return (by-ay)*12+(bm-am); };
+    const today = new Date();
+    const endYM = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0');
+    const totalMonths = monthsBetweenYM('2025-04', endYM);
+    const presentIds = newMembers.map(m=>m.id);
+
+    for(let i=0; i<=totalMonths; i++){
+      const ym = ymAdd('2025-04', i);
+      const dateStr = ym+'-04';
+      if(dateStr>todayStr()) break;
+      if(isPeriodClosed(dateStr)) continue;
+      const meetingId = nextId('MTG');
+      let savingsTotal=0, principalTotal=0, interestTotal=0, fineTotal=0, wdTotal=0, newLoansTotal=0;
+
+      newMembers.forEach(m=>{
+        try{ postTxn({date:dateStr, type:'Savings', debit:'CASH', credit:'MEMBER_SAVINGS', amount:100, memberId:m.id, meetingId,
+          narration:'Meeting savings — '+m.name}); savingsTotal += 100; }catch(e){}
+      });
+
+      // A live, meeting-sanctioned new loan for the 15th member (Wave C) — the other 14 members'
+      // loans were disbursed via the standalone New Loan path above.
+      if(i===3){
+        const nlMember = newMembers[12];
+        const loan = { id: nextId('LOAN'), memberId:nlMember.id, purpose:'Poultry shed construction', sanctionDate:dateStr, disbursementDate:dateStr, mode:'CASH',
+          principal:7000, interestRate:11, instalments:8, frequency:'Monthly', interestMethod:'reducing', status:'Active',
+          nextDueDate: addPeriod(dateStr,1,'Monthly'), sample:true };
+        DB.loans.push(loan);
+        try{
+          postTxn({date:dateStr, type:'Disbursement', debit:'MEMBER_LOANS', credit:'CASH', amount:7000, memberId:nlMember.id, loanId:loan.id, meetingId,
+            narration:'Loan disbursed — '+nlMember.name+' (sanctioned in meeting)'});
+          logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+nlMember.name+' — '+rupee(7000)+' (via meeting)');
+          newLoansTotal += 7000;
+        }catch(e){}
+      }
+
+      // Loan repayments — every sample loan disbursed in an EARLIER calendar month than this
+      // meeting (never the same month it was disbursed in, which would collect an instalment
+      // before one is actually due) gets its reducing-balance instalment collected here, capped
+      // at whatever is actually still outstanding/due so nothing ever over-posts. Interest is
+      // charged only on the principal actually outstanding BEFORE this instalment's principal is
+      // deducted — the same reducing-balance definition generateLoanSchedule() uses everywhere
+      // else — never a flat rate on the original principal.
+      DB.loans.filter(l=>l.sample && l.status==='Active' && l.disbursementDate<dateStr && l.disbursementDate.slice(0,7)!==dateStr.slice(0,7)).forEach(loan=>{
+        try{
+          const outstanding = loanOutstanding(loan.id).principal;
+          if(outstanding<=0.5) return;
+          const inst = Math.round(loan.principal/loan.instalments);
+          const rp = Math.min(inst, outstanding);
+          const ri = Math.round(outstanding*loan.interestRate/1200);
+          postTxn({date:dateStr, type:'Loan Repayment', debit:'CASH', credit:'MEMBER_LOANS', amount:rp, memberId:loan.memberId, loanId:loan.id, meetingId,
+            narration:'Principal repayment — '+memberName(loan.memberId)+' ('+loan.id+')'});
+          principalTotal += rp;
+          if(ri>0){
+            postTxn({date:dateStr, type:'Interest Received', debit:'CASH', credit:'INTEREST_INCOME', amount:ri, memberId:loan.memberId, loanId:loan.id, meetingId,
+              narration:'Interest received — '+memberName(loan.memberId)+' ('+loan.id+')'});
+            interestTotal += ri;
+          }
+          if(loanEligibleForClosure(loan)){ loan.status='Closed'; loan.nextDueDate=''; logAudit('CLOSE_LOAN', loan.id+' marked closed (fully repaid)'); }
+        }catch(e){}
+      });
+
+      // A token fine (once) and a token savings withdrawal (once), so both fields are exercised.
+      if(i===5){ try{ postTxn({date:dateStr, type:'Fine', debit:'CASH', credit:'FINE_INCOME', amount:20, memberId:newMembers[2].id, meetingId,
+        narration:'Fine for late arrival — '+newMembers[2].name}); fineTotal += 20; }catch(e){} }
+      if(i===10){ try{ postTxn({date:dateStr, type:'Savings Withdrawal', debit:'MEMBER_SAVINGS', credit:'CASH', amount:300, memberId:newMembers[5].id, meetingId,
+        narration:'Savings withdrawal — '+newMembers[5].name+' (medical need)'}); wdTotal += 300; }catch(e){} }
+
+      // A small meeting expense every time (Stationery, approved by the Secretary) — every
+      // meeting's Expense field is filled, not just left at zero.
+      try{ postTxn({date:dateStr, type:'Expense', debit:'EXP_Stationery', credit:'CASH', amount:100, meetingId,
+        narration:'Stationery & register expense — Approved by '+(DB.profile.secretary||'Secretary')}); }catch(e){}
+
+      // A periodic bank deposit of surplus cash, filling the Meeting record's bankDeposit field
+      // (amount/bankAccount/ref) at least several times across the run.
+      let bankDeposit = null;
+      if(i%3===2){
+        const depositAmt = Math.min(5000, Math.max(0, accountBalance('CASH')));
+        if(depositAmt>100){
+          const ref = 'DEP-'+dateStr.replace(/-/g,'');
+          try{
+            postTxn({date:dateStr, type:'Bank Deposit', debit:'BANK', credit:'CASH', amount:depositAmt, meetingId,
+              narration:'Cash deposited to bank (meeting collection) — '+bankAcctStr+' · Ref# '+ref+' · Routine monthly surplus deposit'});
+            bankDeposit = {amount:depositAmt, bankAccount:bankAcctStr, ref};
+          }catch(e){}
+        }
+      }
+
+      const attendanceNote = 'Present ('+presentIds.length+'): '+newMembers.map(m=>m.name).join(', ')+'. Absent (0): —.';
+      const agendaItem = SAMPLE_AGENDA_TOPICS[i % SAMPLE_AGENDA_TOPICS.length];
+      const minutes = [{topic:'Attendance', discussion:attendanceNote}, agendaItem];
+
+      const totalCollection = Math.round((savingsTotal+principalTotal+interestTotal+fineTotal)*100)/100;
+      // A single deliberate small reconciliation mismatch (once), so the "counted vs entries"
+      // difference feature is also demonstrated — every other meeting reconciles exactly.
+      const actualReceived = (i===8) ? Math.round((totalCollection-50)*100)/100 : totalCollection;
+
+      DB.meetings.push({
+        id: meetingId, date:dateStr, place:meetingPlace, totalMembers:newMembers.length, present:newMembers.length,
+        presentIds:presentIds.slice(), absentIds:[],
+        totals:{savings:savingsTotal, principal:principalTotal, interest:interestTotal, fines:fineTotal, withdrawals:wdTotal, newLoans:newLoansTotal, expenses:100},
+        actualReceived, mode:'CASH', closingCash:accountBalance('CASH'), minutes, bankDeposit,
+        postedBy:DB.settings.currentUserName, postedAt:nowStamp(), sample:true
+      });
+      logAudit('POST_MEETING', meetingId+' on '+dateStr+' — '+newMembers.length+'/'+newMembers.length+' present, total collection '+rupee(totalCollection));
+    }
+
+    DB.settings.sampleDataLoaded = true;
+    logAudit('LOAD_SAMPLE','Complete Sample Data generated (2025-04-01 to '+todayStr()+')');
+  } finally {
+    SAMPLE_MODE = false;
+  }
+}
+function loadCompleteSampleData(){
+  if(DB.settings.sampleDataLoaded){ alert('Complete Sample Data is already loaded. Use "Clear Sample Data" first if you want to regenerate it.'); return; }
+  if(!confirm('This will add a fully-filled sample SHG — 15 members, monthly meetings with agenda from 1-Apr-2025, savings, member loans, a Revolving Fund receipt, a CIF tranche and a Term Loan + Cash Credit facility — clearly tagged as SAMPLE and independent of Demo Data. Continue?')) return;
+  seedCompleteSampleData();
+  flash('ok','Complete Sample Data loaded — every record is tagged internally and can be removed cleanly any time with "Clear Sample Data" in Backup & Restore. Use "Download Sample Data (.json)" there to keep a copy, or to re-import it later for verification.');
+  render();
+}
+function clearSampleData(){
+  if(!DB.settings.sampleDataLoaded && !DB.members.some(m=>m.sample)){ alert('No Complete Sample Data is currently loaded.'); return; }
+  if(!confirm('Remove all Complete Sample Data records? Your real SHG data (if any) and any separately-loaded Demo Data will not be touched.')) return;
+  DB.members = DB.members.filter(m=>!m.sample);
+  DB.loans = DB.loans.filter(l=>!l.sample);
+  DB.meetings = DB.meetings.filter(mt=>!mt.sample);
+  DB.cif = DB.cif.filter(c=>!c.sample);
+  DB.revolvingFund = DB.revolvingFund.filter(r=>!r.sample);
+  DB.bankLoans = DB.bankLoans.filter(b=>!b.sample);
+  DB.transactions = DB.transactions.filter(t=>!t.sample);
+  if(DB.settings.sampleProfileApplied){
+    Object.assign(DB.profile, {name:'', shgId:'', state:'', district:'', block:'', gp:'', village:'', voClf:'',
+      formationDate:'', president:'', secretary:'', treasurer:'', contact:''});
+    DB.settings.sampleProfileApplied = false;
+  }
+  if(DB.settings.sampleBankApplied){
+    DB.profile.banks = DB.profile.banks.filter(b=>b.accno!=='38921456700');
+    DB.settings.sampleBankApplied = false;
+  }
+  if(DB.settings.sampleOpeningApplied){
+    DB.settings.openingCash = 0; DB.settings.openingBank = 0; DB.settings.openingDate = '';
+    DB.settings.sampleOpeningApplied = false;
+  }
+  DB.settings.sampleDataLoaded = false;
+  logAudit('CLEAR_SAMPLE','All Complete Sample Data records removed');
+  flash('ok','Complete Sample Data cleared.');
+  ROUTE='dashboard'; render();
+}
+// Downloads exactly the sample-tagged subset of records, in the same shape importMergeJSON()
+// expects — so after clearing Complete Sample Data from the app, this file can be brought back
+// in via "Import / Upload Additional Data (Merge)" in Backup & Restore, purely for verification/
+// learning, without needing to click "Load Complete Sample Data" again.
+function downloadSampleDataJSON(){
+  if(!DB.members.some(m=>m.sample)){ alert('No Complete Sample Data is currently loaded — nothing to download.'); return; }
+  const data = {
+    members: DB.members.filter(m=>m.sample),
+    loans: DB.loans.filter(l=>l.sample),
+    meetings: DB.meetings.filter(mt=>mt.sample),
+    cif: DB.cif.filter(c=>c.sample),
+    revolvingFund: DB.revolvingFund.filter(r=>r.sample),
+    bankLoans: DB.bankLoans.filter(b=>b.sample),
+    transactions: DB.transactions.filter(t=>t.sample),
+    expenseCategories: DB.expenseCategories.slice()
+  };
+  downloadFile('shg_complete_sample_data_'+todayStr()+'.json', JSON.stringify(data,null,2), 'application/json');
+  logAudit('SAMPLE_DATA_EXPORT','Complete Sample Data downloaded for records/re-import');
 }
 
 /* ============================================================ INIT ============================================================ */
