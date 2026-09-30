@@ -3313,6 +3313,24 @@ function saveManualTxn(ev){
     if((data.credit==='MEMBER_LOANS' || data.credit==='INTEREST_INCOME') && !data.loanId){
       throw new Error('A '+(data.credit==='MEMBER_LOANS'?'principal':'interest')+' repayment must be attributed to a specific Loan ID — select the member first, then the loan.');
     }
+    // A loan repayment posted here must never exceed what is actually outstanding/due — over-
+    // posting is not allowed on any posting path, not just the Meeting wizard (which already
+    // enforces this, with an audit-trailed Authorised Adjustment for a genuine exception). This
+    // general voucher form has no such escape hatch by design: it is for entries the dedicated
+    // screens don't cover, and a genuine authorised excess against a member's loan (an advance
+    // payment, say) belongs in a meeting, where it is properly reasoned and recorded — never here.
+    if(data.credit==='MEMBER_LOANS' && data.loanId){
+      const amt = parseFloat(data.amount)||0;
+      const outstanding = loanOutstanding(data.loanId).principal;
+      if(amt > outstanding+0.5) throw new Error('This principal repayment ('+rupee(amt)+') exceeds loan '+data.loanId+'\'s outstanding balance ('+rupee(outstanding)+'). Over-posting is not allowed here — reduce the amount, or record a genuine authorised excess via Meetings (Authorised Adjustment).');
+    }
+    if(data.credit==='INTEREST_INCOME' && data.loanId){
+      const amt = parseFloat(data.amount)||0;
+      const loanForInterest = DB.loans.find(l=>l.id===data.loanId);
+      const due = loanForInterest ? memberDueInfos(loanForInterest.memberId, data.date||todayStr()).find(d=>d.loan.id===data.loanId) : null;
+      const ceiling = due ? due.totalInterestDue : 0;
+      if(amt > ceiling+0.5) throw new Error('This interest payment ('+rupee(amt)+') exceeds the interest currently due on loan '+data.loanId+' ('+rupee(ceiling)+'). Over-posting is not allowed here — reduce the amount, or record a genuine authorised excess via Meetings (Authorised Adjustment).');
+    }
     const typeByNature = {expense:'Expense', income:'Other Income', transfer:'Fund Transfer', advanced:'Journal'};
     data.type = typeByNature[data.nature] || 'Journal';
     postTxn(data);
@@ -6647,9 +6665,17 @@ function seedDemoDataCore(){
         }
         if(i>0){
           const loan = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed' && l.demo && l.disbursementDate<dateStr).sort((a,b)=>a.disbursementDate<b.disbursementDate?1:-1)[0];
-          if(loan && Math.random()>0.2){
+          // Cap the repayment at what is ACTUALLY still outstanding, and skip entirely once
+          // nothing is left to repay. `loanOutstanding(loan.id).principal || inst` (the previous
+          // form of this line) looks like a safe fallback but is a real bug: once a loan is fully
+          // repaid, outstanding is exactly 0, and `0 || inst` evaluates to `inst` in JavaScript
+          // (0 is falsy) — silently posting a further instalment against an already-settled loan,
+          // every month, for the rest of the demo period. That is exactly how demo loans ended up
+          // showing as repaid for more than their principal, flagged as a red Data Quality error.
+          const outstandingBefore = loan ? loanOutstanding(loan.id).principal : 0;
+          if(loan && Math.random()>0.2 && outstandingBefore>0.5){
             const inst = Math.round(loan.principal/loan.instalments);
-            const rp = Math.min(inst, loanOutstanding(loan.id).principal||inst);
+            const rp = Math.min(inst, outstandingBefore);
             const ri = Math.round(loan.principal*loan.interestRate/1200);
             try{
               postTxn({date:dateStr,type:'Loan Repayment',debit:'CASH',credit:'MEMBER_LOANS',amount:rp,memberId:m.id,loanId:loan.id,narration:'DEMO principal repayment — '+m.name});
