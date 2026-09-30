@@ -966,8 +966,9 @@ const NAV = [
   {id:'meetings', label:'Meetings', icon:'◷'},
   {id:'savings', label:'Members Savings', icon:'●'},
   {id:'loans', label:'Members Loan', icon:'◐'},
-  {id:'cif', label:'CIF', icon:'◑'},
   {id:'revolvingfund', label:'Revolving Fund (RF)', icon:'◒'},
+  {id:'cif', label:'CIF', icon:'◑'},
+  {id:'bankloan', label:'Bank Loan to SHG', icon:'🏛'},
   {id:'corpus', label:'Corpus', icon:'✪'},
   {grp:'Accounting'},
   {id:'transactions', label:'Transactions / Vouchers', icon:'≡'},
@@ -986,7 +987,6 @@ const NAV = [
   {grp:'Bank Linkage'},
   {id:'mcp', label:'Micro Credit Plan (MCP)', icon:'📋'},
   {id:'bankapp', label:'Bank Loan Application', icon:'🏦'},
-  {id:'bankloan', label:'Bank Loan to SHG', icon:'🏛'},
   {id:'closing', label:'Month-End Closing', icon:'🔒'},
   {id:'audit', label:'Audit Trail', icon:'🕘'},
   {grp:'Records'},
@@ -3163,27 +3163,50 @@ function bankLoanSanctionForm(){
   <p class="hint">This only records that a facility has been sanctioned — no accounting entry is posted until money is actually drawn.</p>
   <form onsubmit="return saveBankLoanSanction(event)">
     <div class="row">
-      <div class="field"><label>Facility Type *</label><select name="type"><option value="TL">Term Loan (TL)</option><option value="CC">Cash Credit (CC)</option></select></div>
+      <div class="field"><label>Facility Type *</label><select name="type" id="bankLoanTypeSelect" onchange="toggleBankLoanTypeFields()"><option value="TL">Term Loan (TL)</option><option value="CC">Cash Credit (CC)</option></select></div>
       <div class="field"><label>Sanction Date</label><input type="date" name="sanctionDate" value="${todayStr()}"></div>
     </div>
     <div class="row">
       <div class="field"><label>Loan/CC Account Number *<span class="hint">(as issued by the bank on the sanction letter)</span></label><input name="loanAccountNo" required></div>
-      <div class="field"><label>Sanctioned Amount ₹ *</label><input type="number" min="1" step="0.01" name="sanctionedAmount" required></div>
+      <div class="field"><label id="bankLoanAmountLabel">Sanctioned Amount ₹ *</label><input type="number" min="1" step="0.01" name="sanctionedAmount" required></div>
     </div>
     <div class="row">
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="10"></div>
-      <div class="field"><label>Tenure (months, for TL)</label><input type="number" min="1" step="1" name="tenureMonths" value="60"></div>
+      <div class="field" id="bankLoanTenureField"><label>Tenure (months, for TL)</label><input type="number" min="1" step="1" name="tenureMonths" value="60"></div>
       <div class="field"><label>Bank Account</label><select name="bankAccount">${(DB.profile.banks||[]).length ? DB.profile.banks.map(b=>`<option value="${esc(b.bank+' - '+b.accno)}">${esc(b.bank)} — ${esc(b.accno)}</option>`).join('') : `<option value="">Not specified</option>`}</select></div>
     </div>
     <div class="row">
-      <div class="field"><label>Instalment / Interest Frequency</label><select name="repayFrequency"><option value="Monthly" selected>Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-Yearly">Half-Yearly</option><option value="Yearly">Yearly</option></select></div>
-      <div class="field"><label>Instalment Amount ₹ <span class="hint">(EMI for TL; expected interest for CC — optional)</span></label><input type="number" min="0" step="0.01" name="instalmentAmount"></div>
+      <div class="field"><label id="bankLoanFreqLabel">Instalment / Interest Frequency</label><select name="repayFrequency"><option value="Monthly" selected>Monthly</option><option value="Quarterly">Quarterly</option><option value="Half-Yearly">Half-Yearly</option><option value="Yearly">Yearly</option></select></div>
+      <div class="field"><label id="bankLoanInstAmtLabel">Instalment Amount ₹ <span class="hint">(EMI for TL; expected interest for CC — optional)</span></label><input type="number" min="0" step="0.01" name="instalmentAmount"></div>
       <div class="field"><label>Next Due Date <span class="hint">(leave blank to set automatically from the first Drawal)</span></label><input type="date" name="nextDueDate"></div>
     </div>
     <div class="field"><label>Narration</label><input name="narration"></div>
-    <p class="hint">Once a Next Due Date is set (here, or after the first Drawal), the app will keep reminding you — right from the moment the app opens, on every screen — as soon as that instalment/interest falls due, until a Repayment is posted against this facility.</p>
+    <p class="hint" id="bankLoanTypeHint">Once a Next Due Date is set (here, or after the first Drawal), the app will keep reminding you — right from the moment the app opens, on every screen — as soon as that instalment/interest falls due, until a Repayment is posted against this facility.</p>
     <button class="btn" type="submit">Save Sanction</button>
   </form>`);
+  toggleBankLoanTypeFields();
+}
+// A Term Loan (TL) is a fixed EMI-style loan with a real tenure; a Cash Credit (CC) facility is a
+// revolving limit with no fixed repayment period at all — only the sanctioned limit, rate and
+// account number genuinely apply to both. Selecting CC hides the TL-only Tenure field entirely
+// (rather than leaving a "months, for TL" field sitting there for a facility it doesn't apply to)
+// and relabels the interest-tracking fields so they read as what a CC account actually has:
+// periodic interest on the utilised balance, not an instalment/EMI schedule.
+function toggleBankLoanTypeFields(){
+  const type = (document.getElementById('bankLoanTypeSelect')||{}).value || 'TL';
+  const isCC = type==='CC';
+  const tenureField = document.getElementById('bankLoanTenureField');
+  if(tenureField) tenureField.style.display = isCC ? 'none' : '';
+  const amountLabel = document.getElementById('bankLoanAmountLabel');
+  if(amountLabel) amountLabel.textContent = isCC ? 'Sanctioned Limit ₹ *' : 'Sanctioned Amount ₹ *';
+  const freqLabel = document.getElementById('bankLoanFreqLabel');
+  if(freqLabel) freqLabel.textContent = isCC ? 'Interest Debit Frequency' : 'Instalment / Interest Frequency';
+  const instLabel = document.getElementById('bankLoanInstAmtLabel');
+  if(instLabel) instLabel.innerHTML = isCC ? 'Expected Interest ₹ <span class="hint">(per period — optional, for the due reminder only)</span>' : 'Instalment Amount ₹ <span class="hint">(EMI — optional, for the due reminder only)</span>';
+  const typeHint = document.getElementById('bankLoanTypeHint');
+  if(typeHint) typeHint.innerHTML = isCC
+    ? 'A Cash Credit facility has no fixed tenure or EMI — only the sanctioned limit, rate and account number are required. Once a Next Due Date is set (here, or after the first Drawal), the app will keep reminding you — on every screen — as soon as interest falls due, until a Repayment is posted against this facility.'
+    : 'Once a Next Due Date is set (here, or after the first Drawal), the app will keep reminding you — right from the moment the app opens, on every screen — as soon as that instalment/interest falls due, until a Repayment is posted against this facility.';
 }
 function saveBankLoanSanction(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
@@ -3194,7 +3217,7 @@ function saveBankLoanSanction(ev){
     if(!(data.loanAccountNo||'').trim()) throw new Error('Enter the Loan/CC Account Number issued by the bank.');
     const rate0 = parseFloat(data.rate)||0;
     const loan = { id: nextId('BKLN'), type:data.type, loanAccountNo:(data.loanAccountNo||'').trim(), sanctionDate:data.sanctionDate, sanctionedAmount,
-      rate: rate0, tenureMonths: parseInt(data.tenureMonths)||60, bankAccount:data.bankAccount||'',
+      rate: rate0, tenureMonths: data.type==='CC' ? 0 : (parseInt(data.tenureMonths)||60), bankAccount:data.bankAccount||'',
       repayFrequency: data.repayFrequency||'Monthly', instalmentAmount: parseFloat(data.instalmentAmount)||0,
       nextDueDate: data.nextDueDate||'',
       narration:data.narration||'', status:'Active',
@@ -3343,6 +3366,7 @@ function txnForm(){
         <option value="expense">Expense / Purchase of Asset</option>
         <option value="income">Other Income Received</option>
         <option value="transfer">Fund Transfer (Cash/Bank/UPI)</option>
+        <option value="bankloan">Bank Term Loan / Cash Credit — other entry</option>
         <option value="advanced">Other / Advanced (any account)</option>
       </select></div>
     </div>
@@ -3380,6 +3404,17 @@ function updateTxnNature(){
   } else if(nature==='transfer'){
     debitOpts = FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)}));
     creditOpts = FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)}));
+  } else if(nature==='bankloan'){
+    // For ordinary Drawal/Repayment/Interest postings against a TL/CC facility, use "Bank Loan
+    // to SHG" instead — that screen links the entry to the correct facility (so its due-reminder
+    // banner and slab-wise interest tracking stay accurate) and fills the account number into the
+    // narration automatically. This nature is for anything else that still needs to touch the
+    // TL/CC liability accounts directly: a bank-levied CC processing/renewal fee debited straight
+    // from the CC account, a correcting/adjustment entry, or a one-off charge with no facility-
+    // specific Drawal/Repayment form of its own.
+    debitOpts = [{value:'BANK_TL',label:accountLabel('BANK_TL')},{value:'BANK_CC',label:accountLabel('BANK_CC')},
+      {value:'INTEREST_EXPENSE',label:accountLabel('INTEREST_EXPENSE')}].concat(FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)})));
+    creditOpts = [{value:'BANK_TL',label:accountLabel('BANK_TL')},{value:'BANK_CC',label:accountLabel('BANK_CC')}].concat(FUND_ACCOUNTS.map(c=>({value:c,label:accountLabel(c)})));
   } else {
     const codes = allLedgerCodes();
     debitOpts = codes.map(c=>({value:c,label:accountLabel(c)}));
@@ -6833,7 +6868,7 @@ function seedDemoDataCore(){
     let demoCC = null;
     try{
       demoCC = {id:nextId('BKLN'), type:'CC', loanAccountNo:'DEMOCC-0001', sanctionDate:DEMO_START, sanctionedAmount:100000, rate:10,
-        tenureMonths:60, bankAccount:'', narration:'DEMO CC facility', status:'Active', interestSlabs:[{fromDate:DEMO_START, rate:10}], demo:true};
+        tenureMonths:0, bankAccount:'', narration:'DEMO CC facility', status:'Active', interestSlabs:[{fromDate:DEMO_START, rate:10}], demo:true};
       DB.bankLoans.push(demoCC);
     }catch(e){}
 
@@ -7090,7 +7125,7 @@ function seedCompleteSampleData(){
 
     // --- Bank Loan to SHG: Cash Credit ---
     const cc = { id: nextId('BKLN'), type:'CC', loanAccountNo:'CC-SBI-556677', sanctionDate:'2025-04-05', sanctionedAmount:150000,
-      rate:11, tenureMonths:12, bankAccount:bankAcctStr, repayFrequency:'Quarterly', instalmentAmount:4125, nextDueDate:'',
+      rate:11, tenureMonths:0, bankAccount:bankAcctStr, repayFrequency:'Quarterly', instalmentAmount:4125, nextDueDate:'',
       narration:'Cash Credit facility for working-capital support to internal lending', status:'Active',
       interestSlabs:[{fromDate:'2025-04-05', rate:11}], sample:true };
     DB.bankLoans.push(cc);
