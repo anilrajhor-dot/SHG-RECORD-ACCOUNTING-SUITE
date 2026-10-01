@@ -543,7 +543,37 @@ function logAudit(action, details){
   DB.auditLog.unshift({ts:nowStamp(), user:DB.settings.currentUserName, role:DB.settings.currentUserRole, action, details});
   if(DB.auditLog.length>3000) DB.auditLog.length=3000;
 }
-function flash(type,text){ FLASH={type,text}; }
+// flash() queues a message that the next render() draws at the top of #content — which works
+// fine on an ordinary screen, but a form that fails validation INSIDE A MODAL (New Loan, CIF
+// Receipt, Journal Voucher, Bank Loan Drawal, ...) stays open on failure (it never calls
+// closeModal()) so the user can fix the entry and resubmit. #modalRoot's ".overlay" sits fixed,
+// full-screen, above everything else (z-index 100) — so that queued message rendered into
+// #content ends up completely hidden BEHIND the still-open modal, and FLASH is cleared the moment
+// render() reads it. The result: a posting is refused (correctly — e.g. the cash-in-hand guard,
+// an over-posting check, a closed-period check) but the person submitting it sees nothing happen
+// at all, with no visible reason and no suggested fix — exactly the gap that let bad data (like an
+// orphaned loan record left behind by a disbursement that silently failed) go unnoticed until a
+// much later Data Quality Check. So an error raised while a modal is open is ALSO written directly
+// into that modal, right where the user is already looking, without touching FLASH/#content or
+// closing the modal — one fix here covers every current and future modal form's catch block.
+function flash(type,text){
+  if(type==='error' && typeof document!=='undefined' && document.body && document.body.classList.contains('modal-open')){
+    const modalBox = document.querySelector('#modalRoot .modal');
+    if(modalBox){
+      let box = modalBox.querySelector('.modal-inline-error');
+      if(!box){
+        box = document.createElement('div');
+        box.className = 'msg err modal-inline-error';
+        box.style.marginBottom = '10px';
+        const closeBtn = modalBox.querySelector('.close');
+        if(closeBtn) closeBtn.insertAdjacentElement('afterend', box);
+        else modalBox.insertBefore(box, modalBox.firstChild);
+      }
+      box.textContent = text;
+    }
+  }
+  FLASH={type,text};
+}
 
 /* ---------------- Transaction Engine (double entry) ---------------- */
 function postTxn(t){
@@ -2610,8 +2640,14 @@ function saveLoan(ev){
       principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
       instalments: parseInt(data.instalments)||12, frequency: data.frequency||'Monthly', interestMethod: 'reducing',
       status:'Active', nextDueDate: addPeriod(data.disbursementDate,1,data.frequency||'Monthly') };
-    DB.loans.push(loan);
+    // Post the disbursement FIRST, and only add the loan record once it has actually succeeded.
+    // postTxn() can throw for several good reasons (not enough cash in hand, a closed period, an
+    // invalid account) — if the loan record were added before that, a refused disbursement would
+    // still leave a loan sitting in the Loan Register with a principal the ledger never actually
+    // received, which is exactly what used to make the Loan Register and the Loan Ledger silently
+    // disagree with each other, surfacing only much later in Data Quality Check.
     postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:data.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,narration:'Loan disbursed — '+memberName(loan.memberId)});
+    DB.loans.push(loan);
     logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal));
     closeModal(); flash('ok','Loan disbursed.'); render();
     viewLoanAppropriationStatement(loan.id);
@@ -2877,8 +2913,9 @@ function saveCIF(ev){
     if(!amount || amount<=0) throw new Error('Enter a valid CIF amount.');
     const c = { id: nextId('CIF'), date:data.date, source:data.source, amount, rate:parseFloat(data.rate)||0,
       period:parseInt(data.period)||36, interestMethod:'reducing', frequency:data.frequency||'Monthly', bank:data.mode, status:'Active' };
-    DB.cif.push(c);
+    // Post first, add the record only once it succeeds — see the identical comment in saveLoan().
     postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount,cifId:c.id,narration:'CIF received from '+data.source+' ('+c.id+')'});
+    DB.cif.push(c);
     logAudit('CIF_RECEIVED', c.id+' received from '+data.source+' — '+rupee(amount));
     closeModal(); flash('ok','CIF receipt posted.'); render();
     viewCIFAppropriationStatement(c.id);
@@ -2981,8 +3018,11 @@ function saveRF(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
   try{
     const data = Object.fromEntries(f.entries());
-    DB.revolvingFund.push({date:data.date, source:data.source, amount:parseFloat(data.amount), rate:parseFloat(data.rate)||0, period:parseInt(data.period)||60, bank:data.mode});
+    // Post the transaction FIRST — only add the Revolving Fund record once the receipt actually
+    // posts, so a failed posting (e.g. an invalid amount) never leaves a Revolving Fund entry on
+    // record with no matching transaction behind it.
     postTxn({date:data.date,type:'Revolving Fund Receipt',debit:data.mode,credit:'REVOLVING_FUND',amount:data.amount,narration:'Revolving Fund received from '+data.source});
+    DB.revolvingFund.push({date:data.date, source:data.source, amount:parseFloat(data.amount), rate:parseFloat(data.rate)||0, period:parseInt(data.period)||60, bank:data.mode});
     closeModal(); flash('ok','Revolving Fund receipt posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
@@ -5457,7 +5497,10 @@ function incomeExpenditureTableHTML(from,to){
 // -- Register 14: Balance Sheet, ICAI horizontal Liabilities/Assets format — same figures and
 // layout as the Financial Statements screen's own Balance Sheet, factored out so it can be
 // printed/shared on its own, as the standalone register it is under SHG book-keeping norms. --
-function balanceSheetTableHTML(to){
+// Raw figures behind the Balance Sheet, with no HTML in them — shared by balanceSheetTableHTML()
+// (for the printed/on-screen table) and the Balance Sheet register's plain-text Share payload, so
+// the two can never drift out of sync with each other.
+function balanceSheetData(to){
   const cash = accountBalance('CASH'), bank = accountBalance('BANK'), upi = accountBalance('UPI');
   const loansOut = DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
   const otherAssets = accountBalance('OTHER_ASSETS');
@@ -5466,31 +5509,28 @@ function balanceSheetTableHTML(to){
   const otherLiab = accountBalance('OTHER_LIABILITIES');
   const bankTL = accountBalance('BANK_TL'), bankCC = accountBalance('BANK_CC');
   const assetRows = [
-    ['Cash in Hand', rightCell(rupee(cash))],
-    ['Bank Balance', rightCell(rupee(bank))],
-    ['UPI Balance', rightCell(rupee(upi))],
-    ['Loans to Members (Outstanding)', rightCell(rupee(loansOut))],
-    ['Other Assets', rightCell(rupee(otherAssets))]
+    ['Cash in Hand', cash], ['Bank Balance', bank], ['UPI Balance', upi],
+    ['Loans to Members (Outstanding)', loansOut], ['Other Assets', otherAssets]
   ];
   const liabRows = [
-    ['Capital Fund / General Fund', rightCell(rupee(capitalFund))],
-    ['Community Investment Fund (CIF)', rightCell(rupee(cif))],
-    ['Revolving Fund (RF)', rightCell(rupee(revolvingFund))],
-    ['Members Savings', rightCell(rupee(savings))],
-    ['Bank Term Loan (TL) Payable', rightCell(rupee(bankTL))],
-    ['Bank Cash Credit (CC) Payable', rightCell(rupee(bankCC))],
-    ['Other Liabilities', rightCell(rupee(otherLiab))]
+    ['Capital Fund / General Fund', capitalFund], ['Community Investment Fund (CIF)', cif],
+    ['Revolving Fund (RF)', revolvingFund], ['Members Savings', savings],
+    ['Bank Term Loan (TL) Payable', bankTL], ['Bank Cash Credit (CC) Payable', bankCC],
+    ['Other Liabilities', otherLiab]
   ];
   const totalAssets = Math.round((cash+bank+upi+loansOut+otherAssets)*100)/100;
   const totalLiabilities = Math.round((capitalFund+cif+revolvingFund+savings+bankTL+bankCC+otherLiab)*100)/100;
-  let liabDisplay = liabRows.slice(), assetDisplay = assetRows.slice();
+  return {assetRows, liabRows, totalAssets, totalLiabilities, diff: Math.round((totalAssets-totalLiabilities)*100)/100};
+}
+function balanceSheetTableHTML(to){
+  const {assetRows, liabRows, totalAssets, totalLiabilities, diff} = balanceSheetData(to);
+  let liabDisplay = liabRows.map(r=>[r[0], rightCell(rupee(r[1]))]), assetDisplay = assetRows.map(r=>[r[0], rightCell(rupee(r[1]))]);
   while(liabDisplay.length<assetDisplay.length) liabDisplay.push(['','']);
   while(assetDisplay.length<liabDisplay.length) assetDisplay.push(['','']);
   let html = `<div class="tablewrap"><table><thead><tr><th>Liabilities</th><th>Amount</th><th>Assets</th><th>Amount</th></tr></thead><tbody>
     ${liabDisplay.map((r,i)=>`<tr><td>${esc(r[0])}</td><td class="num">${r[1]?r[1].slice(3):''}</td><td>${esc(assetDisplay[i][0])}</td><td class="num">${assetDisplay[i][1]?assetDisplay[i][1].slice(3):''}</td></tr>`).join('')}
     <tr><td><b>Total</b></td><td class="num"><b>${rupee(totalLiabilities)}</b></td><td><b>Total</b></td><td class="num"><b>${rupee(totalAssets)}</b></td></tr>
   </tbody></table></div>`;
-  const diff = Math.round((totalAssets-totalLiabilities)*100)/100;
   html += diff===0 ? `<div class="msg ok" style="margin-top:10px">Balance Sheet is balanced (Total Liabilities = Total Assets).</div>` :
     `<div class="msg err" style="margin-top:10px">Balance Sheet difference of ${rupee(Math.abs(diff))} detected — see Data Quality Check.</div>`;
   return html;
@@ -5510,6 +5550,41 @@ function registerLoanCIFRows(from,to){
     row:['CIF (Received)', c.id, fmtDate(c.date), esc(c.source||'—'), rightCell(rupee(c.amount)), c.rate+'%', rightCell(rupee(cifTrancheOutstanding(c.id))), badge(c.status, c.status==='Closed'?'grey':'green')]
   }));
   return loanRows.concat(cifRows).sort((a,b)=>a.date<b.date?-1:1).map(x=>x.row);
+}
+// Strips a register table cell down to plain text for sharing (WhatsApp/email/clipboard) — undoes
+// the rightCell() §R§ marker, drops HTML tags (badge spans, <b>, etc.), turns a <br> into "; " so a
+// multi-line Minutes Book cell doesn't collapse into one run-on word, and decodes the handful of
+// entities esc() can produce. Generic on purpose: every register's rows pass through it the same
+// way, so a new register type gets working Share support for free without its own text-builder.
+function stripHtmlForShare(s){
+  if(s==null) return '';
+  let str = String(s);
+  if(str.startsWith('§R§')) str = str.slice(3);
+  str = str.replace(/<br\s*\/?>/gi, '; ').replace(/<[^>]+>/g,'');
+  str = str.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+  return str.trim();
+}
+function registerRowsToPlainText(headers, rows){
+  const lines = [headers.join(' | ')];
+  rows.forEach(r=> lines.push(r.map(stripHtmlForShare).join(' | ')));
+  return lines.join('\n');
+}
+// Shares the CURRENTLY DISPLAYED register (whatever viewRegisters() most recently built) via the
+// device's native share sheet / clipboard, same mechanism as every other Share button in the app.
+function shareRegister(){
+  shareText(window.__registerShareTitle||'Register', window.__registerShareText||'Open a register first.');
+}
+// Opens the same register content shown on screen in a clean, chrome-free modal for a focused
+// on-screen preview before printing — exactly what Print will produce (the print CSS already
+// prints ONLY an open modal's content, hiding the sidebar/topbar, the same convention this app
+// uses for the Appropriation Statement, Loan/CIF Schedule, MCP and Statement Extract). Printing or
+// Sharing from inside this preview works exactly the same as from the main screen's own buttons.
+function viewRegisterModal(){
+  openModal(`<button class="close" onclick="closeModal()">×</button>${window.__registerBodyHtml||'<div class="empty">Open a register first.</div>'}
+    <div class="row no-print" style="margin-top:10px">
+      <button class="btn" onclick="window.print()">🖨 Print</button>
+      <button class="btn secondary" onclick="shareRegister()">📤 Share</button>
+    </div>`);
 }
 function viewRegisters(){
   const {w, from, to, label} = registersPeriodRange();
@@ -5532,86 +5607,136 @@ function viewRegisters(){
         <div class="field"><label>To</label><input type="date" value="${w.to}" onchange="updateRegField('to', this.value)"></div>`:''}`}
       ${(w.register==='passbook'||w.register==='memberledger')?`<div class="field"><label>Member</label><select onchange="updateRegField('passMember', this.value)">${DB.members.map(m=>`<option value="${m.id}" ${w.passMember===m.id?'selected':''}>${esc(m.name)}${m.status==='Deleted'?' (Deleted — kept for reference)':''}</option>`).join('')}</select></div>`:''}
     </div>
-    <button class="btn" style="margin-top:8px" onclick="window.print()">🖨 Print this Register</button>
-    <p class="hint" style="margin-top:6px">Print uses the browser's own Print dialog (Ctrl/Cmd+P also works) — choose "Save as PDF" there for a soft copy, or print directly for a hard copy for record.</p>
+    <div class="row" style="margin-top:8px">
+      <button class="btn secondary" onclick="viewRegisterModal()">👁 View / Print Preview</button>
+      <button class="btn secondary" onclick="shareRegister()">📤 Share</button>
+      <button class="btn" onclick="window.print()">🖨 Print this Register</button>
+    </div>
+    <p class="hint" style="margin-top:6px">"View / Print Preview" shows exactly what will print, without the menu/sidebar — use it to check the layout first. "Share" sends the same data as text via WhatsApp, email or any app on this device. Print uses the browser's own Print dialog (Ctrl/Cmd+P also works) — choose "Save as PDF" there for a soft copy, or print directly for a hard copy for record.</p>
   </div>`;
 
   const regLabel = (REGISTER_LIST.find(r=>r.id===w.register)||{}).label || 'Register';
-  html += `<div class="printhead"><h2>${esc(DB.profile.name||'SHG')}</h2><p>${esc(regLabel)} — ${esc(periodLabel)}</p></div>`;
+  // shareHeaders/shareRows/shareBefore/shareAfter are filled in by whichever branch below runs, and
+  // turned into the plain-text share payload right after the if/else chain — one shared mechanism
+  // for every register rather than each branch building its own text (and risking drifting out of
+  // sync with what's actually shown on screen).
+  let shareHeaders = null, shareRows = null, shareBefore = [], shareAfter = [];
+  let bodyHtml = `<div class="printhead"><h2>${esc(DB.profile.name||'SHG')}</h2><p>${esc(regLabel)} — ${esc(periodLabel)}</p></div>`;
 
-  html += `<div class="card"><h3 class="no-print">${esc(regLabel)} — ${esc(periodLabel)}</h3>`;
+  bodyHtml += `<div class="card"><h3 class="no-print">${esc(regLabel)} — ${esc(periodLabel)}</h3>`;
   if(w.register==='members'){
     const rows = registerMembersRows();
-    html += rows.length ? tbl(['Member ID','Name',"Relation / Father's-Husband's Name",'Gender','Mobile','Village','Date of Joining','Status'], rows) : `<div class="empty">No members yet.</div>`;
+    shareHeaders = ['Member ID','Name',"Relation / Father's-Husband's Name",'Gender','Mobile','Village','Date of Joining','Status']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No members yet.</div>`;
   } else if(w.register==='minutes'){
     const rows = registerMinutesRows(from,to);
-    html += rows.length ? tbl(['Date','Place','Present/Total','Proceedings & Decisions'], rows) : `<div class="empty">No meetings in this period.</div>`;
+    shareHeaders = ['Date','Place','Present/Total','Proceedings & Decisions']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No meetings in this period.</div>`;
   } else if(w.register==='meeting'){
     const rows = registerMeetingRows(from,to);
-    html += rows.length ? tbl(['Date','Place','Present/Total','Attendance %','Savings+Repayment Collected','Expenses','Minutes'], rows) : `<div class="empty">No meetings in this period.</div>`;
+    shareHeaders = ['Date','Place','Present/Total','Attendance %','Savings+Repayment Collected','Expenses','Minutes']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No meetings in this period.</div>`;
   } else if(w.register==='attendance'){
     const rows = registerAttendanceRows(from,to);
-    html += rows.length ? tbl(['Date','Present/Total','Present Members','Absent Members'], rows) : `<div class="empty">No meetings in this period.</div>`;
+    shareHeaders = ['Date','Present/Total','Present Members','Absent Members']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No meetings in this period.</div>`;
   } else if(w.register==='savings'){
     const rows = registerSavingsRows(from,to);
-    html += rows.length ? tbl(['Date','Voucher','Member','Amount','Narration'], rows) : `<div class="empty">No savings deposits in this period.</div>`;
+    shareHeaders = ['Date','Voucher','Member','Amount','Narration']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No savings deposits in this period.</div>`;
   } else if(w.register==='loan'){
     const rows = registerLoanRows(from,to);
-    html += rows.length ? tbl(['Loan ID','Disbursed On','Member','Purpose','Principal','Rate','Outstanding','Status'], rows) : `<div class="empty">No loans disbursed in this period.</div>`;
+    shareHeaders = ['Loan ID','Disbursed On','Member','Purpose','Principal','Rate','Outstanding','Status']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No loans disbursed in this period.</div>`;
   } else if(w.register==='repayment'){
     const rows = registerRepaymentRows(from,to);
-    html += rows.length ? tbl(['Date','Voucher','Member','Loan ID','Principal Repaid','Interest Repaid','Narration'], rows) : `<div class="empty">No repayments in this period.</div>`;
+    shareHeaders = ['Date','Voucher','Member','Loan ID','Principal Repaid','Interest Repaid','Narration']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No repayments in this period.</div>`;
   } else if(w.register==='interest'){
     const rows = registerInterestRows(from,to);
-    html += rows.length ? tbl(['Date','Voucher','Nature','Member','Amount','Narration'], rows) : `<div class="empty">No interest entries in this period.</div>`;
+    shareHeaders = ['Date','Voucher','Nature','Member','Amount','Narration']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No interest entries in this period.</div>`;
   } else if(w.register==='cashbook' || w.register==='bankbook' || w.register==='assets'){
     const code = w.register==='cashbook'?'CASH':(w.register==='bankbook'?'BANK':'OTHER_ASSETS');
     const {opening, closing, rows} = registerBookRows(code, from, to);
-    html += `<div class="grid cols2 no-print">${stat('Opening Balance', rupee(opening))}${stat('Closing Balance', rupee(closing))}</div>`;
-    html += `<p><b>Opening Balance: ${rupee(opening)}</b></p>`;
-    html += rows.length ? tbl(['Date','Voucher','Particulars', w.register==='assets'?'Addition (Dr)':'Receipts (Dr)', w.register==='assets'?'Deduction (Cr)':'Payments (Cr)','Balance'], rows) : `<div class="empty">No entries in this period.</div>`;
-    html += `<p><b>Closing Balance: ${rupee(closing)}</b></p>`;
-    if(w.register==='assets') html += `<p class="hint" style="margin-top:6px">Built from every posting against the "Other Assets" ledger head — an asset purchase debits it, a disposal/write-off credits it. For a register that also tracks each individual item (make, quantity, location), note those details in the transaction narration when posting the purchase/disposal.</p>`;
+    shareHeaders = ['Date','Voucher','Particulars', w.register==='assets'?'Addition (Dr)':'Receipts (Dr)', w.register==='assets'?'Deduction (Cr)':'Payments (Cr)','Balance']; shareRows = rows;
+    shareBefore = ['Opening Balance: '+rupee(opening)]; shareAfter = ['Closing Balance: '+rupee(closing)];
+    bodyHtml += `<div class="grid cols2 no-print">${stat('Opening Balance', rupee(opening))}${stat('Closing Balance', rupee(closing))}</div>`;
+    bodyHtml += `<p><b>Opening Balance: ${rupee(opening)}</b></p>`;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No entries in this period.</div>`;
+    bodyHtml += `<p><b>Closing Balance: ${rupee(closing)}</b></p>`;
+    if(w.register==='assets') bodyHtml += `<p class="hint" style="margin-top:6px">Built from every posting against the "Other Assets" ledger head — an asset purchase debits it, a disposal/write-off credits it. For a register that also tracks each individual item (make, quantity, location), note those details in the transaction narration when posting the purchase/disposal.</p>`;
   } else if(w.register==='ledger'){
     const rows = registerLedgerRows(from,to);
-    html += rows.length ? tbl(['Account','Opening','Debit (Period)','Credit (Period)','Closing'],
-      rows.map(r=>[esc(r.label), rightCell(rupee(r.opening)), rightCell(rupee(r.dr)), rightCell(rupee(r.cr)), rightCell(rupee(r.closing))]))
+    shareHeaders = ['Account','Opening','Debit (Period)','Credit (Period)','Closing'];
+    shareRows = rows.map(r=>[r.label, rupee(r.opening), rupee(r.dr), rupee(r.cr), rupee(r.closing)]);
+    bodyHtml += rows.length ? tbl(shareHeaders, rows.map(r=>[esc(r.label), rightCell(rupee(r.opening)), rightCell(rupee(r.dr)), rightCell(rupee(r.cr)), rightCell(rupee(r.closing))]))
       : `<div class="empty">No ledger movement in this period.</div>`;
   } else if(w.register==='passbook' || w.register==='memberledger'){
     const m = DB.members.find(x=>x.id===w.passMember);
-    if(!m){ html += `<div class="empty">No members yet.</div>`; }
+    if(!m){ bodyHtml += `<div class="empty">No members yet.</div>`; }
     else {
-      html += `<p><b>${esc(m.name)} (${m.id})</b></p>`;
-      if(w.register==='memberledger') html += `<div class="grid cols2 no-print">${stat('Savings Balance', rupee(memberSavingsBalance(m.id)))}${stat('Loan Outstanding (All Loans)', rupee(memberLoanOutstanding(m.id)))}</div>`;
+      shareBefore.push(m.name+' ('+m.id+')');
+      bodyHtml += `<p><b>${esc(m.name)} (${m.id})</b></p>`;
+      if(w.register==='memberledger'){
+        shareBefore.push('Savings Balance: '+rupee(memberSavingsBalance(m.id)), 'Loan Outstanding (All Loans): '+rupee(memberLoanOutstanding(m.id)));
+        bodyHtml += `<div class="grid cols2 no-print">${stat('Savings Balance', rupee(memberSavingsBalance(m.id)))}${stat('Loan Outstanding (All Loans)', rupee(memberLoanOutstanding(m.id)))}</div>`;
+      }
       const txns = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.date>=from && t.date<=to).sort((a,b)=>a.date<b.date?-1:1);
-      html += txns.length ? tbl(['Date','Voucher','Type','Loan ID','Debit','Credit','Amount','Narration'],
-        txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)]))
+      shareHeaders = ['Date','Voucher','Type','Loan ID','Debit','Credit','Amount','Narration'];
+      shareRows = txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rupee(t.amount),t.narration]);
+      bodyHtml += txns.length ? tbl(shareHeaders, txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)]))
         : `<div class="empty">No entries for this member in this period.</div>`;
     }
   } else if(w.register==='receiptspayments'){
     const rows = registerReceiptsPaymentsRows(from,to);
     const totals = registerReceiptsPaymentsTotals(from,to);
-    html += `<div class="grid cols2 no-print">${stat('Total Receipts', rupee(totals.receipts))}${stat('Total Payments', rupee(totals.payments))}</div>`;
-    html += rows.length ? tbl(['Date','Voucher','Particulars','Receipts','Payments'], rows) : `<div class="empty">No receipts or payments in this period.</div>`;
-    html += `<p style="margin-top:8px"><b>Total Receipts: ${rupee(totals.receipts)} &nbsp; | &nbsp; Total Payments: ${rupee(totals.payments)}</b></p>`;
-    html += `<p class="hint" style="margin-top:6px">A transfer between the SHG's own Cash, Bank and UPI accounts (e.g. cash deposited into the bank) is excluded here — it is neither a receipt from, nor a payment to, an outside party.</p>`;
+    shareHeaders = ['Date','Voucher','Particulars','Receipts','Payments']; shareRows = rows;
+    shareAfter = ['Total Receipts: '+rupee(totals.receipts), 'Total Payments: '+rupee(totals.payments)];
+    bodyHtml += `<div class="grid cols2 no-print">${stat('Total Receipts', rupee(totals.receipts))}${stat('Total Payments', rupee(totals.payments))}</div>`;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No receipts or payments in this period.</div>`;
+    bodyHtml += `<p style="margin-top:8px"><b>Total Receipts: ${rupee(totals.receipts)} &nbsp; | &nbsp; Total Payments: ${rupee(totals.payments)}</b></p>`;
+    bodyHtml += `<p class="hint" style="margin-top:6px">A transfer between the SHG's own Cash, Bank and UPI accounts (e.g. cash deposited into the bank) is excluded here — it is neither a receipt from, nor a payment to, an outside party.</p>`;
   } else if(w.register==='incomeexpenditure'){
-    html += `<p class="hint no-print">Shown in the classic Indian "T" (Dr/Cr) format commonly used for Not-for-Profit Organisations and Societies, as recommended in ICAI's guidance for NPO accounting.</p>`;
-    html += incomeExpenditureTableHTML(from,to);
+    const ie = incomeExpenditureLines(from,to);
+    shareBefore = ie.incomeLines.map(x=>'By '+x.label+': '+rupee(x.amt))
+      .concat(ie.expenseLines.map(x=>'To '+x.label+': '+rupee(x.amt)))
+      .concat([(ie.surplus>=0?'Excess of Income over Expenditure':'Excess of Expenditure over Income')+': '+rupee(Math.abs(ie.surplus))]);
+    bodyHtml += `<p class="hint no-print">Shown in the classic Indian "T" (Dr/Cr) format commonly used for Not-for-Profit Organisations and Societies, as recommended in ICAI's guidance for NPO accounting.</p>`;
+    bodyHtml += incomeExpenditureTableHTML(from,to);
   } else if(w.register==='trialbalance'){
     const tb = generateTrialBalance();
+    shareHeaders = ['Account Head','Debit','Credit'];
+    shareRows = tb.rows.map(r=>[r.label, r.dr?rupee(r.dr):'', r.cr?rupee(r.cr):'']).concat([['TOTAL', rupee(tb.totalDr), rupee(tb.totalCr)]]);
+    shareAfter = [tb.diff===0 ? 'Trial Balance is matched. Total Debit = Total Credit.' : ('Trial Balance does NOT match. Difference: '+rupee(Math.abs(tb.diff)))];
     const rows = tb.rows.map(r=>[r.label, rightCell(r.dr?rupee(r.dr):''), rightCell(r.cr?rupee(r.cr):'')]);
-    html += tbl(['Account Head','Debit','Credit'], rows.concat([['<b>TOTAL</b>', rightCell('<b>'+rupee(tb.totalDr)+'</b>'), rightCell('<b>'+rupee(tb.totalCr)+'</b>')]]));
-    html += tb.diff===0 ? `<div class="msg ok" style="margin-top:10px">Trial Balance is matched. Total Debit = Total Credit.</div>` :
+    bodyHtml += tbl(shareHeaders, rows.concat([['<b>TOTAL</b>', rightCell('<b>'+rupee(tb.totalDr)+'</b>'), rightCell('<b>'+rupee(tb.totalCr)+'</b>')]]));
+    bodyHtml += tb.diff===0 ? `<div class="msg ok" style="margin-top:10px">Trial Balance is matched. Total Debit = Total Credit.</div>` :
       `<div class="msg err" style="margin-top:10px">Trial Balance does NOT match. Difference: ${rupee(Math.abs(tb.diff))}.</div>`;
   } else if(w.register==='balancesheet'){
-    html += `<p class="hint no-print">Shown in the classic Indian "T" (Liabilities/Assets) format commonly used for Not-for-Profit Organisations and Societies, as recommended in ICAI's guidance for NPO accounting.</p>`;
-    html += balanceSheetTableHTML(to);
+    const bs = balanceSheetData(to);
+    shareBefore = ['Liabilities:'].concat(bs.liabRows.map(r=>'  '+r[0]+': '+rupee(r[1]))).concat(['  Total: '+rupee(bs.totalLiabilities)])
+      .concat(['Assets:']).concat(bs.assetRows.map(r=>'  '+r[0]+': '+rupee(r[1]))).concat(['  Total: '+rupee(bs.totalAssets)]);
+    bodyHtml += `<p class="hint no-print">Shown in the classic Indian "T" (Liabilities/Assets) format commonly used for Not-for-Profit Organisations and Societies, as recommended in ICAI's guidance for NPO accounting.</p>`;
+    bodyHtml += balanceSheetTableHTML(to);
   } else if(w.register==='loancif'){
     const rows = registerLoanCIFRows(from,to);
-    html += rows.length ? tbl(['Type','ID','Date','Member / Source','Principal / Amount','Rate','Outstanding','Status'], rows) : `<div class="empty">No loans disbursed or CIF received in this period.</div>`;
+    shareHeaders = ['Type','ID','Date','Member / Source','Principal / Amount','Rate','Outstanding','Status']; shareRows = rows;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No loans disbursed or CIF received in this period.</div>`;
   }
-  html += `</div>`;
+  bodyHtml += `</div>`;
+
+  // Build the plain-text Share payload from whatever the branch above populated, so Share always
+  // matches what's on screen (and in the Print/View Preview) exactly, for any register.
+  let shareLines = [(DB.profile.name||'SHG')+' — '+regLabel, periodLabel, ''];
+  if(shareBefore.length) shareLines = shareLines.concat(shareBefore, ['']);
+  if(shareHeaders && shareRows) shareLines.push(shareRows.length ? registerRowsToPlainText(shareHeaders, shareRows) : '(No entries for this selection.)');
+  if(shareAfter.length) shareLines = shareLines.concat([''], shareAfter);
+  window.__registerShareText = shareLines.join('\n');
+  window.__registerShareTitle = (DB.profile.name||'SHG')+' — '+regLabel;
+  window.__registerBodyHtml = bodyHtml;
+
+  html += bodyHtml;
   return html;
 }
 
@@ -7092,15 +7217,18 @@ function seedDemoDataCore(){
         if(i===0 && idx<4){
           const amt = 5000+idx*1000;
           const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, interestMethod:'reducing', status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
-          DB.loans.push(loan);
-          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); newLoansTotal += amt; }catch(e){}
+          // Only add the loan record if its disbursement actually posts — pushing it first and
+          // relying on this try/catch to swallow a failed postTxn() (e.g. the demo cash balance
+          // genuinely ran out that month) used to leave an orphaned loan behind: a principal the
+          // Loan Register showed but the ledger never received, which is exactly what later
+          // surfaced as a "ledger balance and repayment schedule disagree" Data Quality error.
+          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); DB.loans.push(loan); newLoansTotal += amt; }catch(e){}
         }
         // A second wave of loans a year in, so the demo history shows more than one lending cycle.
         if(i===12 && idx>=4 && idx<8){
           const amt = 8000+(idx-4)*1500;
           const loan = {id:nextId('LOAN'), memberId:m.id, purpose:'Petty business, cycle 2 (DEMO)', sanctionDate:dateStr, disbursementDate:dateStr, principal:amt, interestRate:12, instalments:10, interestMethod:'reducing', status:'Active', nextDueDate: addMonths(dateStr,1), demo:true};
-          DB.loans.push(loan);
-          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); newLoansTotal += amt; }catch(e){}
+          try{ postTxn({date:dateStr,type:'Disbursement',debit:'MEMBER_LOANS',credit:'CASH',amount:amt,memberId:m.id,loanId:loan.id,narration:'DEMO loan disbursed — '+m.name}); DB.loans.push(loan); newLoansTotal += amt; }catch(e){}
         }
         if(i>0){
           const loan = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed' && l.demo && l.disbursementDate<dateStr).sort((a,b)=>a.disbursementDate<b.disbursementDate?1:-1)[0];
@@ -7263,15 +7391,19 @@ function seedCompleteSampleData(){
 
     // --- Revolving Fund — ₹20,000 (RF has no repayment feature in this app; a receipt is the whole record) ---
     const RF_DATE = '2025-04-07';
-    DB.revolvingFund.push({date:RF_DATE, source:(DB.profile.voClf||'Village Organisation'), amount:20000, rate:0, period:60, bank:'BANK', sample:true});
-    try{ postTxn({date:RF_DATE, type:'Revolving Fund Receipt', debit:'BANK', credit:'REVOLVING_FUND', amount:20000, narration:'Revolving Fund received from '+(DB.profile.voClf||'Village Organisation')}); }catch(e){}
+    try{
+      postTxn({date:RF_DATE, type:'Revolving Fund Receipt', debit:'BANK', credit:'REVOLVING_FUND', amount:20000, narration:'Revolving Fund received from '+(DB.profile.voClf||'Village Organisation')});
+      DB.revolvingFund.push({date:RF_DATE, source:(DB.profile.voClf||'Village Organisation'), amount:20000, rate:0, period:60, bank:'BANK', sample:true});
+    }catch(e){}
 
     // --- CIF — ₹1,50,000, received then partly repaid ---
     const CIF_DATE = '2025-05-02';
     const cifRec = { id: nextId('CIF'), date:CIF_DATE, source:(DB.profile.voClf||'Village Organisation')+'/CLF', amount:150000, rate:9,
       period:36, interestMethod:'reducing', frequency:'Monthly', bank:'BANK', status:'Active', sample:true };
-    DB.cif.push(cifRec);
-    try{ postTxn({date:CIF_DATE, type:'CIF Receipt', debit:'BANK', credit:'CIF', amount:150000, cifId:cifRec.id, narration:'CIF received from '+cifRec.source+' ('+cifRec.id+')'}); }catch(e){}
+    try{
+      postTxn({date:CIF_DATE, type:'CIF Receipt', debit:'BANK', credit:'CIF', amount:150000, cifId:cifRec.id, narration:'CIF received from '+cifRec.source+' ('+cifRec.id+')'});
+      DB.cif.push(cifRec);
+    }catch(e){}
     const CIF_REPAY_DATE = '2026-02-02';
     if(CIF_REPAY_DATE<=todayStr()){
       try{
@@ -7360,10 +7492,15 @@ function seedCompleteSampleData(){
       const loan = { id: nextId('LOAN'), memberId:member.id, purpose, sanctionDate:dateStr, disbursementDate:dateStr, mode:'BANK',
         principal, interestRate:rate, instalments, frequency:'Monthly', interestMethod:'reducing', status:'Active',
         nextDueDate: addPeriod(dateStr,1,'Monthly'), sample:true };
-      DB.loans.push(loan);
+      // IMPORTANT: post the disbursement FIRST, and only add the loan record to DB.loans if that
+      // succeeds. Pushing the record before postTxn() could leave an orphaned loan (a record with
+      // no matching transaction) if postTxn() ever throws, which produces a permanent "ledger balance
+      // and repayment schedule disagree" Data Quality defect. See saveLoan()/seedDemoDataCore() for
+      // the same fix applied consistently across every loan-creation path.
       try{
         postTxn({date:dateStr, type:'Disbursement', debit:'MEMBER_LOANS', credit:'BANK', amount:principal, memberId:member.id, loanId:loan.id,
           narration:'Loan disbursed (Bank transfer) — '+member.name});
+        DB.loans.push(loan);
         logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+member.name+' — '+rupee(principal));
       }catch(e){}
       return loan;
@@ -7406,10 +7543,10 @@ function seedCompleteSampleData(){
         const loan = { id: nextId('LOAN'), memberId:nlMember.id, purpose:'Poultry shed construction', sanctionDate:dateStr, disbursementDate:dateStr, mode:'CASH',
           principal:7000, interestRate:11, instalments:8, frequency:'Monthly', interestMethod:'reducing', status:'Active',
           nextDueDate: addPeriod(dateStr,1,'Monthly'), sample:true };
-        DB.loans.push(loan);
         try{
           postTxn({date:dateStr, type:'Disbursement', debit:'MEMBER_LOANS', credit:'CASH', amount:7000, memberId:nlMember.id, loanId:loan.id, meetingId,
             narration:'Loan disbursed — '+nlMember.name+' (sanctioned in meeting)'});
+          DB.loans.push(loan);
           logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+nlMember.name+' — '+rupee(7000)+' (via meeting)');
           newLoansTotal += 7000;
         }catch(e){}
