@@ -365,6 +365,13 @@ const TRANSLATIONS = {
 let DB = null;
 let ROUTE = 'dashboard';
 let FLASH = null;
+// Which month the Grading screen's "Panchsutra — Specific Month" picker shows. null means "the
+// current calendar month". The Dashboard itself never uses this — the Dashboard always shows a
+// rolling last-6-months Panchsutra view (see computePanchsutraRange()) so it never needs a picker
+// and never looks like it's "stuck" on an old or empty month. A user who wants a single specific
+// month (or is checking demo/sample data generated only up to some past cutoff date) switches
+// months from the SHG Grading screen instead (see panchsutraMonthOptions()/updatePanchsutraMonth()).
+let PANCHSUTRA_UI_YM = null;
 let DEMO_MODE = false; // true only while seedDemoDataCore() is generating sample records
 let SAMPLE_MODE = false; // true only while seedCompleteSampleData() is generating the deterministic, fully-filled Complete Sample Data set — a separate, independently loadable/clearable dataset from the randomised Demo Data above (see postTxn's `sample` tag and clearSampleData())
 let HELP_CHAT = []; // in-memory only, not persisted — Help Assistant conversation for this session
@@ -556,6 +563,14 @@ function fmtDate(d){
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function monthKey(d){ return (d||todayStr()).slice(0,7); }
+// "2026-09" -> "Sep 2026" — short human-readable month label used by the Panchsutra chart's
+// period caption (Dashboard rolling window and the Grading screen's single-month picker).
+function monthLabel(ym){
+  const [y,m] = String(ym).split('-').map(Number);
+  if(!y||!m) return ym;
+  const names = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return (names[m-1]||ym)+' '+y;
+}
 function isPeriodClosed(date){ return DB.closedPeriods.includes(monthKey(date)); }
 function activeMembers(){ return DB.members.filter(m=>m.status==='Active'); }
 function memberName(id){ const m=DB.members.find(x=>x.id===id); return m?m.name:'—'; }
@@ -1262,9 +1277,10 @@ function viewDashboard(){
   </div>${multiLoanMemberIds.length?`<p class="hint" style="margin-top:8px">Click "Members with Multiple Loans" to see the breakdown.</p>`:''}</div>`;
 
   if(activeMembers().length){
-    const ps = computePanchsutra(monthKey(todayStr()));
+    const ps = computePanchsutraRange(monthKey(todayStr()), 6);
+    const periodLabel = ps.months.length>1 ? (monthLabel(ps.fromYm)+' – '+monthLabel(ps.toYm)) : monthLabel(ps.toYm);
     html += `<div class="card"><h3>Panchsutra — The Five Pillars of a Good SHG</h3>
-      <p class="hint">The five DAY-NRLM principles every SHG is expected to follow, scored for ${ps.ym} from this SHG's own records — separate from, and never affecting, the configurable Grading score below.</p>
+      <p class="hint">The five DAY-NRLM principles every SHG is expected to follow, averaged over the last ${ps.months.length} month(s) (${periodLabel}) from this SHG's own records — separate from, and never affecting, the configurable Grading score below. The Dashboard always shows this rolling last-6-months view; for a specific single month or a custom period, open <a style="cursor:pointer" onclick="go('grading')">SHG Grading</a>.</p>
       <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:18px">
         ${panchsutraRadarSVG(ps.sutras)}
       </div>
@@ -1273,7 +1289,7 @@ function viewDashboard(){
         <span><span style="display:inline-block;width:12px;height:0;border-top:2px dashed #5B6B7A;vertical-align:middle;margin-right:5px"></span>Full compliance (100%)</span>
       </div>
       ${tbl(['Sutra','Score',''], ps.sutras.map(s=>[esc(s.label), rightCell(s.value.toFixed(1)+'%'), badge(s.value>=80?'Good':(s.value>=50?'Needs Attention':'Weak'), s.value>=80?'green':(s.value>=50?'amber':'red'))]))}
-      <p class="hint" style="margin-top:6px">Overall Panchsutra Score: <b>${ps.overall.toFixed(1)}%</b></p>
+      <p class="hint" style="margin-top:6px">Overall Panchsutra Score: <b>${ps.overall.toFixed(1)}%</b> (average of the last ${ps.months.length} month(s))</p>
     </div>`;
   }
 
@@ -4155,6 +4171,25 @@ function computeGrading(ym){
 // five sutras everywhere, computed straight from this SHG's own ledgers for the Dashboard's
 // at-a-glance Panchsutra chart. It never feeds into, and is never fed by, the configurable
 // grading score or the official NABARD format above/below — a separate, purely illustrative view.
+// Every month from the earliest meeting/transaction on file through the current month, newest
+// first — the choices offered by the Panchsutra chart's Month selector. Always includes the
+// current month even when it has no activity yet, so switching back to it after looking at an
+// earlier month is always possible.
+function panchsutraMonthOptions(){
+  const dates = [];
+  DB.meetings.forEach(mt=>{ if(mt.date) dates.push(mt.date); });
+  DB.transactions.forEach(t=>{ if(t.date) dates.push(t.date); });
+  const earliestYm = dates.length ? monthKey(dates.reduce((a,b)=>a<b?a:b)) : monthKey(todayStr());
+  const months = [];
+  let cursor = monthKey(todayStr());
+  while(true){
+    months.push(cursor);
+    if(cursor<=earliestYm || months.length>=240) break; // 240 = 20 years, a generous safety cap
+    cursor = addMonths(cursor+'-01', -1).slice(0,7);
+  }
+  return months;
+}
+function updatePanchsutraMonth(val){ PANCHSUTRA_UI_YM = val; render(); }
 function computePanchsutra(ym){
   const [y,m] = ym.split('-').map(Number);
   const from = ym+'-01';
@@ -4202,6 +4237,41 @@ function computePanchsutra(ym){
   ];
   const overall = Math.round(sutras.reduce((s,x)=>s+x.value,0)/sutras.length*10)/10;
   return { ym, sutras, overall, dqStatus };
+}
+// The Dashboard's Panchsutra chart always shows a rolling window ending at `toYm` (the current
+// month in practice) rather than a single month, so a brand-new month with zero activity yet never
+// makes an otherwise-healthy SHG look like it suddenly collapsed to 0%. Each of the five pillars is
+// simply the average of that same pillar's own monthly score (computePanchsutra above, unchanged)
+// across the window — this keeps every existing per-month formula exactly as-is and only changes
+// how many months feed the chart. The window is capped to however much history the SHG actually
+// has (from its formation date or its earliest meeting/transaction, whichever is earliest on file),
+// so a newly formed SHG with only 2 months of records is averaged over those 2 months, not dragged
+// down by 4 phantom empty months that predate the SHG's own existence.
+function computePanchsutraRange(toYm, months){
+  months = months || 6;
+  const dates = [];
+  if(DB.profile.formationDate) dates.push(DB.profile.formationDate);
+  DB.meetings.forEach(mt=>{ if(mt.date) dates.push(mt.date); });
+  DB.transactions.forEach(t=>{ if(t.date) dates.push(t.date); });
+  const earliestYm = dates.length ? monthKey(dates.reduce((a,b)=>a<b?a:b)) : toYm;
+  const ymList = [];
+  let cursor = toYm;
+  for(let i=0;i<months;i++){
+    if(cursor < earliestYm) break;
+    ymList.unshift(cursor);
+    cursor = addMonths(cursor+'-01', -1).slice(0,7);
+  }
+  if(!ymList.length) ymList.push(toYm);
+  const monthly = ymList.map(ym=>computePanchsutra(ym));
+  const sutras = monthly[0].sutras.map((s0,i)=>{
+    const avg = monthly.reduce((s,m)=>s+m.sutras[i].value,0)/monthly.length;
+    return { key:s0.key, label:s0.label, value:Math.round(avg*10)/10 };
+  });
+  const overall = Math.round(sutras.reduce((s,x)=>s+x.value,0)/sutras.length*10)/10;
+  // Bookkeeping/Data Quality is a live status, not a historical trend — show the current (most
+  // recent month's) status rather than averaging it, since "70% green" has no real meaning.
+  const dqStatus = monthly[monthly.length-1].dqStatus;
+  return { fromYm: ymList[0], toYm: ymList[ymList.length-1], months: ymList, sutras, overall, dqStatus };
 }
 // Renders the five Panchsutra scores as a pentagon radar chart — plain inline SVG, no charting
 // library, consistent with the rest of this offline single-file app. Colors are the literal hex
@@ -4481,8 +4551,29 @@ function viewGrading(){
   })) : `<div class="empty">No monthly grades saved yet.</div>`;
   html += `</div>`;
 
+  html += viewPanchsutraPicker();
   html += viewNabardGrading();
   return html;
+}
+// The Dashboard's Panchsutra chart always shows a rolling last-6-months view (see
+// computePanchsutraRange()) and deliberately has no period picker, so it never looks "stuck" on
+// an old or empty month. A user who wants the Panchsutra view for one specific month instead comes
+// here — the SHG Grading screen — and picks it from this dropdown.
+function viewPanchsutraPicker(){
+  const months = panchsutraMonthOptions();
+  const ym = PANCHSUTRA_UI_YM && months.includes(PANCHSUTRA_UI_YM) ? PANCHSUTRA_UI_YM : months[0];
+  const ps = computePanchsutra(ym);
+  return `<div class="card"><h3>Panchsutra — Specific Month</h3>
+    <p class="hint">The Dashboard shows a rolling average of the last 6 months. To check the five DAY-NRLM pillars for one specific month instead, pick it here.</p>
+    <div class="field" style="max-width:260px"><label>Month</label><select onchange="updatePanchsutraMonth(this.value)">
+      ${months.map(m=>`<option value="${m}" ${m===ym?'selected':''}>${esc(monthLabel(m))}</option>`).join('')}
+    </select></div>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:18px;margin-top:10px">
+      ${panchsutraRadarSVG(ps.sutras)}
+    </div>
+    ${tbl(['Sutra','Score',''], ps.sutras.map(s=>[esc(s.label), rightCell(s.value.toFixed(1)+'%'), badge(s.value>=80?'Good':(s.value>=50?'Needs Attention':'Weak'), s.value>=80?'green':(s.value>=50?'amber':'red'))]))}
+    <p class="hint" style="margin-top:6px">Overall Panchsutra Score for ${esc(monthLabel(ym))}: <b>${ps.overall.toFixed(1)}%</b></p>
+  </div>`;
 }
 // Explains, in the assessor's own numbers, exactly which indicators are short of full marks,
 // why (drawn from the same figures already computed for the grading table — never a separate
@@ -6461,6 +6552,28 @@ function reopenPeriod(){ const v = document.getElementById('reopenMonth').value;
 function saveGradingVersion(ev){ ev.preventDefault(); const f=new FormData(ev.target); DB.grading.ruleVersion=f.get('ruleVersion'); flash('ok','Grading version updated.'); render(); return false; }
 
 /* ============================================================ HELP */
+// A running list of newer features, kept here as its own function so it is easy to keep adding
+// to as the app grows, and so Help & Training stays in sync with whatever has actually been built —
+// every entry below describes a real, working feature in this copy of the app, never a planned one.
+function viewHelpFeatures(){
+  let html = `<div class="section-title" style="margin-top:18px"><h2>Features at a Glance</h2></div>`;
+  const featureItems = [
+    ['Panchsutra — The Five Pillars of a Good SHG','The Dashboard always shows a rolling AVERAGE of the last 6 months for the five DAY-NRLM pillars (Regular Meetings, Regular Savings, Regular Inter-loaning, Timely Repayment, Updated Books of Accounts) — so it never flashes a false 0% on day 1 of a new month. To check one specific month instead, open SHG Grading and use the "Panchsutra — Specific Month" picker.'],
+    ['Standard SHG Books / Registers (15 Registers)','Registers (Printable) in the left menu auto-prepares all 15 standard DAY-NRLM registers — Members Register, Minutes Book, Savings Register, Internal Loan Register, Loan Repayment Register, Cash Book, Bank Book, General Ledger, Member-wise Ledger, Stock/Asset Register, Receipts & Payments Account, Income & Expenditure Account, Trial Balance, Balance Sheet and Loan/CIF Register — plus the earlier Meeting, Attendance, Interest and Pass Book registers. Every register has View (print preview), Share (WhatsApp/Email-ready text) and Print buttons.'],
+    ['Official NABARD SHG Grading (Format 1 & 2)','SHG Grading also reproduces the official NABARD Fresh-Linkage (Format 1) and Repeat-Linkage (Format 2) grading proformas exactly — indicators, allotted marks, formulas and A/B/C/D grade bands — with its own Period From/To picker. Every figure shows "Basis"/"How this was calculated" so nothing is a black box, and CC Ops (interest servicing, overdrawing) auto-computes from your own Cash Credit ledger wherever possible.'],
+    ['Automatic Data Quality Checks','After every entry anywhere in the app, Data Quality Check runs automatically. Any critical (red) issue — a negative balance, a Trial Balance mismatch, a mismatched loan schedule — shows as a banner on every screen with a concrete suggested fix, until it is resolved.'],
+    ['Cash Can Never Go Negative','The accounting engine itself refuses to post any entry that would take Cash in Hand below zero (except a reversal), so an accidental double-payment or an out-of-order entry is caught immediately, before it ever reaches the ledger.'],
+    ['Reducing-Balance Interest Only (New Loans/CIF)','New Loan and new CIF forms now offer only the Reducing-Balance interest method, matching standard SHG/bank practice. Older "Flat"-tagged loans from a restored backup still calculate correctly for backward compatibility.'],
+    ['Duplicate-Entry Warnings','The Meeting screen and the Journal Voucher screen both warn (Post Anyway / Cancel) if an entry looks like it may already have been posted — same member, same amount, same/very-close date — catching an accidental double-entry before it is saved, without ever blocking a genuine repeat transaction.'],
+    ['Bank Loan / Cash Credit Due-Date Reminders','Once a Term Loan or Cash Credit facility\'s next instalment/interest falls due, a red reminder banner — naming the facility, account number and days overdue — appears on every screen in the app, not just the Dashboard, until a Drawal/Repayment is actually posted against it.'],
+    ['Monthly Statements (Bulk WhatsApp/Email)','Monthly Statements generates every member\'s combined Savings + Loan statement at once, with ready-to-tap WhatsApp and Email links for each member, and a Dashboard reminder from the 1st of every month until marked sent.'],
+    ['Complete Sample Data','Backup & Restore offers a deterministic, fully-filled 15-member "Complete Sample Data" set (separate from the randomised "Demo Data") for training and demonstration. Download it as a JSON file and bring it into another copy of this app anytime via Import / Upload Additional Data (Merge).'],
+    ['Average Group Corpus = (Opening + Closing) ÷ 2','Wherever Average Group Corpus feeds a calculation — NABARD Grading\'s Velocity of Lending and the Panchsutra Inter-loaning score — it is the true (Opening Corpus + Closing Corpus) ÷ 2 for the exact period selected, reconstructed from the ledger as it actually stood on those dates, not an approximation from today\'s live corpus.'],
+    ['Ask AI — Find Every Difference/Mismatch','Ask AI can be asked in plain language to find every difference or mismatch across the SHG\'s data in one go (Trial Balance, meeting cash-counted-vs-entered differences, critical Data Quality issues) — see Ask AI in the AI SHG Manager.']
+  ];
+  html += featureItems.map(([t,d])=>`<div class="card"><h3>${esc(t)}</h3><p style="margin:0;color:var(--muted);font-size:13.5px">${esc(d)}</p></div>`).join('');
+  return html;
+}
 function viewHelp(){
   let html = `<div class="section-title"><h2>Help & Training</h2></div>`;
   const items = [
@@ -6476,6 +6589,7 @@ function viewHelp(){
     ['Common Mistakes','Entering the same collection twice from both the Meeting screen and a separate Savings entry; forgetting to select the correct loan when recording a repayment; posting into a closed period without reopening it first.']
   ];
   html += items.map(([t,d])=>`<div class="card"><h3>${esc(t)}</h3><p style="margin:0;color:var(--muted);font-size:13.5px">${esc(d)}</p></div>`).join('');
+  html += viewHelpFeatures();
   html += `<div class="card"><h3>About This Application</h3><p style="color:var(--muted);font-size:13.5px">This is a self-contained, offline-first SHG records, accounting and grading tool. It runs entirely in the browser and stores data only on this device (browser local storage) — nothing is sent anywhere. Use Backup & Restore regularly, and after any browser data clearing, restore from your last backup. It does not connect to any official LokOS/DAY-NRLM system; it prepares validated, correctly formatted data for submission through whatever mechanism your SRLM/DAY-NRLM officially authorises.</p><p style="color:var(--muted);font-size:13.5px;margin-top:8px"><b>Developed by Anil Sharma</b>, Former General Manager, Central Bank of India.</p></div>`;
   return html;
 }
@@ -6692,8 +6806,29 @@ function aiAsk(qRaw){
     answer: c.grading.gradePending ? aiT('Not yet — grading is Pending because critical data-quality issues exist. Resolve them first.','अभी नहीं — गंभीर डेटा-गुणवत्ता समस्याओं के कारण ग्रेडिंग लंबित है। पहले उन्हें ठीक करें।') : aiT(`Yes. This month's calculated grade is ${c.grading.grade} (${c.grading.overall.toFixed(1)}%).`, `हाँ। इस माह की गणना की गई ग्रेड ${c.grading.grade} (${c.grading.overall.toFixed(1)}%) है।`),
     figures:[aiT('Critical data-quality issues: ','गंभीर डेटा-गुणवत्ता समस्याएँ: ')+c.dqRed],
     action: aiT('See the Grading Assistant for the indicator-wise breakdown.','संकेतक-वार विवरण के लिए ग्रेडिंग सहायक देखें।')});
+  if(has('panchsutra','five pillar','five pillars','पंचसूत्र')) {
+    const ps = computePanchsutraRange(c.ym, 6);
+    const periodLabel = ps.months.length>1 ? (monthLabel(ps.fromYm)+' – '+monthLabel(ps.toYm)) : monthLabel(ps.toYm);
+    return Object.assign({}, base, {
+      answer: aiT(`Averaged over the last ${ps.months.length} month(s) (${periodLabel}), this SHG's overall Panchsutra score is ${ps.overall.toFixed(1)}%.`, `पिछले ${ps.months.length} माह(ों) (${periodLabel}) के औसत में, इस एसएचजी का समग्र पंचसूत्र स्कोर ${ps.overall.toFixed(1)}% है।`),
+      figures: ps.sutras.map(s=>s.label+': '+s.value.toFixed(1)+'%'),
+      evidence:[aiT('From computePanchsutraRange() — the same rolling last-6-months view shown on the Dashboard. For one specific month instead, use the picker on the SHG Grading screen.','computePanchsutraRange() से — डैशबोर्ड पर दिखाई गई वही पिछले 6 माह की चलंत (rolling) गणना। किसी एक विशेष माह के लिए एसएचजी ग्रेडिंग स्क्रीन पर दिया गया चयनकर्ता उपयोग करें।')],
+      action: aiT('Open the Dashboard for the chart, or SHG Grading → "Panchsutra — Specific Month" for a single month.','चार्ट के लिए डैशबोर्ड खोलें, या किसी एक माह के लिए एसएचजी ग्रेडिंग → "पंचसूत्र — विशिष्ट माह" खोलें।')});
+  }
+  if((has('register','registers','book','books','रजिस्टर','बही') ) && has('which','what','list','available','कौन','कौन से','सूची')) return Object.assign({}, base, {
+    answer: aiT('This app auto-prepares all 15 standard DAY-NRLM SHG Books/Registers from your own entries: Members Register, Minutes Book, Savings Register, Internal Loan Register, Loan Repayment Register, Cash Book, Bank Book, General Ledger, Member-wise Ledger, Stock/Asset Register, Receipts & Payments Account, Income & Expenditure Account, Trial Balance, Balance Sheet, and Loan/CIF Register — plus the additional Meeting, Attendance, Interest and Pass Book registers. Every one can be viewed, printed or shared.', 'यह ऐप आपकी अपनी प्रविष्टियों से सभी 15 मानक DAY-NRLM एसएचजी बहियाँ/रजिस्टर स्वतः तैयार करता है — सदस्य रजिस्टर, कार्यवृत्त पुस्तिका, बचत रजिस्टर, आंतरिक ऋण रजिस्टर, ऋण वापसी रजिस्टर, कैश बुक, बैंक बुक, जनरल लेजर, सदस्य-वार लेजर, स्टॉक/परिसंपत्ति रजिस्टर, प्राप्ति एवं भुगतान खाता, आय एवं व्यय खाता, तलपट, तुलन पत्र, और ऋण/सीआईएफ रजिस्टर — साथ ही अतिरिक्त मीटिंग, उपस्थिति, ब्याज और पास बुक रजिस्टर। हर एक को देखा, मुद्रित या साझा किया जा सकता है।'),
+    action: aiT('Open Registers (Printable) from the left menu — each one has View, Share and Print buttons.','बाईं मेनू से रजिस्टर (मुद्रण योग्य) खोलें — हर एक में देखें, साझा करें और मुद्रित करें बटन हैं।')});
+  if(has('due','overdue','pending') && has('cc','cash credit','term loan','bank loan','tl','बैंक ऋण')) {
+    const dueList = bankLoanDueReminders();
+    if(!dueList.length) return Object.assign({}, base, {answer: aiT('No Bank Loan/CC instalment or interest is currently due.','फिलहाल कोई बैंक ऋण/सीसी किस्त या ब्याज देय नहीं है।')});
+    return Object.assign({}, base, {
+      answer: aiT(`${dueList.length} Bank Loan/CC facility(ies) currently have an instalment or interest due.`, `${dueList.length} बैंक ऋण/सीसी सुविधा(ओं) पर वर्तमान में किस्त या ब्याज देय है।`),
+      figures: dueList.map(d=>(d.loan.type==='TL'?'Term Loan ':'Cash Credit ')+d.loan.id+' (A/c '+(d.loan.loanAccountNo||'—')+') — '+(d.overdueDays>0?(d.overdueDays+' day(s) overdue'):'due today')+', was due '+fmtDate(d.loan.nextDueDate)),
+      evidence:[aiT('From bankLoanDueReminders() — the same banner shown on every screen until the deposit/repayment is posted.','bankLoanDueReminders() से — हर स्क्रीन पर दिखाई गई वही चेतावनी, जब तक जमा/वापसी पोस्ट न हो।')],
+      action: aiT('Open Bank Loan to SHG to record the deposit/repayment.','जमा/वापसी दर्ज करने हेतु बैंक ऋण से एसएचजी खोलें।')});
+  }
   return Object.assign({}, base, {
-    answer: aiT('I don\'t have a ready answer for that yet using this app\'s current rules. Try asking about cash, bank, savings, loan outstanding, overdue members, income/expenditure, Trial Balance, or grading — or open the relevant screen from the left menu.','इस ऐप के मौजूदा नियमों के साथ मेरे पास इसका तैयार उत्तर नहीं है। नकद, बैंक, बचत, ऋण बकाया, बकाया सदस्यों, आय/व्यय, तलपट या ग्रेडिंग के बारे में पूछकर देखें — या बाईं मेनू से संबंधित स्क्रीन खोलें।'),
+    answer: aiT('I don\'t have a ready answer for that yet using this app\'s current rules. Try asking about cash, bank, savings, loan outstanding, overdue members, income/expenditure, Trial Balance, grading, Panchsutra, registers, or Bank Loan/CC due dates — or open the relevant screen from the left menu.','इस ऐप के मौजूदा नियमों के साथ मेरे पास इसका तैयार उत्तर नहीं है। नकद, बैंक, बचत, ऋण बकाया, बकाया सदस्यों, आय/व्यय, तलपट, ग्रेडिंग, पंचसूत्र, रजिस्टर, या बैंक ऋण/सीसी देय तिथि के बारे में पूछकर देखें — या बाईं मेनू से संबंधित स्क्रीन खोलें।'),
     confidence:'—'});
 }
 function viewAIAsk(){
@@ -6721,7 +6856,9 @@ function viewAIAsk(){
     ['Which members have not paid this month?','इस माह किन सदस्यों ने जमा नहीं किया?'],
     ['Explain the financial position of this SHG.','इस एसएचजी की वित्तीय स्थिति समझाएँ।'],
     ['What data is missing?','कौन सा डेटा गायब है?'],
-    ['Can this SHG be graded this month?','क्या इस एसएचजी की इस माह ग्रेडिंग हो सकती है?']
+    ['Can this SHG be graded this month?','क्या इस एसएचजी की इस माह ग्रेडिंग हो सकती है?'],
+    ['What is our Panchsutra score?','हमारा पंचसूत्र स्कोर क्या है?'],
+    ['Is any Bank Loan/CC instalment due?','क्या कोई बैंक ऋण/सीसी किस्त देय है?']
   ];
   html += aiCard(aiT('Try asking…','यह पूछ कर देखें…'), `<div class="row" style="flex-wrap:wrap">${quick.map(([en,hi])=>`<button type="button" class="btn small secondary" style="margin:3px" onclick="aiAskQuick('${esc(en).replace(/'/g,"\\'")}')">${esc(aiT(en,hi))}</button>`).join('')}</div>`);
   return html;
@@ -7159,8 +7296,18 @@ const HELP_KB = [
   {kw:['trial balance','tb','not matching','not balanced','mismatch'], a:'A Trial Balance mismatch should not normally happen, since every voucher enforces equal debit and credit. If you see one, check Data Quality Check for the exact issue, and check whether a backup was restored partway or a browser tab was closed mid-entry.'},
   {kw:['balance sheet','bs'], a:'The Balance Sheet is generated automatically under Financial Statements from your Cash, Bank, Loan and Savings ledgers — you never fill it in manually. If assets and liabilities don\'t match, open Data Quality Check.'},
   {kw:['backup','restore','lost data','device change','new phone'], a:'Go to Backup & Restore → "Download Backup (.json)" regularly, and keep the file somewhere safe (email to yourself, cloud drive, Working Copy). To move to a new device, open this same HTML file there and use "Restore from File" with that backup.'},
-  {kw:['demo','sample data','test data','remove demo','clear demo'], a:'Demo data is clearly tagged internally, separate from real records. Use "Load Sample Demo Data" or "Clear Demo Data" from the Dashboard, Backup & Restore, or Health Check screens at any time — clearing it never affects real entries.'},
-  {kw:['grading','grade','shg grade'], a:'SHG Grading (left menu) calculates a monthly grade automatically from your existing records — meetings, attendance, savings, loan recovery and bookkeeping quality. It is a configurable/local framework, not an official government grade, unless you update it to match your SRLM\'s exact formula in Settings.'},
+  {kw:['demo','test data','remove demo','clear demo'], a:'"Load Sample Demo Data" generates ~18 months of randomised, clearly-tagged demo data. Use "Clear Demo Data" (Dashboard, Backup & Restore, or Health Check) at any time — clearing it never affects real entries. This is separate from "Complete Sample Data" (ask about "complete sample data" for that one).'},
+  {kw:['complete sample data'], a:'Complete Sample Data (Backup & Restore) is a deterministic, fully-filled 15-member dataset spanning 1-Apr-2025 to today, useful for training/demonstration since every menu has real entries. Download it as a JSON file; to bring it into another copy of the app, use "Import / Upload Additional Data (Merge)" and pick that file — do NOT use "Restore from Backup" with this file, since that function expects a full backup, not a sample-data file.'},
+  {kw:['grading','grade','shg grade'], a:'SHG Grading (left menu) auto-calculates a monthly grade from your existing records — meetings, attendance, savings, loan recovery and bookkeeping quality — using a configurable/local framework (reconfigure its weights in Settings to match your SRLM\'s exact formula). The same screen also reproduces the Official NABARD Grading (Format 1 Fresh Linkage / Format 2 Repeat Linkage) exactly, with its own Period From/To picker and a "Basis"/"How this was calculated" note on every figure.'},
+  {kw:['panchsutra','five pillar','five pillars'], a:'The Panchsutra chart (Dashboard) scores the five DAY-NRLM pillars — Regular Meetings, Regular Savings, Regular Inter-loaning, Timely Repayment, Updated Books of Accounts — always as a rolling AVERAGE of the last 6 months, so it never shows a false 0% right after a new month begins. For one specific month instead, go to SHG Grading and use the "Panchsutra — Specific Month" dropdown.'},
+  {kw:['register','registers','print register','share register'], a:'Registers (Printable) in the left menu auto-prepares all 15 standard DAY-NRLM SHG Books/Registers (Members, Minutes, Savings, Internal Loan, Loan Repayment, Cash Book, Bank Book, General Ledger, Member-wise Ledger, Stock/Asset, Receipts & Payments, Income & Expenditure, Trial Balance, Balance Sheet, Loan/CIF) plus Meeting, Attendance, Interest and Pass Book registers. Each one has View (print preview), Share (sends ready WhatsApp/Email text) and Print buttons.'},
+  {kw:['negative cash','cash negative','cash below zero'], a:'The app will not let any entry post if it would take Cash in Hand below zero (except a reversal) — it blocks the entry with an error instead, so you always know immediately when a posting is actually impossible with the cash on hand, rather than discovering a negative cash balance later.'},
+  {kw:['flat interest','reducing balance','interest method'], a:'New Loan and new CIF forms now offer only Reducing-Balance interest (the standard method), so "Flat" is no longer a choice for new loans/CIF. Any older loan already carrying "Flat" from a restored backup still calculates and schedules correctly.'},
+  {kw:['duplicate entry','duplicate warning','entered twice','posted twice'], a:'Both the Meeting screen and the Journal Voucher screen warn you (with "Post Anyway" / "Cancel") if an entry looks like it may already be posted — same member, same amount, same or very close date — so an accidental double-entry is caught before saving. A genuine repeat transaction is never blocked, only flagged for a second look.'},
+  {kw:['due date','overdue reminder','cc due','bank loan due','term loan due'], a:'Once a Bank Loan (Term Loan) or Cash Credit facility\'s next instalment/interest falls due, a red reminder banner appears on EVERY screen (not just the Dashboard) naming the facility, account number and days overdue. It stays until a Drawal/Repayment is actually posted against that facility under Bank Loan to SHG.'},
+  {kw:['monthly statement','bulk statement','whatsapp statement','send statement'], a:'Monthly Statements (left menu) prepares every member\'s combined Savings + Loan statement at once, each with a ready-to-tap WhatsApp and Email link. The Dashboard reminds you from the 1st of every month until you mark that month\'s statements as sent.'},
+  {kw:['average corpus','group corpus','opening corpus','closing corpus'], a:'Average Group Corpus, wherever it is used (NABARD Grading\'s Velocity of Lending, Panchsutra\'s Inter-loaning score), is calculated as (Opening Corpus + Closing Corpus) ÷ 2 for the exact period being assessed — both figures are reconstructed from the ledger exactly as they stood on those dates, not approximated from today\'s corpus.'},
+  {kw:['difference','mismatch','discrepancy','not tally'], a:'Ask AI (not this Help Assistant) can find every difference/mismatch in your data in one go — try asking it "are there any differences or mismatches in my data?" there. It checks the Trial Balance, every meeting\'s counted-vs-entered cash, and all critical Data Quality issues together.'},
   {kw:['lokos','upload','export data','csv'], a:'LokOS Readiness & Export shows a GREEN/AMBER/RED readiness status and lets you download validated CSV files (Members, Savings, Loans, Transactions). This app does not connect to any official API — it prepares the data for whichever mechanism your SRLM/DAY-NRLM officially authorises.'},
   {kw:['closed period','close month','reopen','cannot post','locked'], a:'If a date falls in a closed period, go to Settings → Monthly/Annual Closing and reopen that month before posting. Close periods again once corrections are done, to prevent accidental changes to finalised records.'},
   {kw:['reverse','delete transaction','wrong entry','mistake','correct entry'], a:'Never delete a posted transaction. Open Transactions / Vouchers and click "Reverse" next to the entry — this posts an equal and opposite correcting entry and keeps a full audit trail, rather than erasing history.'},
@@ -7197,7 +7344,7 @@ function viewHelpAI(){
     });
     html += `</div>`;
   }
-  html += `<div class="card"><h3>Try asking about…</h3><div class="row">${['Savings','Loan repayment','CIF','Trial Balance mismatch','Backup & restore','SHG Grading','LokOS export','Closed period','Reversing an entry'].map(t=>`<button type="button" class="btn small secondary" onclick="helpAiQuick('${esc(t)}')">${esc(t)}</button>`).join('')}</div></div>`;
+  html += `<div class="card"><h3>Try asking about…</h3><div class="row">${['Savings','Loan repayment','CIF','Trial Balance mismatch','Backup & restore','SHG Grading','Panchsutra','Registers','Complete sample data','Due date reminder','LokOS export','Closed period','Reversing an entry'].map(t=>`<button type="button" class="btn small secondary" onclick="helpAiQuick('${esc(t)}')">${esc(t)}</button>`).join('')}</div></div>`;
   return html;
 }
 function helpAiSubmit(ev){
@@ -7263,8 +7410,21 @@ function seedDemoDataCore(){
 
     for(let i=0; i<=totalMonths; i++){
       const ym = ymAdd('2025-04', i);
-      const dateStr = ym+'-04';
-      if(dateStr > todayStr()) break; // never post into the future
+      let dateStr = ym+'-04';
+      if(dateStr > todayStr()){
+        // The 4th of this month hasn't arrived yet. Since the loop only ever runs through the
+        // CURRENT month (totalMonths is derived from today's own year-month), every earlier
+        // iteration's 4th has already passed — this can only be happening on the FINAL iteration,
+        // for whichever few days of the current month have elapsed so far. Posting nothing at all
+        // for the current month used to leave it with zero meetings/savings/repayment — which is
+        // exactly what made the Dashboard's Panchsutra chart and the Grading screens show a flat
+        // 0% for Regular Meetings/Savings/Inter-loaning/Repayment on the 1st-3rd of every month,
+        // even though the demo SHG has 18 months of real history right behind it. Posting this
+        // month's meeting on TODAY's date instead (only for the current, final month) keeps the
+        // demo always showing real activity in the month the person is actually looking at.
+        if(i===totalMonths) dateStr = todayStr();
+        else break; // a genuinely future month — should not happen given the loop bounds, kept as a safety net
+      }
       if(isPeriodClosed(dateStr)) continue;
       // These accumulate the ACTUAL amounts posted below for this month, so the meeting record
       // pushed at the end (used by the Meetings list/Details screens) reflects real figures
@@ -7319,6 +7479,11 @@ function seedDemoDataCore(){
           }
         }
       });
+      // Revolving Fund receipt — every other facility (CIF, Cash Credit) already had a demo entry
+      // here, but Revolving Fund never did, leaving that menu entirely empty under Demo Data (the
+      // separate "Complete Sample Data" generator always had one). Posted in the very first month,
+      // same as a real SHG's RF typically arrives early in its life.
+      if(i===0){ try{ postTxn({date:dateStr,type:'Revolving Fund Receipt',debit:'BANK',credit:'REVOLVING_FUND',amount:20000,narration:'DEMO Revolving Fund received from VO/CLF'}); DB.revolvingFund.push({date:dateStr,source:'Demo VO/CLF',amount:20000,rate:0,period:60,bank:'BANK',demo:true}); }catch(e){} }
       if(i===1){ try{ postTxn({date:dateStr,type:'CIF Receipt',debit:'BANK',credit:'CIF',amount:150000,narration:'DEMO CIF received from VO/CLF'}); DB.cif.push({date:dateStr,source:'Demo VO/CLF',amount:150000,rate:9,period:36,bank:'BANK',demo:true});}catch(e){} }
       if(i===2 && demoCC){ try{ postTxn({date:dateStr,type:'Bank Loan Drawal',debit:'BANK',credit:'BANK_CC',amount:40000,bankLoanId:demoCC.id,narration:'DEMO CC drawal'}); }catch(e){} }
       if(i>0 && i%3===0){ try{ postTxn({date:dateStr,type:'Bank Interest Credited',debit:'BANK',credit:'BANK_INTEREST',amount:300+Math.round(Math.random()*500),narration:'DEMO quarterly bank interest credited'}); }catch(e){} }
@@ -7355,6 +7520,11 @@ function clearDemoData(){
   DB.loans = DB.loans.filter(l=>!l.demo);
   DB.meetings = DB.meetings.filter(mt=>!mt.demo);
   DB.cif = DB.cif.filter(c=>!c.demo);
+  // Revolving Fund and the demo Cash Credit facility are both tagged demo:true when generated
+  // (see seedDemoDataCore()), but were never actually removed here — "Clear Demo Data" claimed to
+  // remove ALL demo records while silently leaving these two behind as permanent ghost entries.
+  DB.revolvingFund = DB.revolvingFund.filter(r=>!r.demo);
+  DB.bankLoans = DB.bankLoans.filter(b=>!b.demo);
   DB.transactions = DB.transactions.filter(t=>!t.demo);
   if(DB.settings.demoProfileApplied){
     Object.assign(DB.profile, {name:'', shgId:'', state:'', district:'', block:'', gp:'', village:'', voClf:'',
