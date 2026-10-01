@@ -1683,12 +1683,13 @@ function meetingWorkflow(){
   <!-- STEP 2: Minutes of Meeting -->
   <div class="mstep" data-step="2" style="display:none">
     <h3>Minutes of Meeting</h3>
-    <p class="hint">This is the formal proceedings record. Attendance below is filled in automatically by name from Step 1 — it becomes the first line of the Minutes. Add one entry per agenda item below it; use the mic to dictate the discussion/decision, or type it directly.</p>
+    <p class="hint">This is the formal proceedings record. Attendance below is filled in automatically by name from Step 1 — it becomes the first line of the Minutes. Below that, a standard general agenda (English/Hindi) is pre-filled as a starting point — edit any item's wording with what was actually discussed/decided, add further items, or remove any you don't need. Use the mic to dictate the discussion/decision, or type it directly.</p>
     <div class="card" id="attendanceSummaryBlock" style="margin-bottom:10px;background:#F7F9FA">${renderAttendanceSummary(members)}</div>
     <textarea id="minutesJSON" name="minutesJSON" style="display:none">${esc(JSON.stringify(MEETING_AGENDA))}</textarea>
     <div id="agendaList">${renderAgendaList()}</div>
     <div class="row" style="margin-top:6px">
       <button type="button" class="btn secondary small" onclick="addAgendaItem()">+ Add Agenda Item</button>
+      <button type="button" class="btn secondary small" onclick="resetToStandardAgenda()">↺ Reset to Standard Agenda</button>
       <button type="button" class="btn secondary small" onclick="replayAllMinutes()">🔊 Replay All Minutes</button>
     </div>
     <div class="row" style="margin-top:14px">
@@ -1993,9 +1994,32 @@ let PENDING_JV_DATA = null;
 // exactly where it is when moving between steps, same as the app's existing live-total
 // calculations already rely on.
 let MEETING_STEP = 1;
+// A standard, general-purpose SHG meeting agenda — bilingual (English / Hindi together in each
+// line) — used to PRE-FILL the Minutes of Meeting step for every new meeting, so the Secretary
+// edits/amends real decisions onto a ready-made skeleton instead of typing from a blank page. The
+// Attendance line itself is NOT included here — it is always auto-generated and prepended fresh
+// by confirmPostMeeting() from the actual present/absent list, so including it here would create
+// a duplicate. Every item stays fully editable: the user can change the wording, add further
+// items (+Add Agenda Item), or remove any item they don't need (Remove) — this is a starting
+// point, not a fixed/required agenda, and nothing here is an official NRLM-prescribed format.
+const STANDARD_MEETING_AGENDA = [
+  {topic:'Collection of Monthly Savings / मासिक बचत संग्रह',
+   discussion:'Record savings collected from each member this meeting and any change in the savings amount. / इस बैठक में प्रत्येक सदस्य से एकत्रित बचत तथा बचत राशि में किसी परिवर्तन को दर्ज करें।'},
+  {topic:'Review of Loan Repayments / ऋण चुकौती की समीक्षा',
+   discussion:'Discuss the instalment-wise recovery position of members with outstanding loans; note any repayment due or delayed. / बकाया ऋण वाले सदस्यों की किस्तवार वसूली स्थिति पर चर्चा करें; किसी भी देय या विलंबित भुगतान को नोट करें।'},
+  {topic:'Loan Applications & Sanctions / ऋण आवेदन एवं स्वीकृति',
+   discussion:'Discuss any new loan applications received — purpose, amount and repayment capacity — and record the group\'s decision. / किसी भी नए ऋण आवेदन पर चर्चा करें — उद्देश्य, राशि एवं चुकौती क्षमता — तथा समूह के निर्णय को दर्ज करें।'},
+  {topic:'CIF / Bank Loan Status / सीआईएफ एवं बैंक ऋण की स्थिति',
+   discussion:'If applicable, update members on the status of CIF and/or Bank Term Loan/Cash Credit, including utilisation and repayment discipline. / यदि लागू हो तो सीआईएफ और/या बैंक टर्म लोन/कैश क्रेडिट की स्थिति, उपयोग एवं चुकौती अनुशासन के बारे में सदस्यों को अवगत कराएं।'},
+  {topic:'Revolving Fund Utilisation / रिवॉल्विंग फंड का उपयोग',
+   discussion:'If applicable, review how the Revolving Fund is being used to support internal lending. / यदि लागू हो तो आंतरिक ऋण सहायता हेतु रिवॉल्विंग फंड के उपयोग की समीक्षा करें।'},
+  {topic:'Any Other Business / अन्य विषय',
+   discussion:'Record any other matters discussed and decisions taken, including the date of the next meeting. / अगली बैठक की तिथि सहित चर्चा किए गए अन्य विषयों एवं लिए गए निर्णयों को दर्ज करें।'}
+];
+function freshMeetingAgenda(){ return JSON.parse(JSON.stringify(STANDARD_MEETING_AGENDA)); }
 let MEETING_AGENDA = [{topic:'', discussion:''}];
 const MEETING_STEP_NAMES = ['Date, Place & Attendance','Minutes of Meeting','Members Savings & Fine','Loan Repayment','Journal / Other Entries','Review & Post'];
-function startNewMeeting(){ MEETING_STEP=1; MEETING_AGENDA=[{topic:'', discussion:''}]; go('meetingnew'); }
+function startNewMeeting(){ MEETING_STEP=1; MEETING_AGENDA=freshMeetingAgenda(); go('meetingnew'); }
 function goToMeetingStep(n){
   if(n<1) n=1; if(n>6) n=6;
   MEETING_STEP = n;
@@ -2050,6 +2074,13 @@ function renderAgendaList(){
 }
 function refreshAgendaUI(){ const el=document.getElementById('agendaList'); if(el) el.innerHTML = renderAgendaList(); syncMinutesJSON(); }
 function addAgendaItem(){ MEETING_AGENDA.push({topic:'', discussion:''}); refreshAgendaUI(); }
+// Lets the Secretary start over from the standard bilingual agenda if the list was cleared or
+// edited into a mess — a confirm() guards it since it discards whatever is currently typed.
+function resetToStandardAgenda(){
+  if(!confirm('Replace the current agenda items with the standard agenda? Anything typed in the current items will be lost (Attendance is unaffected — it is always regenerated separately).')) return;
+  MEETING_AGENDA = freshMeetingAgenda();
+  refreshAgendaUI();
+}
 function removeAgendaItem(i){ if(MEETING_AGENDA.length<=1) return; MEETING_AGENDA.splice(i,1); refreshAgendaUI(); }
 function updateAgendaField(i,field,val){ if(MEETING_AGENDA[i]) MEETING_AGENDA[i][field]=val; syncMinutesJSON(); }
 function syncMinutesJSON(){ const el=document.getElementById('minutesJSON'); if(el) el.value = JSON.stringify(MEETING_AGENDA); }
@@ -2359,7 +2390,7 @@ function confirmPostMeeting(){
     let msg = 'Meeting posted. All registers, ledgers, loan positions and grading update automatically.';
     if(p.reconDiff!=null && p.reconDiff!==0) msg += ' Counted-vs-entries difference of '+rupee(Math.abs(p.reconDiff))+' was saved with the meeting.';
     if(p.mode==='CASH' && !p.deposit && p.totalCollection>0) msg += ' Remember to deposit cash collected when convenient (Transfer Funds).';
-    MEETING_STEP = 1; MEETING_AGENDA = [{topic:'', discussion:''}];
+    MEETING_STEP = 1; MEETING_AGENDA = freshMeetingAgenda();
     closeModal();
     flash('ok', msg);
     ROUTE='meetings'; render();
@@ -3870,11 +3901,19 @@ function viewStatements(){
     ${tbl(['Particulars','Amount'],[
       ['Members Savings', rightCell(rupee(savings))],
       ['Capital Fund / General Fund', rightCell(rupee(capitalFund))],
-      ['Community Investment Fund (CIF)', rightCell(rupee(cif))],
       ['Revolving Fund (RF)', rightCell(rupee(revolvingFund))],
       ['<b>Total Corpus</b>', rightCell('<b>'+rupee(corpus.total)+'</b>')]
     ])}
-    <p class="hint" style="margin-top:6px">Corpus is the SHG's own internal fund base — members savings plus accumulated surplus (Capital Fund) plus CIF plus Revolving Fund — used for internal lending and as the basis for bank credit-linkage eligibility (see Bank Loan Application). Bank Term Loan/Cash Credit (TL/CC) are external borrowings, not part of corpus, and are shown separately above.</p>
+    <p class="hint" style="margin-top:6px">Corpus is the SHG's own internal fund base — members savings plus accumulated surplus (Capital Fund) plus Revolving Fund — used for internal lending and as the basis for bank credit-linkage eligibility (see Bank Loan Application). Community Investment Fund (CIF), Bank Term Loan/Cash Credit (TL/CC) and Other Liabilities are external <b>borrowed</b> funds, not part of Corpus even though CIF is itself re-lent to members — see Note 2 below.</p>
+    <p style="margin-top:14px"><b>Note 2 — Borrowings (External Funds)</b></p>
+    ${tbl(['Particulars','Amount'],[
+      ['Community Investment Fund (CIF)', rightCell(rupee(cif))],
+      ['Bank Term Loan (TL) Payable', rightCell(rupee(bankTL))],
+      ['Bank Cash Credit (CC) Payable', rightCell(rupee(bankCC))],
+      ['Other Liabilities', rightCell(rupee(otherLiab))],
+      ['<b>Total Borrowings</b>', rightCell('<b>'+rupee(Math.round((cif+bankTL+bankCC+otherLiab)*100)/100)+'</b>')]
+    ])}
+    <p class="hint" style="margin-top:6px">These are funds borrowed from outside the group (the Village Organisation/CLF for CIF, the bank for TL/CC) and are shown as liabilities in the Balance Sheet above, separately from Corpus.</p>
   </div>`;
 
   // Plain-text version for the Share button — same figures as above, nothing recalculated.
@@ -3909,7 +3948,8 @@ function viewStatements(){
   shareLines.push('  Other Assets: '+rupee(otherAssets));
   shareLines.push('  Total: '+rupee(totalAssets));
   shareLines.push('');
-  shareLines.push('Note 1 — Total Corpus: '+rupee(corpus.total)+' (Savings '+rupee(savings)+' + Capital Fund '+rupee(capitalFund)+' + CIF '+rupee(cif)+' + Revolving Fund '+rupee(revolvingFund)+')');
+  shareLines.push('Note 1 — Total Corpus: '+rupee(corpus.total)+' (Savings '+rupee(savings)+' + Capital Fund '+rupee(capitalFund)+' + Revolving Fund '+rupee(revolvingFund)+')');
+  shareLines.push('Note 2 — Total Borrowings (external funds, not part of Corpus): '+rupee(Math.round((cif+bankTL+bankCC+otherLiab)*100)/100)+' (CIF '+rupee(cif)+' + Bank TL '+rupee(bankTL)+' + Bank CC '+rupee(bankCC)+' + Other Liabilities '+rupee(otherLiab)+')');
   window.__statementsShareText = shareLines.join('\n');
   return html;
 }
@@ -7563,8 +7603,15 @@ function seedDemoDataCore(){
         }catch(e){}
       }
       try{ postTxn({date:dateStr,type:'Expense',debit:'EXP_Stationery',credit:'CASH',amount:150,narration:'DEMO stationery expense'}); }catch(e){}
+      // Minutes of Meeting — every demo meeting gets a real Attendance line plus one rotating
+      // standard agenda item (same bilingual-friendly pool "Complete Sample Data" uses), so the
+      // Meetings screen, meeting Details and the "Minutes of Meeting" register all show genuine
+      // past minutes for every historical month under Demo Data too, not just for today's meeting.
+      const demoAttendanceNote = 'Present ('+present+'): — individual names not tracked in Demo Data, see Attendance % above. Absent ('+(newMembers.length-present)+'): —.';
+      const demoAgendaItem = SAMPLE_AGENDA_TOPICS[i % SAMPLE_AGENDA_TOPICS.length];
       DB.meetings.push({id:nextId('MTG'), date:dateStr, totalMembers:newMembers.length, present,
-        totals:{savings:savingsTotal, principal:principalTotal, interest:interestTotal, newLoans:newLoansTotal, expenses:150, fines:fineTotal}, demo:true});
+        totals:{savings:savingsTotal, principal:principalTotal, interest:interestTotal, newLoans:newLoansTotal, expenses:150, fines:fineTotal},
+        minutes:[{topic:'Attendance', discussion:demoAttendanceNote}, demoAgendaItem], demo:true});
     }
     DB.settings.demoDataLoaded = true;
     logAudit('LOAD_DEMO','Demo SHG data generated ('+DEMO_START+' to '+todayStr()+')');
