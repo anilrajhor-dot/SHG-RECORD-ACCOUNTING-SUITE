@@ -1089,10 +1089,13 @@ const NAV = [
   {id:'help', label:'Help & Training', icon:'?'},
   {id:'helpai', label:'Help Assistant', icon:'✦'}
 ];
-// UPI is no longer offered as a selectable entry mode anywhere (see FUND_ACCOUNTS/postTxn), so the
-// UPI Book menu item itself is hidden for the normal case. It only reappears if this SHG's data
-// actually has some legacy UPI history (a non-zero UPI balance or an old UPI-tagged transaction) —
-// so nothing is ever hidden that a user might still need to see/reconcile/move out.
+// "UPI" is offered as an entry mode on every entry screen (via paymentModeOptionsHTML()), but
+// postTxn() always folds a UPI-tagged posting straight into the combined Bank balance (see
+// FUND_ACCOUNTS/postTxn) rather than keeping money "in" a separate UPI account — so the UPI
+// account code itself never actually holds a balance from a normal new entry. The UPI Book menu
+// item is hidden in that normal case, and only reappears if this SHG's data actually has some
+// legacy UPI history (a non-zero UPI balance or an old UPI-tagged transaction posted with
+// allowLegacyUPI) — so nothing is ever hidden that a user might still need to see/reconcile/move out.
 function hasLegacyUPIData(){
   if(Math.abs(accountBalance('UPI'))>0.5) return true;
   return DB.transactions.some(t=>!t.reversed && (t.debit==='UPI'||t.credit==='UPI'));
@@ -1667,7 +1670,7 @@ function meetingWorkflow(){
     <div class="row">
       <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
       <div class="field"><label>Place / Venue</label><input name="place" placeholder="e.g. Community Hall, Sample Village"></div>
-      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+      <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()">${paymentModeOptionsHTML('CASH')}</select></div>
     </div>
     <h3 style="margin-top:14px">Attendance</h3>
     <p class="hint">All members are listed below — mark only who is absent; everyone else stays present.</p>
@@ -2088,7 +2091,8 @@ function postMeeting(ev){
   const f = new FormData(ev.target);
   const date = f.get('date');
   const place = (f.get('place')||'').trim();
-  const mode = f.get('mode');
+  const modeParsed = parseFundMode(f.get('mode'));
+  const mode = modeParsed.code, modeBankLoanId = modeParsed.bankLoanId;
   const allowExcess = !!f.get('allowExcess');
   const adjustmentReason = (f.get('adjustmentReason')||'').trim();
   let minutes = [];
@@ -2225,7 +2229,7 @@ function postMeeting(ev){
     const repayingCount = memberEntries.filter(r=>r.loanRows.length>0).length;
     const multiLoanRepayCount = memberEntries.filter(r=>r.loanRows.length>1).length;
 
-    PENDING_MEETING_PLAN = { date, place, mode, allowExcess, adjustmentReason, anyOverrideUsed, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings, minutes,
+    PENDING_MEETING_PLAN = { date, place, mode, modeBankLoanId, allowExcess, adjustmentReason, anyOverrideUsed, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings, minutes,
       totals, totalCollection, netCash, present, totalMembers:members.length, presentIds, absentIds,
       savingCount, repayingCount, multiLoanRepayCount,
       dueCount: (()=>{ let c=0; members.forEach(m=>memberDueInfos(m.id,date).forEach(d=>{ if(d.totalDue>0.5) c++; })); return c; })() };
@@ -2304,16 +2308,16 @@ function confirmPostMeeting(){
   const meetingId = nextId('MTG');
   try{
     p.memberEntries.forEach(r=>{
-      if(r.sav>0) postTxn({date:p.date,type:'Savings',debit:p.mode,credit:'MEMBER_SAVINGS',amount:r.sav,memberId:r.m.id,meetingId,narration:'Meeting savings — '+r.m.name});
+      if(r.sav>0) postTxn({date:p.date,type:'Savings',debit:p.mode,credit:'MEMBER_SAVINGS',amount:r.sav,memberId:r.m.id,meetingId,bankLoanId:p.modeBankLoanId,narration:'Meeting savings — '+r.m.name});
       if(r.wd>0){
         const wdAdjTag = r.wdOverride ? ' [Authorised Adjustment: '+p.adjustmentReason+']' : '';
-        postTxn({date:p.date,type:'Savings Withdrawal',debit:'MEMBER_SAVINGS',credit:p.mode,amount:r.wd,memberId:r.m.id,meetingId,narration:'Savings withdrawal — '+r.m.name+wdAdjTag});
+        postTxn({date:p.date,type:'Savings Withdrawal',debit:'MEMBER_SAVINGS',credit:p.mode,amount:r.wd,memberId:r.m.id,meetingId,bankLoanId:p.modeBankLoanId,narration:'Savings withdrawal — '+r.m.name+wdAdjTag});
         if(r.wdOverride) logAudit('AUTHORISED_ADJUSTMENT', 'Savings withdrawal ('+r.m.name+'): '+rupee(r.wd)+' exceeded her available balance — reason: '+p.adjustmentReason);
       }
       r.loanRows.forEach(lr=>{
         const adjTag = lr.override ? ' [Authorised Adjustment: '+p.adjustmentReason+']' : (lr.foreclose ? ' [Foreclosure — up-to-date interest to '+fmtDate(p.date)+']' : '');
-        if(lr.rp>0) postTxn({date:p.date,type: lr.foreclose?'Loan Foreclosure':'Loan Repayment',debit:p.mode,credit:'MEMBER_LOANS',amount:lr.rp,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:(lr.foreclose?'Foreclosure — principal — ':'Principal repayment — ')+r.m.name+' ('+lr.loan.id+')'+adjTag});
-        if(lr.ri>0) postTxn({date:p.date,type: lr.foreclose?'Loan Foreclosure':'Interest Received',debit:p.mode,credit:'INTEREST_INCOME',amount:lr.ri,memberId:r.m.id,loanId:lr.loan.id,meetingId,narration:(lr.foreclose?'Foreclosure — interest to date — ':'Interest received — ')+r.m.name+' ('+lr.loan.id+')'+adjTag});
+        if(lr.rp>0) postTxn({date:p.date,type: lr.foreclose?'Loan Foreclosure':'Loan Repayment',debit:p.mode,credit:'MEMBER_LOANS',amount:lr.rp,memberId:r.m.id,loanId:lr.loan.id,meetingId,bankLoanId:p.modeBankLoanId,narration:(lr.foreclose?'Foreclosure — principal — ':'Principal repayment — ')+r.m.name+' ('+lr.loan.id+')'+adjTag});
+        if(lr.ri>0) postTxn({date:p.date,type: lr.foreclose?'Loan Foreclosure':'Interest Received',debit:p.mode,credit:'INTEREST_INCOME',amount:lr.ri,memberId:r.m.id,loanId:lr.loan.id,meetingId,bankLoanId:p.modeBankLoanId,narration:(lr.foreclose?'Foreclosure — interest to date — ':'Interest received — ')+r.m.name+' ('+lr.loan.id+')'+adjTag});
         if(lr.override) logAudit('AUTHORISED_ADJUSTMENT', 'Loan '+lr.loan.id+' ('+r.m.name+'): principal '+rupee(lr.rp)+' / interest '+rupee(lr.ri)+' exceeded amount due — reason: '+p.adjustmentReason);
         if(lr.foreclose){
           lr.loan.status = 'Closed';
@@ -2321,20 +2325,24 @@ function confirmPostMeeting(){
           logAudit('LOAN_FORECLOSURE', 'Loan '+lr.loan.id+' ('+r.m.name+') foreclosed at the meeting on '+p.date+' — principal '+rupee(lr.rp)+' + up-to-date interest '+rupee(lr.ri)+' — loan marked Closed.');
         }
       });
-      if(r.fine>0) postTxn({date:p.date,type:'Fine',debit:p.mode,credit:'FINE_INCOME',amount:r.fine,memberId:r.m.id,meetingId,narration:'Fine/penalty — '+r.m.name});
+      if(r.fine>0) postTxn({date:p.date,type:'Fine',debit:p.mode,credit:'FINE_INCOME',amount:r.fine,memberId:r.m.id,meetingId,bankLoanId:p.modeBankLoanId,narration:'Fine/penalty — '+r.m.name});
     });
     if(p.newLoan){
       const loan = { id: nextId('LOAN'), memberId:p.newLoan.memberId, purpose:p.newLoan.purpose,
         sanctionDate:p.date, disbursementDate:p.date, principal:p.newLoan.amount, interestRate:p.newLoan.rate,
         instalments:p.newLoan.inst, frequency:'Monthly', interestMethod:'reducing', status:'Active', nextDueDate: addPeriod(p.date,1,'Monthly') };
       DB.loans.push(loan);
-      postTxn({date:p.date,type:'Disbursement',debit:'MEMBER_LOANS',credit:p.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,meetingId,narration:'Loan disbursed — '+memberName(loan.memberId)});
+      postTxn({date:p.date,type:'Disbursement',debit:'MEMBER_LOANS',credit:p.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,meetingId,bankLoanId:p.modeBankLoanId,narration:'Loan disbursed — '+memberName(loan.memberId)});
       logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal)+' (via meeting)');
     }
     if(p.expense){
       const expNarration = p.expense.narration + ' — Approved by ' + p.expense.approvedBy;
-      postTxn({date:p.date,type:'Expense',debit:'EXP_'+p.expense.cat,credit:p.mode,amount:p.expense.amount,meetingId,narration:expNarration});
+      postTxn({date:p.date,type:'Expense',debit:'EXP_'+p.expense.cat,credit:p.mode,amount:p.expense.amount,meetingId,bankLoanId:p.modeBankLoanId,narration:expNarration});
     }
+    // If the whole meeting's collection mode is a CC/TL account, every movement above has just
+    // been posted against it — start its due-reminder schedule now if this was its first-ever
+    // movement, exactly as a Drawal from Bank Loan to SHG would (see touchBankLoanDueDate()).
+    if(p.modeBankLoanId) touchBankLoanDueDate(p.modeBankLoanId, p.date);
     if(p.deposit){
       let narration = 'Cash deposited to bank (meeting collection)';
       if(p.deposit.bankAccount) narration += ' — '+p.deposit.bankAccount;
@@ -2482,7 +2490,7 @@ function viewSavings(){
       <div class="field"><label>Date</label><input type="date" name="date" value="${todayStr()}"></div>
       <div class="field"><label>Type</label><select name="dir"><option value="in">Savings Deposit</option><option value="out">Savings Withdrawal</option></select></div>
       <div class="field"><label>Amount ₹</label><input type="number" min="0.01" step="0.01" name="amount" required></div>
-      <div class="field"><label>Cash / Bank</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+      <div class="field"><label>Cash / Bank</label><select name="mode">${paymentModeOptionsHTML('CASH')}</select></div>
     </div>
     <button class="btn" type="submit">Post Entry</button>
   </form></div>`;
@@ -2491,9 +2499,12 @@ function viewSavings(){
 function postSavingsEntry(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
   try{
-    const dir = f.get('dir'), mode=f.get('mode'), amount=f.get('amount'), memberId=f.get('memberId'), date=f.get('date');
-    if(dir==='in') postTxn({date,type:'Savings',debit:mode,credit:'MEMBER_SAVINGS',amount,memberId,narration:'Savings deposit — '+memberName(memberId)});
-    else postTxn({date,type:'Savings Withdrawal',debit:'MEMBER_SAVINGS',credit:mode,amount,memberId,narration:'Savings withdrawal — '+memberName(memberId)});
+    const dir = f.get('dir'), {code:mode, bankLoanId}=parseFundMode(f.get('mode')), amount=f.get('amount'), memberId=f.get('memberId'), date=f.get('date');
+    if(dir==='in') postTxn({date,type:'Savings',debit:mode,credit:'MEMBER_SAVINGS',amount,memberId,bankLoanId,narration:'Savings deposit — '+memberName(memberId)});
+    else{
+      postTxn({date,type:'Savings Withdrawal',debit:'MEMBER_SAVINGS',credit:mode,amount,memberId,bankLoanId,narration:'Savings withdrawal — '+memberName(memberId)});
+      if(bankLoanId) touchBankLoanDueDate(bankLoanId, date); // paid out by drawing on a CC/TL facility
+    }
     flash('ok','Savings entry posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
@@ -2650,7 +2661,7 @@ function loanForm(){
     <div class="row">
       <div class="field"><label>Sanction Date</label><input type="date" name="sanctionDate" value="${todayStr()}"></div>
       <div class="field"><label>Disbursement Date</label><input type="date" name="disbursementDate" value="${todayStr()}"></div>
-      <div class="field"><label>Cash / Bank Out</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+      <div class="field"><label>Cash / Bank Out</label><select name="mode">${paymentModeOptionsHTML('CASH')}</select></div>
     </div>
     <div class="row">
       <div class="field"><label>Principal ₹ *</label><input type="number" min="1" step="0.01" name="principal" id="loanPrincipalInput" required oninput="updateLoanEMIPreview()"></div>
@@ -2693,8 +2704,9 @@ function saveLoan(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
   try{
     const data = Object.fromEntries(f.entries());
+    const {code:mode, bankLoanId} = parseFundMode(data.mode);
     const loan = { id: nextId('LOAN'), memberId:data.memberId, purpose:data.purpose,
-      sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate, mode:data.mode||'CASH',
+      sanctionDate:data.sanctionDate, disbursementDate:data.disbursementDate, mode,
       principal: parseFloat(data.principal), interestRate: parseFloat(data.interestRate)||0,
       instalments: parseInt(data.instalments)||12, frequency: data.frequency||'Monthly', interestMethod: 'reducing',
       status:'Active', nextDueDate: addPeriod(data.disbursementDate,1,data.frequency||'Monthly') };
@@ -2704,7 +2716,8 @@ function saveLoan(ev){
     // still leave a loan sitting in the Loan Register with a principal the ledger never actually
     // received, which is exactly what used to make the Loan Register and the Loan Ledger silently
     // disagree with each other, surfacing only much later in Data Quality Check.
-    postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:data.mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,narration:'Loan disbursed — '+memberName(loan.memberId)});
+    postTxn({date:data.disbursementDate,type:'Disbursement',debit:'MEMBER_LOANS',credit:mode,amount:loan.principal,memberId:loan.memberId,loanId:loan.id,bankLoanId,narration:'Loan disbursed — '+memberName(loan.memberId)});
+    if(bankLoanId) touchBankLoanDueDate(bankLoanId, data.disbursementDate); // disbursed by drawing on a CC/TL facility
     DB.loans.push(loan);
     logAudit('LOAN_SANCTION', loan.id+' sanctioned & disbursed for '+memberName(loan.memberId)+' — '+rupee(loan.principal));
     closeModal(); flash('ok','Loan disbursed.'); render();
@@ -2910,7 +2923,7 @@ function cifForeclosureForm(cifId){
       <div class="field"><label>Interest Paid ₹ (up to date)</label><input type="number" min="0" step="0.01" name="interest" id="cifForecloseInterest" value="${q.totalInterest}" readonly></div>
     </div>
     <p class="hint" id="cifForecloseBreakup">Already-due interest ${rupee(q.interestAlreadyDue)} + interest for the part-period since the last due date ${rupee(q.proRatedInterest)} = ${rupee(q.totalInterest)}.</p>
-    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+    <div class="field"><label>Paid From</label><select name="mode">${paymentModeOptionsHTML('CASH')}</select></div>
     <div class="field"><label>Narration</label><input name="narration" value="Foreclosure"></div>
     <button class="btn" type="submit">Confirm Foreclosure &amp; Close</button>
   </form>`);
@@ -2938,7 +2951,7 @@ function cifForm(){
     <div class="row">
       <div class="field"><label>Interest Method</label><input type="hidden" name="interestMethod" id="cifMethodSelect" value="reducing"><input type="text" value="Reducing Balance" disabled style="background:var(--bg-2)"></div>
       <div class="field"><label>Repayment Frequency</label><select name="frequency" id="cifFrequencySelect" onchange="updateCifEMIPreview()"><option value="Monthly" selected>Monthly</option><option value="Fortnightly">Fortnightly</option><option value="Weekly">Weekly</option></select></div>
-      <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
+      <div class="field"><label>Received Into</label><select name="mode">${paymentModeOptionsHTML('BANK')}</select></div>
     </div>
     <div class="hint">9% p.a., reducing balance, 36 monthly instalments is a configurable local default — not an official NRLM/SRLM rate. Change it to match the actual terms of this CIF tranche. Interest is always on the <b>Reducing Balance</b> method — charged only on the principal actually outstanding.</div>
     <div id="cifEMIPreview" class="msg info" style="margin-top:8px;display:none"></div>
@@ -2969,10 +2982,11 @@ function saveCIF(ev){
     const data = Object.fromEntries(f.entries());
     const amount = parseFloat(data.amount);
     if(!amount || amount<=0) throw new Error('Enter a valid CIF amount.');
+    const {code:mode, bankLoanId} = parseFundMode(data.mode);
     const c = { id: nextId('CIF'), date:data.date, source:data.source, amount, rate:parseFloat(data.rate)||0,
-      period:parseInt(data.period)||36, interestMethod:'reducing', frequency:data.frequency||'Monthly', bank:data.mode, status:'Active' };
+      period:parseInt(data.period)||36, interestMethod:'reducing', frequency:data.frequency||'Monthly', bank:mode, status:'Active' };
     // Post first, add the record only once it succeeds — see the identical comment in saveLoan().
-    postTxn({date:data.date,type:'CIF Receipt',debit:data.mode,credit:'CIF',amount,cifId:c.id,narration:'CIF received from '+data.source+' ('+c.id+')'});
+    postTxn({date:data.date,type:'CIF Receipt',debit:mode,credit:'CIF',amount,cifId:c.id,bankLoanId,narration:'CIF received from '+data.source+' ('+c.id+')'});
     DB.cif.push(c);
     logAudit('CIF_RECEIVED', c.id+' received from '+data.source+' — '+rupee(amount));
     closeModal(); flash('ok','CIF receipt posted.'); render();
@@ -2990,7 +3004,7 @@ function cifRepaymentForm(cifId){
       <div class="field"><label>Principal Paid ₹</label><input type="number" min="0" step="0.01" name="principal" value="0"></div>
       <div class="field"><label>Interest Paid ₹</label><input type="number" min="0" step="0.01" name="interest" value="0"></div>
     </div>
-    <div class="field"><label>Paid From</label><select name="mode"><option value="CASH">Cash</option><option value="BANK">Bank</option></select></div>
+    <div class="field"><label>Paid From</label><select name="mode">${paymentModeOptionsHTML('CASH')}</select></div>
     <div class="field"><label>Narration</label><input name="narration"></div>
     <button class="btn" type="submit">Post Repayment</button>
   </form>`);
@@ -3005,10 +3019,12 @@ function saveCIFRepayment(ev, cifId){
     if(principal===0 && interest===0) throw new Error('Enter a principal and/or interest amount.');
     const outstanding = cifTrancheOutstanding(cifId);
     if(principal > outstanding+0.5) throw new Error('Principal repayment ('+rupee(principal)+') exceeds the outstanding balance ('+rupee(outstanding)+').');
-    if(principal>0) postTxn({date:data.date, type:'CIF Repayment', debit:'CIF', credit:data.mode, amount:principal, cifId,
+    const {code:mode, bankLoanId} = parseFundMode(data.mode);
+    if(principal>0) postTxn({date:data.date, type:'CIF Repayment', debit:'CIF', credit:mode, amount:principal, cifId, bankLoanId,
       narration:'Principal repaid — '+c.id+(data.narration?(' — '+data.narration):'')});
-    if(interest>0) postTxn({date:data.date, type:'CIF Interest', debit:'INTEREST_EXPENSE', credit:data.mode, amount:interest, cifId,
+    if(interest>0) postTxn({date:data.date, type:'CIF Interest', debit:'INTEREST_EXPENSE', credit:mode, amount:interest, cifId, bankLoanId,
       narration:'Interest paid — '+c.id+(data.narration?(' — '+data.narration):'')});
+    if(bankLoanId) touchBankLoanDueDate(bankLoanId, data.date); // repaid by drawing on a CC/TL facility
     if(cifTrancheOutstanding(cifId)<=0.5) c.status='Closed';
     closeModal(); flash('ok','CIF repayment posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
@@ -3068,7 +3084,7 @@ function rfForm(){
       <div class="field"><label>Interest Rate % p.a.</label><input type="number" min="0" step="0.01" name="rate" value="0"></div>
       <div class="field"><label>Repayment Period (months)</label><input type="number" min="1" step="1" name="period" value="60"></div>
     </div>
-    <div class="field"><label>Received Into</label><select name="mode"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div>
+    <div class="field"><label>Received Into</label><select name="mode">${paymentModeOptionsHTML('BANK')}</select></div>
     <button class="btn" type="submit">Post RF Receipt</button>
   </form>`);
 }
@@ -3076,11 +3092,12 @@ function saveRF(ev){
   ev.preventDefault(); const f=new FormData(ev.target);
   try{
     const data = Object.fromEntries(f.entries());
+    const {code:mode, bankLoanId} = parseFundMode(data.mode);
     // Post the transaction FIRST — only add the Revolving Fund record once the receipt actually
     // posts, so a failed posting (e.g. an invalid amount) never leaves a Revolving Fund entry on
     // record with no matching transaction behind it.
-    postTxn({date:data.date,type:'Revolving Fund Receipt',debit:data.mode,credit:'REVOLVING_FUND',amount:data.amount,narration:'Revolving Fund received from '+data.source});
-    DB.revolvingFund.push({date:data.date, source:data.source, amount:parseFloat(data.amount), rate:parseFloat(data.rate)||0, period:parseInt(data.period)||60, bank:data.mode});
+    postTxn({date:data.date,type:'Revolving Fund Receipt',debit:mode,credit:'REVOLVING_FUND',amount:data.amount,bankLoanId,narration:'Revolving Fund received from '+data.source});
+    DB.revolvingFund.push({date:data.date, source:data.source, amount:parseFloat(data.amount), rate:parseFloat(data.rate)||0, period:parseInt(data.period)||60, bank:mode});
     closeModal(); flash('ok','Revolving Fund receipt posted.'); render();
   }catch(e){ flash('error',e.message); render(); }
   return false;
@@ -3096,12 +3113,54 @@ function bankLoanAcct(type){ return type==='CC' ? 'BANK_CC' : 'BANK_TL'; }
 // "Utilised" = cumulative amount ever drawn against the sanctioned limit (a figure that only
 // grows). "Outstanding Payable" (below) is the separate, currently-owed amount — drawals minus
 // repayments — computed straight from the ledger, so the two can never silently drift apart.
+// Counts ANY transaction that credits this facility's account (increases the liability) for this
+// bankLoanId — not just ones typed exactly 'Bank Loan Drawal' — because a member loan, an expense
+// or a CIF/RF receipt can now also be funded directly from a CC/TL account (see
+// paymentModeOptionsHTML()); every one of those is just as much a draw against the sanctioned
+// limit as a Drawal posted from the Bank Loan to SHG screen itself.
 function bankLoanUtilised(bankLoanId){
-  return DB.transactions.filter(t=>!t.reversed && t.bankLoanId===bankLoanId && t.type==='Bank Loan Drawal').reduce((s,t)=>s+t.amount,0);
+  const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return 0;
+  const acct = bankLoanAcct(loan.type);
+  return DB.transactions.filter(t=>!t.reversed && t.bankLoanId===bankLoanId && t.credit===acct).reduce((s,t)=>s+t.amount,0);
 }
 function bankLoanOutstanding(bankLoanId){
   const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return 0;
   return Math.max(0, accountBalance(bankLoanAcct(loan.type), {bankLoanId}));
+}
+// Every account the SHG can actually pay from / receive money into, for "mode"-style selectors —
+// Cash, the (single, combined) Bank savings balance, UPI, plus one option per currently-Active CC
+// or Term Loan facility under Bank Loan to SHG. A CC/TL facility is a real account the SHG can draw
+// on or deposit into directly (that is literally what a Cash Credit account is), so letting a
+// meeting collection, a loan disbursement, a CIF/RF receipt or an expense be paid straight out of
+// one — instead of always routing through the generic Bank balance first — is a genuine, correct
+// option, not a shortcut. CC/TL options are compound-valued ("BANK_CC|BKLN-0003") so the specific
+// facility travels with the choice; parseFundMode() below splits it back apart. Only Active
+// facilities are offered — a Closed one has nothing left to draw on or pay down.
+function paymentModeOptionsHTML(selected){
+  const opts = [{value:'CASH',label:'Cash'},{value:'BANK',label:'Bank (Savings Account)'},{value:'UPI',label:'UPI'}];
+  (DB.bankLoans||[]).filter(b=>b.status!=='Closed' && b.type==='CC').forEach(b=>{
+    opts.push({value:'BANK_CC|'+b.id, label:'Cash Credit (CC) Account — '+(b.loanAccountNo||b.id)});
+  });
+  (DB.bankLoans||[]).filter(b=>b.status!=='Closed' && b.type==='TL').forEach(b=>{
+    opts.push({value:'BANK_TL|'+b.id, label:'Term Loan (TL) Account — '+(b.loanAccountNo||b.id)});
+  });
+  return opts.map(o=>`<option value="${o.value}" ${o.value===selected?'selected':''}>${esc(o.label)}</option>`).join('');
+}
+// Splits a paymentModeOptionsHTML() selection back into the real ledger account code and, for a
+// CC/TL choice, which specific facility it refers to (undefined for Cash/Bank/UPI).
+function parseFundMode(raw){
+  const s = String(raw||'');
+  if(s.indexOf('|')===-1) return {code:s};
+  const [code,bankLoanId] = s.split('|');
+  return {code, bankLoanId};
+}
+// A CC/TL facility's due-reminder schedule starts the moment money is first actually drawn against
+// it (see saveBankLoanDrawal) — this applies that exact same rule when the first-ever movement
+// against a facility happens to arrive via a general entry screen (a loan disbursed, an expense
+// paid, etc.) instead of the dedicated Drawal form, so the reminder still fires correctly either way.
+function touchBankLoanDueDate(bankLoanId, date){
+  const loan = DB.bankLoans.find(b=>b.id===bankLoanId);
+  if(loan && !loan.nextDueDate) loan.nextDueDate = addPeriod(date, 1, loan.repayFrequency||'Monthly');
 }
 // Every Active facility with a nextDueDate on or before today is "due" — a Term Loan instalment
 // or Cash Credit interest payment the SHG owes the bank. Returned oldest-due-first so the most
@@ -3151,22 +3210,29 @@ function computeBankLoanInterestSlabwise(bankLoanId, from, to){
   const fromMinus1 = (()=>{ const d=new Date(from+'T00:00:00'); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); })();
   let balance = accountBalance(acct, {bankLoanId, upToDate: fromMinus1});
   const openingBalance = balance;
-  // Every balance-changing event strictly within [from, to] (drawals +, repayments −), in date order.
+  // Every balance-changing event strictly within [from, to], in date order. This is deliberately
+  // type-agnostic — ANY non-reversed transaction that debits or credits this facility's account for
+  // this bankLoanId counts (not only ones typed 'Bank Loan Drawal'/'Bank Loan Repayment'), because a
+  // member loan, an expense, or a CIF/RF receipt can now be funded directly from a CC/TL account
+  // (see paymentModeOptionsHTML()). Reading straight off the general ledger — a credit increases the
+  // liability, a debit decreases it, same sign convention as accountBalance() — means the slab-wise
+  // interest calculation can never silently disagree with the facility's own Outstanding Payable
+  // (bankLoanOutstanding()), however the movement was actually posted.
   const events = DB.transactions.filter(t=>!t.reversed && t.bankLoanId===bankLoanId && t.date>=from && t.date<=to &&
-      (t.type==='Bank Loan Drawal'||t.type==='Bank Loan Repayment'))
+      (t.debit===acct || t.credit===acct))
     .sort((a,b)=>a.date<b.date?-1:(a.date>b.date?1:0));
   const segments = [];
   let cursor = from;
   const addDays = (d,n)=>{ const dt=new Date(d+'T00:00:00'); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); };
   const dayDiff = (a,b)=>Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000);
-  // Group events by date (several drawals/repayments can land on the same day) so each distinct
-  // date only starts one new balance segment.
+  // Group events by date (several movements can land on the same day) so each distinct date only
+  // starts one new balance segment.
   const byDate = {};
   events.forEach(t=>{ (byDate[t.date] = byDate[t.date]||[]).push(t); });
   const eventDates = Object.keys(byDate).sort();
   eventDates.forEach(d=>{
     if(d>cursor){ segments.push({from:cursor, to: addDays(d,-1), balance}); cursor = d; }
-    byDate[d].forEach(t=>{ balance += (t.type==='Bank Loan Drawal') ? t.amount : -t.amount; });
+    byDate[d].forEach(t=>{ balance += (t.credit===acct ? t.amount : 0) - (t.debit===acct ? t.amount : 0); });
   });
   if(cursor<=to) segments.push({from:cursor, to, balance});
   let total = 0; const slabTotals = {};
