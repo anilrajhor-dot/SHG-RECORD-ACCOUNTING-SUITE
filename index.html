@@ -6299,6 +6299,13 @@ function importMergeJSON(){
       if(data.expenseCategories) data.expenseCategories.forEach(c=>{ if(!DB.expenseCategories.includes(c)) DB.expenseCategories.push(c); });
       if(data.grading && data.grading.history) Object.keys(data.grading.history).forEach(ym=>{ if(!DB.grading.history[ym]) DB.grading.history[ym] = data.grading.history[ym]; });
       DB.seq = maxSeq;
+      // If this merge actually brought in Complete-Sample-Data or Demo-Data tagged records (e.g.
+      // bringing a "Download Sample Data (.json)" file back in after Clear Sample Data), the
+      // Backup & Restore screen's own "currently loaded" card should say so too — otherwise it
+      // keeps showing "Load Complete Sample Data" even though sample records are now sitting right
+      // there in every menu, which would be confusing. This never OVERWRITES an already-true flag.
+      if(DB.members.some(m=>m.sample) || DB.loans.some(l=>l.sample) || DB.transactions.some(t=>t.sample)) DB.settings.sampleDataLoaded = true;
+      if(DB.members.some(m=>m.demo) || DB.loans.some(l=>l.demo) || DB.transactions.some(t=>t.demo)) DB.settings.demoDataLoaded = true;
 
       const tb = generateTrialBalance();
       logAudit('IMPORT_MERGE', counts.members+' member(s), '+counts.loans+' loan(s), '+counts.meetings+' meeting(s), '+counts.bankLoans+' bank facility(ies), '+counts.transactions+' transaction(s) imported; '+counts.skipped+' duplicate(s) skipped');
