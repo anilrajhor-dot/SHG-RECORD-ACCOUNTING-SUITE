@@ -698,7 +698,7 @@ function allLedgerCodes(){
 }
 
 /* ---------------- Member helpers ---------------- */
-function memberSavingsBalance(id){ return accountBalance('MEMBER_SAVINGS',{memberId:id}); }
+function memberSavingsBalance(id, asOfDate){ return accountBalance('MEMBER_SAVINGS', asOfDate ? {memberId:id, upToDate:asOfDate} : {memberId:id}); }
 function memberLoanOutstanding(id){
   let total=0;
   DB.loans.filter(l=>l.memberId===id && l.status!=='Closed').forEach(l=>{ total += loanOutstanding(l.id).principal; });
@@ -920,34 +920,56 @@ function calculateCashBalance(){ return accountBalance('CASH'); }
 // a cross-check: because the ledger is double-entry (Assets = Liabilities + Capital + Surplus
 // by construction), the two must always tally exactly; if they ever don't, that is itself a
 // sign of a posting error worth investigating via Data Quality.
-function calculateCorpus(){
-  const savings = DB.members.reduce((s,m)=>s+memberSavingsBalance(m.id),0);
-  const fund = accountBalance('SHG_FUND');
-  const cumulativeSurplus = incomeExpenditure('1900-01-01', todayStr()).surplus;
+// `asOfDate` (optional) computes Corpus as it stood at the end of that date (all transactions up
+// to and including it) instead of today's live figure — e.g. calculateCorpus('2026-03-31') gives
+// Corpus as on 31-Mar-2026. Left out, behaviour is exactly as before (today's corpus, unfiltered).
+// This is what lets calculateAverageCorpus() below compute a genuine opening/closing average for
+// any period, instead of approximating with today's figure regardless of which period is asked for.
+function calculateCorpus(asOfDate){
+  const filt = asOfDate ? {upToDate:asOfDate} : {};
+  const bal = (code) => accountBalance(code, filt);
+  const savings = DB.members.reduce((s,m)=>s+memberSavingsBalance(m.id, asOfDate),0);
+  const fund = bal('SHG_FUND');
+  const cumulativeSurplus = incomeExpenditure('1900-01-01', asOfDate||todayStr()).surplus;
   const capitalFund = Math.round((fund+cumulativeSurplus)*100)/100;
-  const revolvingFund = accountBalance('REVOLVING_FUND');
-  const cif = accountBalance('CIF'); // kept for callers (e.g. Balance Sheet) that show CIF as its own liability line — not part of `total` below.
+  const revolvingFund = bal('REVOLVING_FUND');
+  const cif = bal('CIF'); // kept for callers (e.g. Balance Sheet) that show CIF as its own liability line — not part of `total` below.
   // Shown for visibility only (per request) — interest earned (from bank deposits, and from
   // internal lending to members), fines/penalties, and donations are each broken out SEPARATELY
   // below, then added together into otherReceipts for the combined line — all of it is already
   // inside cumulativeSurplus/capitalFund above via the Income & Expenditure Account, so this is a
   // breakout for display only, never added a second time into `total`.
-  const interestInternal = accountBalance('INTEREST_INCOME');
-  const interestBankDeposits = accountBalance('BANK_INTEREST');
-  const fineIncome = accountBalance('FINE_INCOME');
-  const donationIncome = accountBalance('DONATION_INCOME');
-  const otherIncome = accountBalance('OTHER_INCOME');
+  const interestInternal = bal('INTEREST_INCOME');
+  const interestBankDeposits = bal('BANK_INTEREST');
+  const fineIncome = bal('FINE_INCOME');
+  const donationIncome = bal('DONATION_INCOME');
+  const otherIncome = bal('OTHER_INCOME');
   const otherReceipts = Math.round((fineIncome+donationIncome+otherIncome)*100)/100;
   const total = Math.round((savings+capitalFund+revolvingFund)*100)/100;
 
-  const totalAssets = Math.round((accountBalance('CASH')+accountBalance('BANK')+accountBalance('UPI')+accountBalance('MEMBER_LOANS')+accountBalance('OTHER_ASSETS'))*100)/100;
-  const bankTL = accountBalance('BANK_TL'), bankCC = accountBalance('BANK_CC'), otherLiab = accountBalance('OTHER_LIABILITIES');
+  const totalAssets = Math.round((bal('CASH')+bal('BANK')+bal('UPI')+bal('MEMBER_LOANS')+bal('OTHER_ASSETS'))*100)/100;
+  const bankTL = bal('BANK_TL'), bankCC = bal('BANK_CC'), otherLiab = bal('OTHER_LIABILITIES');
   const borrowings = Math.round((cif+bankTL+bankCC+otherLiab)*100)/100;
   const totalAssetsLessBorrowings = Math.round((totalAssets-borrowings)*100)/100;
 
-  return { savings, capitalFund, revolvingFund, cif, otherReceipts, fineIncome, donationIncome, otherIncome, interestInternal, interestBankDeposits, total,
+  return { asOfDate: asOfDate||todayStr(), savings, capitalFund, revolvingFund, cif, otherReceipts, fineIncome, donationIncome, otherIncome, interestInternal, interestBankDeposits, total,
     totalAssets, borrowings, bankTL, bankCC, otherLiab, totalAssetsLessBorrowings,
     tallies: Math.abs(total-totalAssetsLessBorrowings) < 0.5 };
+}
+// Average Group Corpus for a period — exactly (Opening Corpus + Closing Corpus) / 2, as the
+// official NABARD grading proforma's "Velocity of Lending" indicator requires. Opening Corpus is
+// Corpus as it stood the day BEFORE `from` (i.e. brought forward into the period — the same
+// opening/closing convention already used everywhere else in this app, e.g. registerBookRows()),
+// and Closing Corpus is Corpus as on `to`. Both are real historical figures computed from the
+// ledger itself (never a snapshot that has to be separately retained), so this works for any
+// period, past or present, the user chooses.
+function calculateAverageCorpus(from, to){
+  const d = new Date(from+'T00:00:00'); d.setDate(d.getDate()-1);
+  const openingDate = d.toISOString().slice(0,10);
+  const opening = calculateCorpus(openingDate).total;
+  const closing = calculateCorpus(to).total;
+  const average = Math.round(((opening+closing)/2)*100)/100;
+  return { from, to, openingDate, opening, closing, average };
 }
 function calculateBankBalance(){ return accountBalance('BANK'); }
 // Dedicated Corpus screen — calculateCorpus() is the single source of truth already used by
@@ -4135,7 +4157,7 @@ function computePanchsutra(ym){
   // members this month (the same "velocity of lending" idea the official NABARD format scores;
   // 1.5x the average corpus lent out in a month is treated as full marks, same as that format).
   const lent = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
-  const avgCorpus = calculateCorpus().total;
+  const avgCorpus = calculateAverageCorpus(from, to).average;
   const interLoaning = avgCorpus>0 ? Math.min(100, (lent/avgCorpus)/1.5*100) : (lent>0?100:0);
 
   // 4. Timely Repayment — principal actually recovered this month vs. principal that fell due.
@@ -4315,9 +4337,13 @@ function computeNabardOfficialGrading(){
   const savingsNA = savingsRequired<=0;
   const savingsScore = savingsNA ? null : Math.round(Math.min(cfg.savingsMarks, (savingsDeposited/savingsRequired)*cfg.savingsMarks)*100)/100;
 
-  // 3. Velocity of Lending to members from Group Corpus = Amount lent / Average Group Corpus
+  // 3. Velocity of Lending to members from Group Corpus = Amount lent / Average Group Corpus.
+  // Average Group Corpus = (Opening Corpus + Closing Corpus) / 2 for the period selected above —
+  // a real historical figure computed from the ledger itself (see calculateAverageCorpus()), not
+  // an approximation using today's corpus regardless of which period was asked for.
   const lent = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
-  const avgCorpus = calculateCorpus().total; // approximated as current corpus — a precise period-average needs corpus snapshots at from/to, not currently retained
+  const corpusInfo = calculateAverageCorpus(from, to);
+  const avgCorpus = corpusInfo.average;
   const velocity = avgCorpus>0 ? lent/avgCorpus : 0;
   let velocityScore = 0;
   for(const band of cfg.velocityBands){ if(velocity>=band.min){ velocityScore = band.marks; break; } }
@@ -4385,7 +4411,7 @@ function computeNabardOfficialGrading(){
 
   return { format:u.format, cfg, from, to, months, meetingsRequired, meetingsHeld, meetingHoldScore, attendanceScore, avgAttended, totalMembers,
     savingsDeposited, savingsRequired, savingsNA, savingsScore,
-    lent, avgCorpus, velocity, velocityScore,
+    lent, avgCorpus, corpusOpening:corpusInfo.opening, corpusOpeningDate:corpusInfo.openingDate, corpusClosing:corpusInfo.closing, velocity, velocityScore,
     demand, recovery, repaymentNA, repaymentScore,
     recordRows, recordScore, recordTotal, recordAssessedAll,
     ccOps, pendingParts, overall, grade };
@@ -4536,7 +4562,8 @@ function viewNabardGrading(){
         <td class="num">${g.savingsNA ? '—' : g.savingsScore.toFixed(2)}</td></tr>
       <tr><td colspan="5"><b>3. Velocity of Lending to members from Group Corpus</b></td></tr>
       <tr><td>3</td><td>Velocity of Lending (Amount lent ÷ Average Group Corpus)</td><td class="num">${g.cfg.velocityMarks}</td>
-        <td>${rupee(g.lent)} lent ÷ ${rupee(g.avgCorpus)} corpus = ${g.velocity.toFixed(2)} (corpus approximated as current — auto)</td><td class="num">${g.velocityScore}</td></tr>
+        <td>${rupee(g.lent)} lent ÷ ${rupee(g.avgCorpus)} Average Group Corpus = ${g.velocity.toFixed(2)} (auto)<br>
+        <span class="hint">Average Group Corpus = (Opening Corpus ${rupee(g.corpusOpening)} as on ${fmtDate(g.corpusOpeningDate)} + Closing Corpus ${rupee(g.corpusClosing)} as on ${fmtDate(g.to)}) ÷ 2</span></td><td class="num">${g.velocityScore}</td></tr>
       <tr><td colspan="5"><b>4. Regularity in Repayment of loan by members</b></td></tr>
       <tr><td>4</td><td>Recovery against Demand</td><td class="num">${g.cfg.repaymentMarks}</td>
         <td>${g.repaymentNA ? 'No instalments fell due in this period — full marks (auto)' : rupee(g.recovery)+' recovered / '+rupee(g.demand)+' demand (auto)'}</td>
