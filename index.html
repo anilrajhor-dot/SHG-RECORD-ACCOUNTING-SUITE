@@ -426,57 +426,77 @@ function defaultDoseEligibility(){
     {dose:4, label:'4th Dose Onwards', multiplier:0, minAmount:800000}
   ];
 }
+// Brings whatever DB object is currently loaded up to the full current shape, filling in only
+// what's MISSING — never touching or discarding anything already present. Used by every path that
+// can hand the app a DB object that might predate a field that exists today: the normal localStorage
+// load below, AND restoreBackup() (restoring an uploaded .json file, which may be an older backup
+// taken before some field — e.g. DB.auditLog, DB.revolvingFund — was introduced). Without this
+// shared function, restoreBackup() only patched two or three fields by hand and crashed outright
+// (e.g. "DB.auditLog.unshift is not a function") on anything older or more partial than that.
+function migrateDB(){
+  // Any top-level field freshDB() defines that this DB doesn't have at all gets freshDB()'s default
+  // for it — a safety net that covers every field, including ones added after this function was
+  // last updated, not just the handful called out individually below.
+  const fresh = freshDB();
+  Object.keys(fresh).forEach(key=>{ if(DB[key]===undefined) DB[key] = fresh[key]; });
+
+  if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]};
+  if(!DB.grading.nabardHistory) DB.grading.nabardHistory = [];
+  if(!DB.mcp) DB.mcp = {history:[]};
+  if(!DB.mcp.history) DB.mcp.history = [];
+  if(!DB.lokosMapping) DB.lokosMapping = defaultLokosMapping();
+  if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
+  else {
+    // One-time upgrade of the dose-wise minimum-eligibility floors to the SHG's revised norm
+    // (1st ₹1.5L / 2nd ₹3L / 3rd ₹6L / 4th ₹8L) — but ONLY where the saved value still exactly
+    // matches the OLD built-in default, so a minAmount the user has deliberately customised in
+    // Bank Loan Application is never silently overwritten.
+    const OLD_DEFAULTS = {1:50000, 2:100000, 3:200000, 4:300000};
+    const NEW_DEFAULTS = {1:150000, 2:300000, 3:600000, 4:800000};
+    DB.loanDoseEligibility.forEach(d=>{ if(OLD_DEFAULTS[d.dose]!==undefined && d.minAmount===OLD_DEFAULTS[d.dose]) d.minAmount = NEW_DEFAULTS[d.dose]; });
+  }
+  if(!DB.bankRecon) DB.bankRecon = { items:[], statementBalance:0, statementDate:'', history:[] };
+  if(!DB.auditLog) DB.auditLog = [];
+  if(!DB.closedPeriods) DB.closedPeriods = [];
+  if(!DB.expenseCategories) DB.expenseCategories = DEFAULT_EXPENSE_CATS.slice();
+  if(!DB.settings) DB.settings = freshDB().settings;
+  // Backfill interest rate slabs for TL/CC facilities saved before slab-wise interest existed —
+  // seed a single slab from the facility's own flat `rate`, effective from its sanction date,
+  // so slab-wise interest calculation works immediately without losing the rate already on file.
+  (DB.bankLoans||[]).forEach(b=>{ if(!b.interestSlabs || !b.interestSlabs.length) b.interestSlabs = [{fromDate:b.sanctionDate||'1900-01-01', rate:b.rate||0}]; });
+  // Backfill Gender / Relation (W/o, D/o, S/o) for members saved before these fields existed —
+  // needed for the MCP's Male/Female and "D/o-W/o" columns.
+  (DB.members||[]).forEach(m=>{ if(m.gender===undefined) m.gender='Female'; if(m.relation===undefined) m.relation='W/o'; });
+  if(!DB.revolvingFund) DB.revolvingFund = [];
+  if(!DB.bankLoans) DB.bankLoans = [];
+  if(DB.settings.aiMode===undefined) DB.settings.aiMode = 'local';
+  if(DB.settings.aiApiProvider===undefined) DB.settings.aiApiProvider = '';
+  if(DB.settings.aiApiEndpoint===undefined) DB.settings.aiApiEndpoint = '';
+  if(DB.settings.aiApiKey===undefined) DB.settings.aiApiKey = '';
+  // Never let a corrupted/old value strand the app in a mode it can't actually run —
+  // External AI always requires a mode flag AND a configured endpoint+key, checked together
+  // by aiExternalConfigured(); an incomplete configuration simply behaves as Local.
+  // Migrate CIF records saved before CIF became a proper loan sub-ledger: give any entry
+  // missing an id/status/interestMethod one, without touching amounts or existing postings.
+  if(DB.cif && DB.cif.length){
+    DB.cif.forEach(c=>{
+      if(!c.id) c.id = nextId('CIF');
+      if(!c.interestMethod) c.interestMethod = 'reducing';
+      if(!c.status) c.status = 'Active';
+      // Backfill repayment Frequency for CIF tranches saved before frequency-aware flat/reducing
+      // interest existed — every pre-existing tranche was always scheduled monthly, so 'Monthly'
+      // here is a faithful description of what already happened, not a behaviour change.
+      if(!c.frequency) c.frequency = 'Monthly';
+    });
+  }
+}
 function loadDB(){
   let raw = null;
   try{
     raw = localStorage.getItem(LS_KEY);
     if(raw){
       DB = JSON.parse(raw);
-      if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]};
-      if(!DB.grading.nabardHistory) DB.grading.nabardHistory = [];
-      if(!DB.mcp) DB.mcp = {history:[]};
-      if(!DB.mcp.history) DB.mcp.history = [];
-      if(!DB.lokosMapping) DB.lokosMapping = defaultLokosMapping();
-      if(!DB.loanDoseEligibility) DB.loanDoseEligibility = defaultDoseEligibility();
-      else {
-        // One-time upgrade of the dose-wise minimum-eligibility floors to the SHG's revised norm
-        // (1st ₹1.5L / 2nd ₹3L / 3rd ₹6L / 4th ₹8L) — but ONLY where the saved value still exactly
-        // matches the OLD built-in default, so a minAmount the user has deliberately customised in
-        // Bank Loan Application is never silently overwritten.
-        const OLD_DEFAULTS = {1:50000, 2:100000, 3:200000, 4:300000};
-        const NEW_DEFAULTS = {1:150000, 2:300000, 3:600000, 4:800000};
-        DB.loanDoseEligibility.forEach(d=>{ if(OLD_DEFAULTS[d.dose]!==undefined && d.minAmount===OLD_DEFAULTS[d.dose]) d.minAmount = NEW_DEFAULTS[d.dose]; });
-      }
-      if(!DB.bankRecon) DB.bankRecon = { items:[], statementBalance:0, statementDate:'', history:[] };
-      // Backfill interest rate slabs for TL/CC facilities saved before slab-wise interest existed —
-      // seed a single slab from the facility's own flat `rate`, effective from its sanction date,
-      // so slab-wise interest calculation works immediately without losing the rate already on file.
-      (DB.bankLoans||[]).forEach(b=>{ if(!b.interestSlabs || !b.interestSlabs.length) b.interestSlabs = [{fromDate:b.sanctionDate||'1900-01-01', rate:b.rate||0}]; });
-      // Backfill Gender / Relation (W/o, D/o, S/o) for members saved before these fields existed —
-      // needed for the MCP's Male/Female and "D/o-W/o" columns.
-      (DB.members||[]).forEach(m=>{ if(m.gender===undefined) m.gender='Female'; if(m.relation===undefined) m.relation='W/o'; });
-      if(!DB.revolvingFund) DB.revolvingFund = [];
-      if(!DB.bankLoans) DB.bankLoans = [];
-      if(DB.settings.aiMode===undefined) DB.settings.aiMode = 'local';
-      if(DB.settings.aiApiProvider===undefined) DB.settings.aiApiProvider = '';
-      if(DB.settings.aiApiEndpoint===undefined) DB.settings.aiApiEndpoint = '';
-      if(DB.settings.aiApiKey===undefined) DB.settings.aiApiKey = '';
-      // Never let a corrupted/old value strand the app in a mode it can't actually run —
-      // External AI always requires a mode flag AND a configured endpoint+key, checked together
-      // by aiExternalConfigured(); an incomplete configuration simply behaves as Local.
-      // Migrate CIF records saved before CIF became a proper loan sub-ledger: give any entry
-      // missing an id/status/interestMethod one, without touching amounts or existing postings.
-      if(DB.cif && DB.cif.length){
-        DB.cif.forEach(c=>{
-          if(!c.id) c.id = nextId('CIF');
-          if(!c.interestMethod) c.interestMethod = 'reducing';
-          if(!c.status) c.status = 'Active';
-          // Backfill repayment Frequency for CIF tranches saved before frequency-aware flat/reducing
-          // interest existed — every pre-existing tranche was always scheduled monthly, so 'Monthly'
-          // here is a faithful description of what already happened, not a behaviour change.
-          if(!c.frequency) c.frequency = 'Monthly';
-        });
-      }
+      migrateDB();
       return;
     }
   }catch(e){
@@ -6304,8 +6324,20 @@ function restoreBackup(){
     try{
       const data = JSON.parse(e.target.result);
       if(!data.members || !data.transactions) throw new Error('This does not look like a valid backup file.');
-      DB = data; if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]}; if(!DB.grading.nabardHistory) DB.grading.nabardHistory=[];
-      if(!DB.mcp) DB.mcp = {history:[]}; if(!DB.mcp.history) DB.mcp.history=[];
+      // A full backup (from "Export Backup" below) always carries its own `profile` and `settings`
+      // — a partial file such as the one "Download Sample Data (.json)" or "Complete Sample Data"
+      // produces never does, since those are deliberately just the record arrays, meant for
+      // "Import / Upload Additional Data (Merge)" above, not a full restore. Catching that here,
+      // with a specific, actionable message, is far better than letting DB get overwritten with a
+      // half-shaped object and crashing moments later on some unrelated missing field.
+      if(!data.profile || !data.settings){
+        throw new Error('This file looks like a partial export (e.g. from "Complete Sample Data" or a Merge file), not a full backup — it is missing the SHG Profile/Settings a full backup always has. Use "Import / Upload Additional Data (Merge)" above for this file instead. "Restore from Backup" only works with a file downloaded from "Export Backup" below.');
+      }
+      DB = data;
+      // Bring an older full backup's shape up to date (it may predate a field introduced since it
+      // was taken — e.g. DB.auditLog, DB.revolvingFund, DB.bankLoans) instead of crashing on the
+      // first missing one. See migrateDB() — the same function normal start-up uses.
+      migrateDB();
       logAudit('BACKUP_RESTORE','Data restored from backup file');
       flash('ok','Backup restored.'); render();
     }catch(err){ alert('Restore failed: '+err.message); }
