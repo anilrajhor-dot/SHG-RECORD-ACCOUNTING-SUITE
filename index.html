@@ -1996,25 +1996,40 @@ let PENDING_JV_DATA = null;
 let MEETING_STEP = 1;
 // A standard, general-purpose SHG meeting agenda — bilingual (English / Hindi together in each
 // line) — used to PRE-FILL the Minutes of Meeting step for every new meeting, so the Secretary
-// edits/amends real decisions onto a ready-made skeleton instead of typing from a blank page. The
-// Attendance line itself is NOT included here — it is always auto-generated and prepended fresh
-// by confirmPostMeeting() from the actual present/absent list, so including it here would create
-// a duplicate. Every item stays fully editable: the user can change the wording, add further
-// items (+Add Agenda Item), or remove any item they don't need (Remove) — this is a starting
-// point, not a fixed/required agenda, and nothing here is an official NRLM-prescribed format.
+// edits/amends real decisions onto a ready-made skeleton instead of typing from a blank page.
+// Structure follows the general practice an SHG meeting agenda normally covers — Savings → Loans
+// → Repayment → Accounts → Business/Livelihood → Schemes → Problems → Decisions → Action Plan —
+// as supplied for this app; it is a practical starting point, not an official NRLM-prescribed
+// format. The Attendance line itself is NOT included here — it is always auto-generated and
+// prepended fresh by confirmPostMeeting() from the actual present/absent list, so including it
+// here would create a duplicate; "Opening of Meeting" below covers the rest of a normal opening
+// (confirming previous minutes, action points) without repeating the headcount. Every item stays
+// fully editable: the user can change the wording, add further items (+Add Agenda Item), or
+// remove any item they don't need (Remove) — this draft is always there as a convenience, never
+// mandatory.
 const STANDARD_MEETING_AGENDA = [
-  {topic:'Collection of Monthly Savings / मासिक बचत संग्रह',
-   discussion:'Record savings collected from each member this meeting and any change in the savings amount. / इस बैठक में प्रत्येक सदस्य से एकत्रित बचत तथा बचत राशि में किसी परिवर्तन को दर्ज करें।'},
-  {topic:'Review of Loan Repayments / ऋण चुकौती की समीक्षा',
-   discussion:'Discuss the instalment-wise recovery position of members with outstanding loans; note any repayment due or delayed. / बकाया ऋण वाले सदस्यों की किस्तवार वसूली स्थिति पर चर्चा करें; किसी भी देय या विलंबित भुगतान को नोट करें।'},
-  {topic:'Loan Applications & Sanctions / ऋण आवेदन एवं स्वीकृति',
-   discussion:'Discuss any new loan applications received — purpose, amount and repayment capacity — and record the group\'s decision. / किसी भी नए ऋण आवेदन पर चर्चा करें — उद्देश्य, राशि एवं चुकौती क्षमता — तथा समूह के निर्णय को दर्ज करें।'},
-  {topic:'CIF / Bank Loan Status / सीआईएफ एवं बैंक ऋण की स्थिति',
-   discussion:'If applicable, update members on the status of CIF and/or Bank Term Loan/Cash Credit, including utilisation and repayment discipline. / यदि लागू हो तो सीआईएफ और/या बैंक टर्म लोन/कैश क्रेडिट की स्थिति, उपयोग एवं चुकौती अनुशासन के बारे में सदस्यों को अवगत कराएं।'},
-  {topic:'Revolving Fund Utilisation / रिवॉल्विंग फंड का उपयोग',
-   discussion:'If applicable, review how the Revolving Fund is being used to support internal lending. / यदि लागू हो तो आंतरिक ऋण सहायता हेतु रिवॉल्विंग फंड के उपयोग की समीक्षा करें।'},
-  {topic:'Any Other Business / अन्य विषय',
-   discussion:'Record any other matters discussed and decisions taken, including the date of the next meeting. / अगली बैठक की तिथि सहित चर्चा किए गए अन्य विषयों एवं लिए गए निर्णयों को दर्ज करें।'}
+  {topic:'Opening of Meeting / बैठक का प्रारंभ',
+   discussion:'Welcome members; confirm the previous meeting\'s minutes; review action points from the previous meeting. / सदस्यों का स्वागत करें; पिछली बैठक की कार्यवाही की पुष्टि करें; पिछली बैठक के कार्य बिंदुओं की समीक्षा करें।'},
+  {topic:'Savings / बचत',
+   discussion:'Monthly savings collected from each member; note members who have not deposited savings; confirm total savings and update the savings register. / प्रत्येक सदस्य से एकत्रित मासिक बचत; जिन सदस्यों ने बचत जमा नहीं की है उन्हें नोट करें; कुल बचत की पुष्टि करें एवं बचत रजिस्टर को अद्यतन करें।'},
+  {topic:'Loan Matters / ऋण संबंधी विषय',
+   discussion:'New loan requests, their purpose, amount and repayment terms; review of existing loans and outstanding amounts; instalments and interest received; delayed/non-repayment cases. / नए ऋण आवेदन, उनका उद्देश्य, राशि एवं चुकौती शर्तें; मौजूदा ऋणों एवं बकाया राशि की समीक्षा; प्राप्त किस्तें एवं ब्याज; विलंबित/अदत्त भुगतान के मामले।'},
+  {topic:'SHG Accounts & Cash Position / समूह खाता एवं नकदी स्थिति',
+   discussion:'Cash in hand and bank balance; receipts and payments during the month; verification of cash and bank records; updating of books/registers. / नकद एवं बैंक शेष; माह के दौरान प्राप्तियां एवं भुगतान; नकद एवं बैंक अभिलेखों का सत्यापन; बहियों/रजिस्टरों का अद्यतन।'},
+  {topic:'Livelihood & Enterprise Activities / आजीविका एवं व्यवसाय गतिविधियां',
+   discussion:'Progress of members\' businesses/activities; sales, purchases, expenses and profit; problems faced by members; new business opportunities. / सदस्यों के व्यवसाय/गतिविधियों की प्रगति; बिक्री, खरीद, व्यय एवं लाभ; सदस्यों की समस्याएं; नए व्यावसायिक अवसर।'},
+  {topic:'Bank & Government Schemes / बैंक एवं सरकारी योजनाएं',
+   discussion:'Bank linkage/credit requirements; CIF/other available funds; insurance, pension and other financial services; government schemes and benefits available to members. / बैंक लिंकेज/ऋण आवश्यकताएं; सीआईएफ/अन्य उपलब्ध निधियां; बीमा, पेंशन एवं अन्य वित्तीय सेवाएं; सदस्यों के लिए उपलब्ध सरकारी योजनाएं एवं लाभ।'},
+  {topic:'Training & Capacity Building / प्रशिक्षण एवं क्षमता निर्माण',
+   discussion:'Financial literacy; bookkeeping and digital transactions; business/enterprise skills; any upcoming training programmes. / वित्तीय साक्षरता; लेखा-जोखा एवं डिजिटल लेनदेन; व्यवसाय/उद्यम कौशल; आगामी प्रशिक्षण कार्यक्रम, यदि कोई हो।'},
+  {topic:'Problems & Suggestions / समस्याएं एवं सुझाव',
+   discussion:'Problems faced by individual members; issues relating to bank, LokOS, documents, loans, etc.; collective solutions and responsibilities. / व्यक्तिगत सदस्यों की समस्याएं; बैंक, लोकओएस, दस्तावेज़, ऋण आदि से संबंधित मुद्दे; सामूहिक समाधान एवं जिम्मेदारियां।'},
+  {topic:'Future Action Plan / भावी कार्य योजना',
+   discussion:'Activities to be completed before the next meeting; responsibility assigned to members; target dates. / अगली बैठक से पहले पूर्ण की जाने वाली गतिविधियां; सदस्यों को सौंपी गई जिम्मेदारियां; लक्ष्य तिथियां।'},
+  {topic:'Any Other Matter / अन्य विषय',
+   discussion:'Matters raised with the permission of the Chairperson. / अध्यक्ष की अनुमति से उठाए गए विषय।'},
+  {topic:'Closing / समापन',
+   discussion:'Summary of decisions taken; confirmation of next meeting date; signature/thumb impression of members as required. / लिए गए निर्णयों का सारांश; अगली बैठक की तिथि की पुष्टि; आवश्यकतानुसार सदस्यों के हस्ताक्षर/अंगूठा निशानी।'}
 ];
 function freshMeetingAgenda(){ return JSON.parse(JSON.stringify(STANDARD_MEETING_AGENDA)); }
 let MEETING_AGENDA = [{topic:'', discussion:''}];
