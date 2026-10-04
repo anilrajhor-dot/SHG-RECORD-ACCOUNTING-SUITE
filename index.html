@@ -545,6 +545,15 @@ function saveDB(){
     console.error('saveDB failed', e);
   }
 }
+// Same as saveDB(), but throws if persistence actually failed — so a caller that must know
+// whether the save genuinely survived to disk (e.g. Meeting posting, which must never tell the
+// user "Posted" when it was not actually saved) can catch this and roll back in-memory changes
+// instead of silently continuing as if nothing was wrong. Reuses saveDB()'s own try/catch and
+// LAST_SAVE_ERROR — there is still only one real save implementation.
+function saveDBOrThrow(){
+  saveDB();
+  if(LAST_SAVE_ERROR) throw new Error(LAST_SAVE_ERROR);
+}
 function nextId(prefix){ DB.seq = (DB.seq||1)+1; return prefix+'-'+String(DB.seq).padStart(5,'0'); }
 function nowStamp(){ return new Date().toISOString(); }
 function todayStr(){ return new Date().toISOString().slice(0,10); }
@@ -648,9 +657,15 @@ function postTxn(t){
   // audit-trailed, and blocking it would leave the user unable to fix the very mistake that
   // caused the problem in the first place.
   if(t.credit==='CASH' && !t.reversalOf){
-    const cashAvailable = accountBalance('CASH');
+    // Validated against cash AS OF THIS TRANSACTION'S OWN DATE (ledger balance from every
+    // transaction dated on or before t.date, which this one has not yet joined) — never today's
+    // live total. A transaction dated 15-Sep must be checked against cash as it stood on 15-Sep,
+    // so a backdated/historical posting can never bypass the cash guard by relying on cash that
+    // was only collected later. This is central to postTxn(), so every module (not only Meetings)
+    // gets correct historical cash validation automatically.
+    const cashAvailable = accountBalance('CASH', {upToDate:t.date});
     if(Math.round((cashAvailable-amt)*100)/100 < -0.005){
-      throw new Error('This would take Cash in Hand below zero (available '+rupee(cashAvailable)+', attempting to pay out '+rupee(amt)+'). Cash in hand can never be negative — reduce the amount, route it via Bank/UPI instead if that fits, or deposit/collect more cash first.');
+      throw new Error('This would take Cash in Hand below zero as on '+t.date+' (available '+rupee(cashAvailable)+', attempting to pay out '+rupee(amt)+'). Cash in hand can never be negative — reduce the amount, route it via Bank/UPI instead if that fits, or deposit/collect more cash first.');
     }
   }
   const txn = {
@@ -2877,19 +2892,42 @@ function showMeetingConfirmation(){
     ${loanRows.length ? `<h4 style="margin-top:10px">Loan-wise</h4>${tbl(['Member','Loan ID','Principal','Interest','Total',''], loanRows)}` : ''}
     ${foreclosingCount ? `<div class="msg info" style="margin-top:10px"><b>${foreclosingCount} loan(s) will be marked CLOSED</b> on posting — their Principal/Interest above already include up-to-date interest calculated to ${fmtDate(p.date)}, not the original full schedule.</div>` : ''}
     ${p.anyOverrideUsed ? `<div class="msg info" style="margin-top:10px"><b>Authorised Adjustment:</b> ${esc(p.adjustmentReason)}<br>Marked loan repayments/withdrawals above exceed the amount normally due — this reason will be recorded in the audit trail and in that transaction's narration.</div>` : ''}
-    ${p.dupWarnings && p.dupWarnings.length ? `<div class="msg err" style="margin-top:10px">Possible duplicate entr${p.dupWarnings.length>1?'ies':'y'}:<br>${p.dupWarnings.map(esc).join('<br>')}<br>You can still post if this is intentional (e.g. a genuine second payment).</div>` : ''}
+    ${p.dupWarnings && p.dupWarnings.length ? `<div class="msg err" style="margin-top:10px">Possible duplicate entr${p.dupWarnings.length>1?'ies':'y'}:<br>${p.dupWarnings.map(esc).join('<br>')}<br>You can still post if this is intentional (e.g. a genuine second payment).</div>
+    <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" id="dupConfirmChk" onchange="toggleDupConfirmButton()" style="width:auto"> I have checked the possible duplicate entries and confirm that this posting is intentional. / मैंने संभावित डुप्लिकेट प्रविष्टियों की जांच कर ली है और पुष्टि करता/करती हूं कि यह पोस्टिंग जानबूझकर की जा रही है।</label></div>` : ''}
     ${p.reconDiff!=null && p.reconDiff!==0 ? `<div class="msg err" style="margin-top:10px">Counted amount (${rupee(p.actualReceived)}) differs from entries by ${rupee(Math.abs(p.reconDiff))}. You can still post — the difference is saved with the meeting for follow-up.</div>` : ''}
     <p class="hint" style="margin-top:10px">Nothing has been posted yet. Review the figures, then confirm to create all accounting entries in one step.</p>
     <div class="row" style="margin-top:10px">
-      <button class="btn" onclick="confirmPostMeeting()">Confirm &amp; Post Meeting</button>
+      <button class="btn" id="confirmPostBtn" ${p.dupWarnings && p.dupWarnings.length ? 'disabled' : ''} onclick="confirmPostMeeting()">Confirm &amp; Post Meeting</button>
       <button class="btn secondary" onclick="closeModal()">Back to Edit</button>
     </div>`, true);
+}
+// Enables the Confirm & Post Meeting button only once the duplicate-confirmation checkbox above it
+// is ticked — a convenience layer only; confirmPostMeeting() itself re-checks this independently,
+// since the button being enabled/clicked is never by itself treated as confirming a duplicate.
+function toggleDupConfirmButton(){
+  const chk = document.getElementById('dupConfirmChk');
+  const btn = document.getElementById('confirmPostBtn');
+  if(btn) btn.disabled = !(chk && chk.checked);
 }
 // PASS 2: everything below was already validated in postMeeting(), so this loop posts the
 // whole meeting — every loan repayment tagged with its own loanId — in one uninterrupted
 // pass. The meeting record is only saved if every posting succeeds.
 function confirmPostMeeting(){
   const p = PENDING_MEETING_PLAN; if(!p) return;
+  // Explicit duplicate confirmation: when a possible duplicate was flagged, the ordinary Confirm
+  // & Post tap is NOT itself treated as confirming it — the Secretary must separately tick the
+  // "I have checked the possible duplicate entries..." checkbox shown on the review screen (its
+  // button is also left disabled until then, but that is only a convenience; this check is what
+  // actually enforces it, in case this is ever reached another way). PENDING_MEETING_PLAN is
+  // deliberately NOT claimed/nulled here, so ticking the box and pressing Confirm & Post again
+  // still works normally.
+  if(p.dupWarnings && p.dupWarnings.length){
+    const chk = document.getElementById('dupConfirmChk');
+    if(!chk || !chk.checked){
+      flash('error','Please tick "I have checked the possible duplicate entries and confirm that this posting is intentional" above before posting — a possible duplicate was detected and must be explicitly confirmed. / कृपया पोस्ट करने से पहले ऊपर दिया गया पुष्टिकरण चेकबॉक्स चुनें — एक संभावित डुप्लिकेट पाया गया है।');
+      return;
+    }
+  }
   // Claim this plan immediately, before doing anything else — this is what actually protects
   // against "Confirm & Post Meeting" being fired twice for the same tap (a real risk on some touch
   // devices, which can occasionally dispatch a duplicate click event for a single physical tap):
@@ -2898,22 +2936,34 @@ function confirmPostMeeting(){
   // through posting — always finds PENDING_MEETING_PLAN already null and returns immediately at the
   // guard above, rather than re-posting the same meeting a second time.
   PENDING_MEETING_PLAN = null;
-  // True all-or-nothing posting: snapshot every structure this pass can mutate BEFORE doing
-  // anything, so that if postTxn() throws partway through (e.g. a period was closed in another
-  // tab between validation and confirmation), the catch block below can restore DB to EXACTLY
-  // its pre-posting state — no half-posted meeting, no orphaned transactions, no stray audit
-  // entries, and no ID sequence drift. Transactions and loans are only ever appended (push), so
-  // truncating back to their original length removes exactly what this attempt added; the audit
-  // log is prepended (unshift), so it is restored by reassigning the whole array back.
-  const snapshot = { txnLen: DB.transactions.length, auditLog: DB.auditLog.slice(), loansLen: DB.loans.length, seq: DB.seq,
+  // True all-or-nothing posting: snapshot EVERY structure this pass (including the final
+  // persistence step) can mutate BEFORE doing anything, so that if postTxn() throws partway
+  // through (e.g. a period was closed in another tab between validation and confirmation), OR the
+  // final save-to-storage step itself fails, the catch block below can restore DB to EXACTLY its
+  // pre-posting state — no half-posted meeting, no orphaned transactions, no stray audit entries,
+  // no bank-loan due-date drift, and no ID sequence drift. Transactions, loans and meetings are
+  // only ever appended (push), so truncating back to their original length removes exactly what
+  // this attempt added; the audit log is prepended (unshift), so it is restored by reassigning the
+  // whole array back.
+  const snapshot = { txnLen: DB.transactions.length, auditLog: DB.auditLog.slice(), loansLen: DB.loans.length,
+    meetingsLen: DB.meetings.length, seq: DB.seq,
     // A foreclosure mutates an EXISTING loan record's status/nextDueDate in place — a plain
     // length-truncate (which only undoes pushes) can't undo that, so its previous values are
     // captured here explicitly and restored in the catch block below if anything later fails.
     loanStates: p.memberEntries.flatMap(r=>r.loanRows).filter(lr=>lr.foreclose).map(lr=>({loan:lr.loan, status:lr.loan.status, nextDueDate:lr.loan.nextDueDate})),
     // Action points are only ever appended or have a field mutated in place (never removed), so a
     // deep clone taken here is enough to fully restore them if posting fails partway through.
-    actionPoints: JSON.parse(JSON.stringify(DB.actionPoints||[])) };
+    actionPoints: JSON.parse(JSON.stringify(DB.actionPoints||[])),
+    // touchBankLoanDueDate() mutates an EXISTING bank-loan facility's nextDueDate in place (never
+    // adds/removes a facility) — a full deep clone of the array's current values is captured so
+    // the complete mutable state can be restored exactly, not just the one field this particular
+    // call happens to touch.
+    bankLoans: JSON.parse(JSON.stringify(DB.bankLoans||[])) };
   const meetingId = nextId('MTG');
+  // Tracks whether every accounting entry/record for this meeting was built successfully and only
+  // the final "save to storage" step remains — used purely to choose the right failure message
+  // below (a persistence failure is reported differently from a validation/posting-time failure).
+  let reachedPersistStep = false;
   try{
     p.memberEntries.forEach(r=>{
       if(r.sav>0) postTxn({date:p.date,type:'Savings',debit:p.mode,credit:'MEMBER_SAVINGS',amount:r.sav,memberId:r.m.id,meetingId,bankLoanId:p.modeBankLoanId,narration:'Meeting savings — '+r.m.name});
@@ -2976,6 +3026,13 @@ function confirmPostMeeting(){
       logAudit('DUPLICATE_CONFIRMED', meetingId+' — Secretary confirmed posting despite possible duplicate(s): '+p.dupWarnings.join(' | '));
     }
     logAudit('POST_MEETING', meetingId+' on '+p.date+' — '+p.present+'/'+p.totalMembers+' present, total collection '+rupee(p.totalCollection));
+    // Every accounting entry and record for this meeting has been built successfully in memory —
+    // but it is not actually "posted" until it has survived to storage. Persist now, BEFORE
+    // telling the user it succeeded; if this throws (e.g. device storage is full), the catch
+    // block below rolls back every single change made above, exactly as if none of it had ever
+    // been attempted, and the user is never shown "Meeting Posted" for data that was not saved.
+    reachedPersistStep = true;
+    saveDBOrThrow();
     let msg = 'Meeting posted. All registers, ledgers, loan positions and grading update automatically.';
     if(p.reconDiff!=null && p.reconDiff!==0) msg += ' Counted-vs-entries difference of '+rupee(Math.abs(p.reconDiff))+' was saved with the meeting.';
     if(p.mode==='CASH' && !p.deposit && p.totalCollection>0) msg += ' Remember to deposit cash collected when convenient (Transfer Funds).';
@@ -2985,20 +3042,35 @@ function confirmPostMeeting(){
     flash('ok', msg);
     ROUTE='meetings'; render();
   }catch(e){
-    // Roll back to the exact pre-posting snapshot — nothing from this attempt survives.
+    // Roll back to the exact pre-posting snapshot — nothing from this attempt survives, whether it
+    // failed mid-posting or only at the final "save to storage" step.
     DB.transactions.length = snapshot.txnLen;
     DB.auditLog = snapshot.auditLog;
     DB.loans.length = snapshot.loansLen;
+    DB.meetings.length = snapshot.meetingsLen;
     DB.seq = snapshot.seq;
     DB.actionPoints = snapshot.actionPoints;
+    DB.bankLoans = snapshot.bankLoans;
     // Undo any foreclosure status change made above — a loan mutated in place is not covered
     // by truncating DB.loans.length, so it is restored explicitly from the snapshot taken
     // before this attempt began.
     snapshot.loanStates.forEach(s=>{ s.loan.status = s.status; s.loan.nextDueDate = s.nextDueDate; });
-    // PENDING_MEETING_PLAN was already claimed (set to null) at the very top of this function, so
-    // there is no stale plan left sitting around to be accidentally re-confirmed.
-    flash('error', 'Posting failed: '+e.message+' — no part of this meeting was saved (all changes rolled back).');
-    closeModal(); render();
+    // PENDING_MEETING_PLAN was already claimed (set to null) above, so there is no stale plan left
+    // sitting around to be accidentally re-confirmed.
+    if(reachedPersistStep){
+      // Every accounting entry built correctly but saving to storage itself failed — the rollback
+      // above already undid all of it in memory; this message makes unmistakably clear that
+      // nothing was actually posted, matching exactly what is true on disk.
+      flash('error', 'Meeting could not be saved. No accounting entry has been posted. / बैठक सुरक्षित नहीं हो सकी। कोई भी लेखा प्रविष्टि पोस्ट नहीं की गई है। ('+e.message+')');
+    } else {
+      flash('error', 'Posting failed: '+e.message+' — no part of this meeting was saved (all changes rolled back).');
+    }
+    closeModal();
+    // render() persists this rolled-back (clean) state right away — the same storage write that
+    // just failed above is attempted again here with nothing extra in it, so storage is never left
+    // holding a half-written meeting; if storage is still unavailable, render()'s own save attempt
+    // surfaces the usual persistent "could not save" banner on every screen until resolved.
+    render();
   }
 }
 // Records the SHG physically moving cash into the bank — Debit Bank, Credit Cash — outside
