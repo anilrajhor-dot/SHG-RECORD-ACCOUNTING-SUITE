@@ -1665,37 +1665,65 @@ function viewMeetingDetail(meetingId){
 // the ledger and never duplicate a figure already computed by the accounting engine — they only
 // READ existing data (memberDueInfos, accountBalance, runDataQuality, bankLoanDueReminders, ...)
 // and present it to the Secretary so nothing already known has to be retyped. ----------------
-function subDaysStr(dateStr, n){
+// Adds n (whole) calendar days to dateStr — n may be negative to go backwards. Renamed from the
+// original subDaysStr(dateStr,n) (which actually ADDED n, so calling it with a negative n to go
+// backwards read oddly) purely for clarity; the arithmetic itself is unchanged.
+function addDaysStr(dateStr, n){
   const d = new Date((dateStr||todayStr())+'T00:00:00');
   d.setDate(d.getDate()+n);
   return d.toISOString().slice(0,10);
 }
 // Unfinished (not yet Completed) action points, oldest first — shown at the start of every
-// meeting and carried forward automatically into the next meeting's agenda.
+// meeting and carried forward automatically into the next meeting's agenda. Action points are
+// forward-looking follow-ups, not point-in-time ledger balances, so — unlike the Financial
+// Snapshot below — they are intentionally not filtered by the selected Meeting Date.
 function carriedActionPoints(){
   return (DB.actionPoints||[]).filter(a=>a.status!=='Completed').sort((a,b)=>(a.createdDate||'')<(b.createdDate||'')?-1:1);
+}
+// A loan's principal outstanding AS OF A GIVEN DATE — i.e. ignoring any disbursement/repayment
+// posted after that date. This deliberately does NOT reuse the shared loanOutstanding(loanId)
+// (used everywhere else in the app for the loan's CURRENT/live outstanding, as of now) — that
+// function has no date parameter and is relied on by dozens of other screens for "now", so it is
+// never touched here. This is a separate, narrowly-scoped calculation used only by the Financial
+// Snapshot, built from the exact same underlying ledger (accountBalance with upToDate), so a
+// backdated meeting shows the loan position as it genuinely stood on that date, not today's.
+function loanOutstandingAsOf(loanId, asOfDate){
+  return Math.max(0, Math.round(accountBalance('MEMBER_LOANS',{loanId, upToDate:asOfDate})*100)/100);
 }
 // Everything in "Automatic Financial Snapshot" — Members/Attendance, Savings, Loan Outstanding,
 // Amount Due, Overdue Amount, Cash/Bank Balance — derived entirely from the existing accounting
 // engine and memberDueInfos(), never a separate parallel calculation and never asked of the user.
+// Every figure here is calculated AS OF asOfDate (the selected Meeting Date), using the ledger's
+// own upToDate filter (accountBalance's third argument), so a backdated meeting shows the SHG's
+// true historical position on that date rather than today's — this never changes any OTHER
+// screen's figures, which keep reading the CURRENT balance exactly as before.
 function computeMeetingFinancialSnapshot(asOfDate){
   asOfDate = asOfDate || todayStr();
   const members = activeMembers();
-  const totalSavings = accountBalance('MEMBER_SAVINGS');
+  const totalSavings = accountBalance('MEMBER_SAVINGS', {upToDate:asOfDate});
   let overdueAmount=0, totalDue=0, dueLoanCount=0;
   members.forEach(m=> memberDueInfos(m.id, asOfDate).forEach(d=>{
     if(d.totalDue>0.5){ totalDue += d.totalDue; dueLoanCount++; }
     overdueAmount += (d.arrears||0);
   }));
-  const loanOutstandingTotal = DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
-  const cash = accountBalance('CASH'), bank = accountBalance('BANK'), upi = accountBalance('UPI');
+  // Every loan that existed by asOfDate (regardless of its CURRENT status — a loan since closed
+  // may still have had a balance on that earlier date, and must still be counted here).
+  const loanOutstandingTotal = DB.loans
+    .filter(l=>(l.disbursementDate||l.sanctionDate||'')<=asOfDate)
+    .reduce((s,l)=>s+loanOutstandingAsOf(l.id, asOfDate), 0);
+  const cash = accountBalance('CASH', {upToDate:asOfDate}), bank = accountBalance('BANK', {upToDate:asOfDate}), upi = accountBalance('UPI', {upToDate:asOfDate});
   // "Not saved recently" is a simple, data-derived proxy for overdue savings — no savings
-  // transaction from this member in the last 45 days (roughly one meeting cycle + grace) —
-  // not an official NRLM rule, just a practical flag for the Secretary to look into.
-  const cutoff = subDaysStr(asOfDate, -45);
+  // transaction from this member in the 45 days immediately before asOfDate (roughly one meeting
+  // cycle + grace) — not an official NRLM rule, just a practical flag for the Secretary to look
+  // into. A savings transaction dated AFTER asOfDate (e.g. a later meeting already posted ahead
+  // of this backdated one) is deliberately ignored, so this still reflects what was actually
+  // known as of the selected Meeting Date, not knowledge from the future.
+  const cutoff = addDaysStr(asOfDate, -45);
   const notSavingRecently = members.filter(m=>{
-    const last = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.type==='Savings').map(t=>t.date).sort().pop();
-    return !last || last < cutoff;
+    const lastSavingsDateUpToMeeting = DB.transactions
+      .filter(t=>!t.reversed && t.memberId===m.id && t.type==='Savings' && t.date<=asOfDate)
+      .map(t=>t.date).sort().pop();
+    return !lastSavingsDateUpToMeeting || lastSavingsDateUpToMeeting < cutoff;
   });
   return { totalMembers:members.length, totalSavings:Math.round(totalSavings*100)/100,
     loanOutstandingTotal:Math.round(loanOutstandingTotal*100)/100, totalDue:Math.round(totalDue*100)/100,
@@ -1708,6 +1736,7 @@ function computeMeetingFinancialSnapshot(asOfDate){
 // bounded (top data-quality issues only) rather than dumping the full Data Quality report, so the
 // agenda stays usable rather than flooded.
 function computeMeetingIssues(asOfDate, snapshot){
+  asOfDate = asOfDate || todayStr();
   snapshot = snapshot || computeMeetingFinancialSnapshot(asOfDate);
   const issues = [];
   if(snapshot.notSavingRecently.length) issues.push({sev:'amber', cat:'Savings',
@@ -1718,11 +1747,73 @@ function computeMeetingIssues(asOfDate, snapshot){
     text: snapshot.dueLoanCount+' loan instalment(s) due this meeting, totalling '+rupee(snapshot.totalDue)+'.'});
   if(snapshot.cash<0) issues.push({sev:'red', cat:'SHG Accounts & Cash Position', text:'Cash balance is negative — needs reconciliation before this meeting is posted.'});
   if(snapshot.bank<0) issues.push({sev:'red', cat:'SHG Accounts & Cash Position', text:'Bank balance is negative — needs reconciliation before this meeting is posted.'});
-  const bankDue = bankLoanDueReminders();
+  // Due as of the selected Meeting Date, not necessarily today — see bankLoanDueReminders()'s own
+  // comment for why its (optional, backward-compatible) asOfDate parameter exists.
+  const bankDue = bankLoanDueReminders(asOfDate);
   if(bankDue.length) issues.push({sev:'amber', cat:'Bank & Government Schemes',
     text: bankDue.length+' Bank CC/TL facility due reminder(s) pending ('+bankDue.map(b=>b.loan.id).join(', ')+').'});
   runDataQuality().filter(dq=>dq.sev==='red').slice(0,3).forEach(dq=> issues.push({sev:'red', cat:'Problems & Suggestions', text:dq.text}));
   return issues;
+}
+// Inner markup for the Financial Snapshot card — factored out of meetingWorkflow() so the exact
+// same markup is used both on first render and when onMeetingDateChange() live-refreshes it.
+function renderFinancialSnapshotBlock(snapshot){
+  return `<h4 style="margin-top:0">📊 Automatic Financial Snapshot <span class="hint" style="font-weight:normal">(as of the selected Meeting Date — nothing to enter, calculated from existing records)</span></h4>
+    <div class="grid cols4">
+      ${stat('Members / Attendance', snapshot.totalMembers)}
+      ${stat('Total Savings', rupee(snapshot.totalSavings))}
+      ${stat('Loan Outstanding', rupee(snapshot.loanOutstandingTotal))}
+      ${stat('Amount Due', rupee(snapshot.totalDue))}
+      ${stat('Overdue Amount (Arrears)', rupee(snapshot.overdueAmount))}
+      ${stat('Cash Balance', rupee(snapshot.cash))}
+      ${stat('Bank Balance', rupee(snapshot.bank + snapshot.upi))}
+      ${stat('New Loan Requests', 'To be recorded')}
+      ${stat('Pending Actions', snapshot.openActionPointsCount)}
+    </div>
+    ${snapshot.notSavingRecently.length ? `<p class="hint" style="margin-top:6px">⚠ Not saved in the 45 days up to the Meeting Date: ${snapshot.notSavingRecently.map(m=>esc(m.name)).join(', ')}</p>` : ''}`;
+}
+// Inner markup for Step 4's "Members with Repayment Due" summary table — factored out for the
+// same live-refresh reason as renderFinancialSnapshotBlock() above.
+function renderDueSummaryBlock(dueList){
+  return dueList.length ? `<div class="card"><h4 style="margin-top:0">Members with Repayment Due (${dueList.length} loan(s))</h4>
+      ${tbl(['Member','Loan ID','Current Instalment (P+I)','Arrears (P+I)','Total Principal Due','Total Interest Due','Total Amount Due'],
+        dueList.map(x=>[esc(x.m.name), x.d.loan.id,
+          rightCell(rupee(x.d.principalDue)+' + '+rupee(x.d.interestDue)),
+          rightCell(x.d.arrears>0?(rupee(x.d.arrearsPrincipal)+' + '+rupee(x.d.arrearsInterest)):'—'),
+          rightCell(rupee(x.d.totalPrincipalDue)), rightCell(rupee(x.d.totalInterestDue)),
+          rightCell('<b>'+rupee(x.d.totalDue)+'</b>')]))}
+      <p class="hint" style="margin-top:6px">Total Principal Due + Total Interest Due always equals Total Amount Due. Use "Fill Due Amounts" below each member to apply these — you can still edit before posting.</p>
+    </div>` : `<div class="card"><div class="empty">No repayments currently due.</div></div>`;
+}
+// Live-refreshes everything that is calculated AS OF the Meeting Date (Financial Snapshot, Smart
+// Agenda highlighting, Step 4's due summary) whenever that date is changed — called alongside the
+// pre-existing reloadMeetingDueDate() (which refreshes each loan-wise repayment card) via
+// onMeetingDateChange() below. Purely a read/recompute — never mutates MEETING_AGENDA, never posts.
+function reloadMeetingSmartData(newDate){
+  newDate = newDate || todayStr();
+  const snapshot = computeMeetingFinancialSnapshot(newDate);
+  const issues = computeMeetingIssues(newDate, snapshot);
+  MEETING_HOT_TOPICS = new Set(issues.map(i=>i.cat));
+  if(carriedActionPoints().length) MEETING_HOT_TOPICS.add('Opening of Meeting');
+  const snapEl = document.getElementById('financialSnapshotBlock');
+  if(snapEl) snapEl.innerHTML = renderFinancialSnapshotBlock(snapshot);
+  const dueEl = document.getElementById('meetingDueSummaryBlock');
+  if(dueEl){
+    const dueList = [];
+    activeMembers().forEach(m=> memberDueInfos(m.id, newDate).forEach(d=>{ if(d.totalDue>0.5) dueList.push({m,d}); }));
+    dueEl.innerHTML = renderDueSummaryBlock(dueList);
+  }
+  // Smart Agenda highlighting follows MEETING_HOT_TOPICS — refresh the agenda cards so badges
+  // reflect the newly selected date, without discarding anything the Secretary has already typed
+  // (refreshAgendaUI() re-renders strictly from the current MEETING_AGENDA, unchanged here).
+  refreshAgendaUI();
+}
+// Single onchange handler for the Meeting Date field — keeps the existing per-loan due-date
+// refresh (reloadMeetingDueDate) AND adds the new Snapshot/Smart-Issues refresh, so every
+// date-dependent figure in the wizard updates together whenever the date changes.
+function onMeetingDateChange(newDate){
+  reloadMeetingDueDate(newDate);
+  reloadMeetingSmartData(newDate);
 }
 // Set once per full render of the meeting wizard (meetingWorkflow()) and read by
 // renderAgendaList() to highlight the standard agenda items that current data makes relevant —
@@ -1843,21 +1934,7 @@ function meetingWorkflow(){
     <div id="meetingStepDots" style="display:flex;gap:5px;margin-top:6px">${[1,2,3,4,5,6].map(n=>`<div style="flex:1;height:4px;border-radius:2px;background:${n===1?'var(--navy-2)':'#D9E1E8'}"></div>`).join('')}</div>
   </div>`;
 
-  html += `<div class="card" style="background:#F7F9FA">
-    <h4 style="margin-top:0">📊 Automatic Financial Snapshot <span class="hint" style="font-weight:normal">(as of today — nothing to enter, calculated from existing records)</span></h4>
-    <div class="grid cols4">
-      ${stat('Members / Attendance', snapshot.totalMembers)}
-      ${stat('Total Savings', rupee(snapshot.totalSavings))}
-      ${stat('Loan Outstanding', rupee(snapshot.loanOutstandingTotal))}
-      ${stat('Amount Due', rupee(snapshot.totalDue))}
-      ${stat('Overdue Amount (Arrears)', rupee(snapshot.overdueAmount))}
-      ${stat('Cash Balance', rupee(snapshot.cash))}
-      ${stat('Bank Balance', rupee(snapshot.bank + snapshot.upi))}
-      ${stat('New Loan Requests', '— (record in Step 5)')}
-      ${stat('Pending Actions', snapshot.openActionPointsCount)}
-    </div>
-    ${snapshot.notSavingRecently.length ? `<p class="hint" style="margin-top:6px">⚠ Not saved in the last 45 days: ${snapshot.notSavingRecently.map(m=>esc(m.name)).join(', ')}</p>` : ''}
-  </div>
+  html += `<div class="card" id="financialSnapshotBlock" style="background:#F7F9FA">${renderFinancialSnapshotBlock(snapshot)}</div>
   ${prevActionPoints.length ? `<div class="card">
     <h4 style="margin-top:0">📋 Previous Action Points (carried forward from earlier meetings)</h4>
     ${tbl(['Action / Decision','Responsible','Target Date','Status'], prevActionPoints.map(ap=>[esc(ap.topic+(ap.decision?(' — '+ap.decision):'')), esc(ap.responsible||'—'), ap.targetDate?fmtDate(ap.targetDate):'—', badge(ap.status, ap.status==='Open'?'amber':'grey')]))}
@@ -1870,7 +1947,7 @@ function meetingWorkflow(){
   <div class="mstep" data-step="1">
     <h3>Meeting Date, Place &amp; Attendance</h3>
     <div class="row">
-      <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="reloadMeetingDueDate(this.value)"></div>
+      <div class="field"><label>Meeting Date *</label><input type="date" name="date" id="meetingDate" value="${today}" required onchange="onMeetingDateChange(this.value)"></div>
       <div class="field"><label>Place / Venue</label><input name="place" placeholder="e.g. Community Hall, Sample Village"></div>
       <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()">${paymentModeOptionsHTML('CASH')}</select></div>
     </div>
@@ -1949,15 +2026,7 @@ function meetingWorkflow(){
   <!-- STEP 4: Loan Repayment -->
   <div class="mstep" data-step="4" style="display:none">
     <h3>Loan Repayment</h3>
-    ${dueList.length ? `<div class="card"><h4 style="margin-top:0">Members with Repayment Due (${dueList.length} loan(s))</h4>
-      ${tbl(['Member','Loan ID','Current Instalment (P+I)','Arrears (P+I)','Total Principal Due','Total Interest Due','Total Amount Due'],
-        dueList.map(x=>[esc(x.m.name), x.d.loan.id,
-          rightCell(rupee(x.d.principalDue)+' + '+rupee(x.d.interestDue)),
-          rightCell(x.d.arrears>0?(rupee(x.d.arrearsPrincipal)+' + '+rupee(x.d.arrearsInterest)):'—'),
-          rightCell(rupee(x.d.totalPrincipalDue)), rightCell(rupee(x.d.totalInterestDue)),
-          rightCell('<b>'+rupee(x.d.totalDue)+'</b>')]))}
-      <p class="hint" style="margin-top:6px">Total Principal Due + Total Interest Due always equals Total Amount Due. Use "Fill Due Amounts" below each member to apply these — you can still edit before posting.</p>
-    </div>` : `<div class="card"><div class="empty">No repayments currently due.</div></div>`}
+    <div id="meetingDueSummaryBlock">${renderDueSummaryBlock(dueList)}</div>
     ${membersWithLoans.length ? membersWithLoans.map(m=>renderLoanRepaymentCard(m, today)).join('') : ''}
     <div class="row" style="margin-top:14px">
       <button type="button" class="btn secondary" onclick="goToMeetingStep(3)">← Back</button>
@@ -3479,8 +3548,11 @@ function touchBankLoanDueDate(bankLoanId, date){
 // overdue facility leads the reminder banner. A facility with no nextDueDate set yet (nothing
 // drawn against it so far, or the user hasn't entered a schedule) is never flagged — there is
 // nothing concrete to be reminded of until money has actually been drawn.
-function bankLoanDueReminders(){
-  const today = todayStr();
+// asOfDate is optional and defaults to today (every existing caller passes nothing, so behaviour
+// there is unchanged) — the Meeting module passes the selected Meeting Date so a backdated
+// meeting's Smart Issues reflect what was actually due as of that date, not today's real date.
+function bankLoanDueReminders(asOfDate){
+  const today = asOfDate || todayStr();
   return (DB.bankLoans||[]).filter(b=>b.status!=='Closed' && b.nextDueDate && b.nextDueDate<=today)
     .map(b=>({loan:b, overdueDays: Math.max(0, daysBetween(b.nextDueDate, today))}))
     .sort((a,b)=>b.overdueDays-a.overdueDays);
