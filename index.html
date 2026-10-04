@@ -1803,9 +1803,15 @@ function reloadMeetingSmartData(newDate){
     activeMembers().forEach(m=> memberDueInfos(m.id, newDate).forEach(d=>{ if(d.totalDue>0.5) dueList.push({m,d}); }));
     dueEl.innerHTML = renderDueSummaryBlock(dueList);
   }
+  // Re-generate the auto-suggested "Issue Requiring Attention" items for the newly selected date —
+  // see refreshSuggestedIssueItems()'s own comment for exactly what counts as "untouched" and is
+  // therefore safe to refresh, versus anything the Secretary has started filling in, which is
+  // always left exactly as it is.
+  refreshSuggestedIssueItems(newDate, issues);
   // Smart Agenda highlighting follows MEETING_HOT_TOPICS — refresh the agenda cards so badges
   // reflect the newly selected date, without discarding anything the Secretary has already typed
-  // (refreshAgendaUI() re-renders strictly from the current MEETING_AGENDA, unchanged here).
+  // (refreshAgendaUI() re-renders strictly from the current MEETING_AGENDA, mutated above only for
+  // the untouched suggested items).
   refreshAgendaUI();
 }
 // Single onchange handler for the Meeting Date field — keeps the existing per-loan due-date
@@ -1831,10 +1837,44 @@ function buildAgendaWithFollowups(){
       discussion: ap.decision||'', decision:'', responsible: ap.responsible||'', targetDate: ap.targetDate||'', status:'Open', apId: ap.id });
   });
   computeMeetingIssues(todayStr()).forEach(iss=>{
-    base.push({ topic:'Issue Requiring Attention / ध्यान देने योग्य विषय', discussion: iss.text,
-      decision:'', responsible:'', targetDate:'', status:'Open', suggested:true });
+    base.push({ topic:ISSUE_ITEM_TOPIC, discussion: iss.text,
+      decision:'', responsible:'', targetDate:'', status:'Open', suggested:true, origText: iss.text, issueCat: iss.cat });
   });
   return base;
+}
+// The exact, constant topic text every auto-suggested "Issue Requiring Attention" item carries
+// (both languages together, like every other agenda item) — used to recognise one of these items
+// again later, including after a Meeting Date change.
+const ISSUE_ITEM_TOPIC = 'Issue Requiring Attention / ध्यान देने योग्य विषय';
+// A suggested issue item counts as "untouched" — i.e. still exactly what the app auto-generated,
+// nothing the Secretary has started working on — only when EVERY field is still at its
+// auto-generated default: the topic/wording were never edited (discussion still matches origText,
+// the exact text it was created with), and Decision/Responsible/Target Date/Status are all still
+// blank. Anything else (a reworded discussion, a Decision typed in, a Responsible person or Target
+// Date filled in, or a Status changed) marks it as touched, and it is then never auto-removed,
+// auto-updated or duplicated against — the Secretary's own entry always wins.
+function isUntouchedSuggestedItem(item){
+  return !!item.suggested && item.topic===ISSUE_ITEM_TOPIC && item.discussion===item.origText &&
+    !(item.decision||'').trim() && !(item.responsible||'').trim() && !(item.targetDate||'').trim() &&
+    (item.status==='' || item.status==='Open');
+}
+// Regenerates the auto-suggested "Issue Requiring Attention" items for the given (newly selected)
+// Meeting Date: every UNTOUCHED suggested item is dropped and replaced with a fresh set computed
+// for that date (so stale figures/resolved exceptions disappear and newly-arisen ones appear); any
+// suggested item the Secretary has started editing in ANY way is left completely untouched and is
+// never duplicated — if its exact wording still matches one of the freshly computed issues, that
+// issue is simply not re-added as a second item. Never touches Follow-up items (carried-forward
+// action points) or any manually added/edited agenda item — only items created by this same
+// mechanism, and only while they remain exactly as generated.
+function refreshSuggestedIssueItems(newDate, issues){
+  issues = issues || computeMeetingIssues(newDate);
+  const touchedTexts = new Set(MEETING_AGENDA.filter(a=>a.suggested && !isUntouchedSuggestedItem(a)).map(a=>a.discussion));
+  MEETING_AGENDA = MEETING_AGENDA.filter(item=>!isUntouchedSuggestedItem(item));
+  issues.forEach(iss=>{
+    if(touchedTexts.has(iss.text)) return; // already represented by an item the Secretary has touched — never add a duplicate
+    MEETING_AGENDA.push({ topic:ISSUE_ITEM_TOPIC, discussion: iss.text,
+      decision:'', responsible:'', targetDate:'', status:'Open', suggested:true, origText: iss.text, issueCat: iss.cat });
+  });
 }
 // Closing summary (point 8) — read live from MEETING_AGENDA (kept current by updateAgendaField()
 // as the Secretary types), never from a separate counter that could drift out of sync.
