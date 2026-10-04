@@ -398,6 +398,11 @@ function freshDB(){
     expenseCategories: DEFAULT_EXPENSE_CATS.slice(),
     closedPeriods:[],
     auditLog:[],
+    // Cross-meeting action points / unfinished decisions — tracked purely for follow-up (never
+    // posted to the ledger). Each: {id, meetingId, topic, decision, responsible, targetDate,
+    // status:'Open'|'Completed', createdDate, completedDate, completedMeetingId}. migrateDB()'s
+    // generic loop backfills this to [] for any DB saved before this field existed.
+    actionPoints:[],
     grading:{ ruleVersion:'2026.1', history:{}, nabardHistory:[] },
     mcp:{ history:[] },
     lokosMapping: defaultLokosMapping(),
@@ -1640,15 +1645,182 @@ function viewMeetingDetail(meetingId){
     return [esc(memberName(memberId)), lid, rightCell(rupee(prin)), rightCell(rupee(int_)), rightCell('<b>'+rupee(prin+int_)+'</b>'), rightCell(rupee(loanOutstanding(lid).principal))];
   });
   const nonMember = txns.filter(t=>!t.memberId);
+  // Decision/Responsible/Target/Status are newer, optional fields on each minutes item — a meeting
+  // posted before they existed simply has none of them, so each is only shown when present.
+  const apForMeeting = (DB.actionPoints||[]).filter(a=>a.meetingId===meetingId);
   openModal(`<button class="close" onclick="closeModal()">×</button><h3>Meeting Details — ${fmtDate(mt.date)}${mt.place?(' — '+esc(mt.place)):''}</h3>
-    <p class="hint">Present: ${mt.present}/${mt.totalMembers}${mt.postedBy?(' · Posted by '+esc(mt.postedBy)+(mt.postedAt?(' on '+fmtDate(mt.postedAt.slice(0,10))):'')):''}</p>
-    ${mt.minutes && mt.minutes.length ? `<h4>Minutes of Meeting</h4>${mt.minutes.map((a,i)=>`<div class="qcard" style="margin-bottom:6px"><b>${i+1}. ${esc(a.topic||'(untitled)')}</b><div class="hint" style="margin-top:3px">${esc(a.discussion||'')}</div></div>`).join('')}` : ''}
+    <p class="hint">Present: ${mt.present}/${mt.totalMembers}${mt.postedBy?(' · Posted by '+esc(mt.postedBy)+(mt.postedAt?(' on '+fmtDate(mt.postedAt.slice(0,10))):'')):''}${mt.nextMeetingDate?(' · Next Meeting: '+fmtDate(mt.nextMeetingDate)):''}</p>
+    ${mt.minutes && mt.minutes.length ? `<h4>Minutes of Meeting</h4>${mt.minutes.map((a,i)=>`<div class="qcard" style="margin-bottom:6px"><b>${i+1}. ${esc(a.topic||'(untitled)')}</b><div class="hint" style="margin-top:3px">${esc(a.discussion||'')}</div>
+      ${(a.decision||a.responsible||a.targetDate||a.status) ? `<div class="hint" style="margin-top:3px">${a.decision?('<b>Decision:</b> '+esc(a.decision)+' '):''}${a.responsible?('<b>Responsible:</b> '+esc(a.responsible)+' '):''}${a.targetDate?('<b>Target:</b> '+fmtDate(a.targetDate)+' '):''}${a.status?('<b>Status:</b> '+esc(a.status)):''}</div>` : ''}</div>`).join('')}` : ''}
+    ${mt.enterprise ? `<h4>Enterprise / Livelihood Review</h4><div class="qcard">${['sales','purchases','expenses','profit','stock','workingCapital','problems','nextPlan'].filter(k=>mt.enterprise[k]).map(k=>`<div style="font-size:13px"><b>${esc(k)}:</b> ${esc(mt.enterprise[k])}</div>`).join('')}</div>` : ''}
+    ${apForMeeting.length ? `<h4 style="margin-top:12px">Action Points from this Meeting</h4>${tbl(['Action/Decision','Responsible','Target Date','Status'], apForMeeting.map(ap=>[esc(ap.topic+(ap.decision?(' — '+ap.decision):'')), esc(ap.responsible||'—'), ap.targetDate?fmtDate(ap.targetDate):'—', badge(ap.status, ap.status==='Completed'?'green':'amber')]))}` : ''}
     <h4>Member-wise</h4>${memberRows.length ? tbl(['Member','Savings','Loan Repayment','Fine','Total'], memberRows) : '<div class="empty">No member-wise transactions.</div>'}
     ${loanRows.length ? `<h4 style="margin-top:12px">Loan-wise</h4>${tbl(['Member','Loan ID','Principal','Interest','Total','Loan O/S Now'], loanRows)}` : ''}
     ${nonMember.length ? `<h4 style="margin-top:12px">Other Entries (New Loan / Expenses)</h4>${tbl(['Type','Debit','Credit','Amount','Narration'],
       nonMember.map(t=>[t.type, accountLabel(t.debit), accountLabel(t.credit), rightCell(rupee(t.amount)), esc(t.narration)]))}` : ''}
     ${mt.bankDeposit && mt.bankDeposit.amount ? `<div class="msg info" style="margin-top:10px">Cash of ${rupee(mt.bankDeposit.amount)} was deposited to bank as part of this meeting.</div>` : ''}`);
 }
+// ---------------- Smart Meeting helpers (additive — Financial Snapshot, Smart Agenda, Previous
+// Action Points, Issues Requiring Attention, Decisions & Follow-up). These never post anything to
+// the ledger and never duplicate a figure already computed by the accounting engine — they only
+// READ existing data (memberDueInfos, accountBalance, runDataQuality, bankLoanDueReminders, ...)
+// and present it to the Secretary so nothing already known has to be retyped. ----------------
+function subDaysStr(dateStr, n){
+  const d = new Date((dateStr||todayStr())+'T00:00:00');
+  d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+// Unfinished (not yet Completed) action points, oldest first — shown at the start of every
+// meeting and carried forward automatically into the next meeting's agenda.
+function carriedActionPoints(){
+  return (DB.actionPoints||[]).filter(a=>a.status!=='Completed').sort((a,b)=>(a.createdDate||'')<(b.createdDate||'')?-1:1);
+}
+// Everything in "Automatic Financial Snapshot" — Members/Attendance, Savings, Loan Outstanding,
+// Amount Due, Overdue Amount, Cash/Bank Balance — derived entirely from the existing accounting
+// engine and memberDueInfos(), never a separate parallel calculation and never asked of the user.
+function computeMeetingFinancialSnapshot(asOfDate){
+  asOfDate = asOfDate || todayStr();
+  const members = activeMembers();
+  const totalSavings = accountBalance('MEMBER_SAVINGS');
+  let overdueAmount=0, totalDue=0, dueLoanCount=0;
+  members.forEach(m=> memberDueInfos(m.id, asOfDate).forEach(d=>{
+    if(d.totalDue>0.5){ totalDue += d.totalDue; dueLoanCount++; }
+    overdueAmount += (d.arrears||0);
+  }));
+  const loanOutstandingTotal = DB.loans.filter(l=>l.status!=='Closed').reduce((s,l)=>s+loanOutstanding(l.id).principal,0);
+  const cash = accountBalance('CASH'), bank = accountBalance('BANK'), upi = accountBalance('UPI');
+  // "Not saved recently" is a simple, data-derived proxy for overdue savings — no savings
+  // transaction from this member in the last 45 days (roughly one meeting cycle + grace) —
+  // not an official NRLM rule, just a practical flag for the Secretary to look into.
+  const cutoff = subDaysStr(asOfDate, -45);
+  const notSavingRecently = members.filter(m=>{
+    const last = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.type==='Savings').map(t=>t.date).sort().pop();
+    return !last || last < cutoff;
+  });
+  return { totalMembers:members.length, totalSavings:Math.round(totalSavings*100)/100,
+    loanOutstandingTotal:Math.round(loanOutstandingTotal*100)/100, totalDue:Math.round(totalDue*100)/100,
+    overdueAmount:Math.round(overdueAmount*100)/100, dueLoanCount, cash, bank, upi,
+    notSavingRecently, openActionPointsCount: carriedActionPoints().length };
+}
+// A short, practical list of exceptions worth raising at this meeting — used both to highlight
+// the relevant Smart Agenda items and to auto-suggest "Issues Requiring Attention" agenda items
+// (point 7) that the Secretary can accept, edit or remove like any other agenda item. Deliberately
+// bounded (top data-quality issues only) rather than dumping the full Data Quality report, so the
+// agenda stays usable rather than flooded.
+function computeMeetingIssues(asOfDate, snapshot){
+  snapshot = snapshot || computeMeetingFinancialSnapshot(asOfDate);
+  const issues = [];
+  if(snapshot.notSavingRecently.length) issues.push({sev:'amber', cat:'Savings',
+    text: snapshot.notSavingRecently.length+' member(s) have not saved recently: '+snapshot.notSavingRecently.map(m=>m.name).join(', ')+'.'});
+  if(snapshot.overdueAmount>0.5) issues.push({sev:'red', cat:'Loan Matters',
+    text:'Loan arrears outstanding: '+rupee(snapshot.overdueAmount)+' across '+snapshot.dueLoanCount+' loan(s).'});
+  else if(snapshot.dueLoanCount>0) issues.push({sev:'amber', cat:'Loan Matters',
+    text: snapshot.dueLoanCount+' loan instalment(s) due this meeting, totalling '+rupee(snapshot.totalDue)+'.'});
+  if(snapshot.cash<0) issues.push({sev:'red', cat:'SHG Accounts & Cash Position', text:'Cash balance is negative — needs reconciliation before this meeting is posted.'});
+  if(snapshot.bank<0) issues.push({sev:'red', cat:'SHG Accounts & Cash Position', text:'Bank balance is negative — needs reconciliation before this meeting is posted.'});
+  const bankDue = bankLoanDueReminders();
+  if(bankDue.length) issues.push({sev:'amber', cat:'Bank & Government Schemes',
+    text: bankDue.length+' Bank CC/TL facility due reminder(s) pending ('+bankDue.map(b=>b.loan.id).join(', ')+').'});
+  runDataQuality().filter(dq=>dq.sev==='red').slice(0,3).forEach(dq=> issues.push({sev:'red', cat:'Problems & Suggestions', text:dq.text}));
+  return issues;
+}
+// Set once per full render of the meeting wizard (meetingWorkflow()) and read by
+// renderAgendaList() to highlight the standard agenda items that current data makes relevant —
+// a pure read-only flag, never a mutation of MEETING_AGENDA itself.
+let MEETING_HOT_TOPICS = new Set();
+// Builds a fresh meeting's starting agenda: the standard bilingual agenda (extended with the new,
+// always-editable Decision/Responsible/Target Date/Status fields), PLUS one Follow-up item per
+// still-open action point carried forward from a previous meeting (point 2/8), PLUS one suggested
+// "Issue Requiring Attention" item per current exception (point 7) — every added item stays a
+// completely ordinary, editable/removable agenda item, nothing here is posted anywhere.
+function buildAgendaWithFollowups(){
+  const base = freshMeetingAgenda().map(it=>Object.assign({decision:'', responsible:'', targetDate:'', status:''}, it));
+  carriedActionPoints().forEach(ap=>{
+    base.push({ topic:'Follow-up on Previous Action / पिछली कार्यवाही पर अनुवर्ती — '+(ap.topic||''),
+      discussion: ap.decision||'', decision:'', responsible: ap.responsible||'', targetDate: ap.targetDate||'', status:'Open', apId: ap.id });
+  });
+  computeMeetingIssues(todayStr()).forEach(iss=>{
+    base.push({ topic:'Issue Requiring Attention / ध्यान देने योग्य विषय', discussion: iss.text,
+      decision:'', responsible:'', targetDate:'', status:'Open', suggested:true });
+  });
+  return base;
+}
+// Closing summary (point 8) — read live from MEETING_AGENDA (kept current by updateAgendaField()
+// as the Secretary types), never from a separate counter that could drift out of sync.
+function meetingDecisionsSummary(){
+  const items = MEETING_AGENDA||[];
+  const withDecision = items.filter(i=>(i.decision||'').trim());
+  const actionItems = items.filter(i=>(i.responsible||'').trim() || (i.targetDate||'').trim());
+  const completed = items.filter(i=>i.status==='Completed');
+  const pending = actionItems.filter(i=>i.status!=='Completed');
+  const responsibleMembers = Array.from(new Set(items.map(i=>(i.responsible||'').trim()).filter(Boolean)));
+  const targetDates = Array.from(new Set(items.map(i=>i.targetDate).filter(Boolean))).sort();
+  return { totalDecisions: withDecision.length, actionPoints: actionItems.length, completed: completed.length,
+    pending: pending.length, responsibleMembers, targetDates };
+}
+function updateDecisionsSummary(){
+  const el = document.getElementById('decisionsSummaryBlock'); if(!el) return;
+  const s = meetingDecisionsSummary();
+  el.innerHTML = `<h4 style="margin-top:0">📋 Decisions &amp; Follow-up Summary (auto)</h4>
+    <div class="grid cols4">
+      ${stat('Total Decisions', s.totalDecisions)}
+      ${stat('Action Points', s.actionPoints)}
+      ${stat('Completed', s.completed)}
+      ${stat('Pending', s.pending)}
+    </div>
+    <p class="hint" style="margin-top:6px">Responsible: ${s.responsibleMembers.map(esc).join(', ')||'—'} &nbsp;·&nbsp; Target Date(s): ${s.targetDates.map(fmtDate).join(', ')||'—'}</p>
+    <p class="hint">Pending action points are carried forward to the next meeting automatically once this meeting is posted.</p>`;
+}
+// After a meeting posts, reconciles its agenda items with DB.actionPoints — updates an item that
+// was itself a carried-forward follow-up (apId set) in place rather than duplicating it, and
+// creates a new action point only for an item that actually carries a decision/owner/date (plain
+// discussion items are never turned into action points). Purely a tracking list — no ledger impact.
+function reconcileActionPointsFromMeeting(meetingId, minutesArr, meetingDate){
+  (minutesArr||[]).forEach(item=>{
+    if(item.apId){
+      const ap = (DB.actionPoints||[]).find(a=>a.id===item.apId);
+      if(ap){
+        if(item.status==='Completed'){ ap.status='Completed'; ap.completedDate=meetingDate; ap.completedMeetingId=meetingId; }
+        else { if(item.decision) ap.decision=item.decision; if(item.responsible) ap.responsible=item.responsible; if(item.targetDate) ap.targetDate=item.targetDate; ap.status='Open'; }
+        return;
+      }
+    }
+    const hasActionContent = (item.decision||'').trim() || (item.responsible||'').trim() || (item.targetDate||'').trim();
+    if(!hasActionContent) return;
+    DB.actionPoints.push({ id: nextId('AP'), meetingId, topic:item.topic||'', decision:item.decision||'', responsible:item.responsible||'',
+      targetDate:item.targetDate||'', status: item.status==='Completed'?'Completed':'Open', createdDate: meetingDate,
+      completedDate: item.status==='Completed'?meetingDate:'', completedMeetingId: item.status==='Completed'?meetingId:'' });
+  });
+}
+// Member-wise Review (point 5) — purely a read-only lookup into existing data, computed on demand
+// so it never slows down rendering the rest of the wizard. No new ledger postings, ever.
+function showMemberReview(mid){
+  const el = document.getElementById('memberReviewPanel'); if(!el) return;
+  if(!mid){ el.innerHTML=''; return; }
+  const m = DB.members.find(x=>x.id===mid); if(!m){ el.innerHTML=''; return; }
+  const date = (document.getElementById('meetingDate')||{}).value || todayStr();
+  const savBal = memberSavingsBalance(m.id, date);
+  const dues = memberDueInfos(m.id, date);
+  const loanOS = dues.reduce((s,d)=>s+d.outstanding,0);
+  const instDue = dues.reduce((s,d)=>s+d.totalDue,0);
+  const history = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && (t.type==='Loan Repayment'||t.type==='Interest Received'||t.type==='Loan Foreclosure'))
+    .sort((a,b)=>a.date<b.date?1:-1).slice(0,5);
+  const pendingIssues = (DB.actionPoints||[]).filter(a=>a.status!=='Completed' && (a.responsible||'').trim().toLowerCase()===m.name.trim().toLowerCase());
+  el.innerHTML = `<div class="grid cols4">
+      ${stat('Savings Balance', rupee(savBal))}
+      ${stat('Loan Outstanding', rupee(loanOS))}
+      ${stat('Instalment/Amount Due', rupee(instDue))}
+      ${stat('Active Loans', dues.length)}
+    </div>
+    ${history.length? `<h5 style="margin:8px 0 4px">Recent Repayment History</h5>${tbl(['Date','Type','Amount'], history.map(h=>[fmtDate(h.date), h.type, rightCell(rupee(h.amount))]))}` : '<p class="hint" style="margin-top:6px">No repayment history yet.</p>'}
+    ${pendingIssues.length? `<div class="msg amber" style="margin-top:8px"><b>Previous Pending Issues:</b> ${pendingIssues.map(p=>esc(p.topic+(p.decision?(' — '+p.decision):''))).join('; ')}</div>` : ''}`;
+}
+// Enterprise / Livelihood Review (point 6) — optional, free-text discussion fields only; this app
+// has no enterprise/livelihood ledger, so nothing here is computed from existing data — it is kept
+// on the meeting record purely for the Minutes/Reports, and never posted as an accounting entry.
+let MEETING_ENTERPRISE = {sales:'',purchases:'',expenses:'',profit:'',stock:'',workingCapital:'',problems:'',nextPlan:''};
+function updateEnterpriseField(field, val){ MEETING_ENTERPRISE[field]=val; syncEnterpriseJSON(); }
+function syncEnterpriseJSON(){ const el=document.getElementById('enterpriseJSON'); if(el) el.value = JSON.stringify(MEETING_ENTERPRISE); }
 function meetingWorkflow(){
   if(!activeMembers().length) return `<div class="card"><div class="empty">Add members first before conducting a meeting.</div></div>`;
   const members = activeMembers();
@@ -1657,10 +1829,40 @@ function meetingWorkflow(){
   members.forEach(m=> memberDueInfos(m.id, today).forEach(d=>{ if(d.totalDue>0.5) dueList.push({m,d}); }));
   const membersWithLoans = members.filter(m=>memberDueInfos(m.id, today).length>0);
 
+  // Smart Agenda / Financial Snapshot / Previous Action Points — computed once per full render of
+  // this wizard, from existing data only (see helpers just above). Never asks the user to re-enter
+  // a figure already available in the app.
+  const snapshot = computeMeetingFinancialSnapshot(today);
+  const meetingIssues = computeMeetingIssues(today, snapshot);
+  const prevActionPoints = carriedActionPoints();
+  MEETING_HOT_TOPICS = new Set(meetingIssues.map(i=>i.cat));
+  if(prevActionPoints.length) MEETING_HOT_TOPICS.add('Opening of Meeting');
+
   let html = `<div class="card" style="padding:10px 14px">
     <div id="meetingStepIndicator" style="font-weight:700;color:var(--navy-2);font-size:13.5px">Step 1 of 6 — ${MEETING_STEP_NAMES[0]}</div>
     <div id="meetingStepDots" style="display:flex;gap:5px;margin-top:6px">${[1,2,3,4,5,6].map(n=>`<div style="flex:1;height:4px;border-radius:2px;background:${n===1?'var(--navy-2)':'#D9E1E8'}"></div>`).join('')}</div>
   </div>`;
+
+  html += `<div class="card" style="background:#F7F9FA">
+    <h4 style="margin-top:0">📊 Automatic Financial Snapshot <span class="hint" style="font-weight:normal">(as of today — nothing to enter, calculated from existing records)</span></h4>
+    <div class="grid cols4">
+      ${stat('Members / Attendance', snapshot.totalMembers)}
+      ${stat('Total Savings', rupee(snapshot.totalSavings))}
+      ${stat('Loan Outstanding', rupee(snapshot.loanOutstandingTotal))}
+      ${stat('Amount Due', rupee(snapshot.totalDue))}
+      ${stat('Overdue Amount (Arrears)', rupee(snapshot.overdueAmount))}
+      ${stat('Cash Balance', rupee(snapshot.cash))}
+      ${stat('Bank Balance', rupee(snapshot.bank + snapshot.upi))}
+      ${stat('New Loan Requests', '— (record in Step 5)')}
+      ${stat('Pending Actions', snapshot.openActionPointsCount)}
+    </div>
+    ${snapshot.notSavingRecently.length ? `<p class="hint" style="margin-top:6px">⚠ Not saved in the last 45 days: ${snapshot.notSavingRecently.map(m=>esc(m.name)).join(', ')}</p>` : ''}
+  </div>
+  ${prevActionPoints.length ? `<div class="card">
+    <h4 style="margin-top:0">📋 Previous Action Points (carried forward from earlier meetings)</h4>
+    ${tbl(['Action / Decision','Responsible','Target Date','Status'], prevActionPoints.map(ap=>[esc(ap.topic+(ap.decision?(' — '+ap.decision):'')), esc(ap.responsible||'—'), ap.targetDate?fmtDate(ap.targetDate):'—', badge(ap.status, ap.status==='Open'?'amber':'grey')]))}
+    <p class="hint" style="margin-top:6px">These also appear as editable Follow-up items in Step 2 — update or close them there; anything still open carries forward again automatically.</p>
+  </div>` : ''}`;
 
   html += `<div class="card"><form onsubmit="return postMeeting(event)">
 
@@ -1692,6 +1894,32 @@ function meetingWorkflow(){
       <button type="button" class="btn secondary small" onclick="resetToStandardAgenda()">↺ Reset to Standard Agenda</button>
       <button type="button" class="btn secondary small" onclick="replayAllMinutes()">🔊 Replay All Minutes</button>
     </div>
+
+    <div class="card" style="margin-top:14px">
+      <h4 style="margin-top:0">🔍 Member-wise Review (optional)</h4>
+      <p class="hint">Pick a member to see her Savings, Loan Outstanding, Instalment Due, Repayment History and any Previous Pending Issues — all read from existing records, nothing new to enter here.</p>
+      <div class="field" style="max-width:320px"><label>Select Member</label><select id="memberReviewSelect" onchange="showMemberReview(this.value)"><option value="">— select —</option>${members.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select></div>
+      <div id="memberReviewPanel" style="margin-top:8px"></div>
+    </div>
+
+    <details class="card" style="margin-top:14px">
+      <summary style="cursor:pointer;font-weight:600;color:var(--navy-2)">🏭 Enterprise / Livelihood Review (optional)</summary>
+      <p class="hint">Not posted to the ledger — this is only a narrative record for the Minutes, since the app does not maintain a separate enterprise/livelihood ledger.</p>
+      <textarea id="enterpriseJSON" name="enterpriseJSON" style="display:none">${esc(JSON.stringify(MEETING_ENTERPRISE))}</textarea>
+      <div class="row">
+        <div class="field"><label>Sales</label><input value="${esc(MEETING_ENTERPRISE.sales||'')}" oninput="updateEnterpriseField('sales',this.value)"></div>
+        <div class="field"><label>Purchases</label><input value="${esc(MEETING_ENTERPRISE.purchases||'')}" oninput="updateEnterpriseField('purchases',this.value)"></div>
+        <div class="field"><label>Expenses</label><input value="${esc(MEETING_ENTERPRISE.expenses||'')}" oninput="updateEnterpriseField('expenses',this.value)"></div>
+        <div class="field"><label>Profit</label><input value="${esc(MEETING_ENTERPRISE.profit||'')}" oninput="updateEnterpriseField('profit',this.value)"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Stock</label><input value="${esc(MEETING_ENTERPRISE.stock||'')}" oninput="updateEnterpriseField('stock',this.value)"></div>
+        <div class="field"><label>Working-Capital Requirement</label><input value="${esc(MEETING_ENTERPRISE.workingCapital||'')}" oninput="updateEnterpriseField('workingCapital',this.value)"></div>
+      </div>
+      <div class="field"><label>Business Problems</label><textarea rows="2" oninput="updateEnterpriseField('problems',this.value)">${esc(MEETING_ENTERPRISE.problems||'')}</textarea></div>
+      <div class="field"><label>Next-Month Plan</label><textarea rows="2" oninput="updateEnterpriseField('nextPlan',this.value)">${esc(MEETING_ENTERPRISE.nextPlan||'')}</textarea></div>
+    </details>
+
     <div class="row" style="margin-top:14px">
       <button type="button" class="btn secondary" onclick="goToMeetingStep(1)">← Back</button>
       <button type="button" class="btn" onclick="goToMeetingStep(3)">Next: Savings &amp; Fine →</button>
@@ -1796,6 +2024,8 @@ function meetingWorkflow(){
     <div class="hint" id="meetingReconDiff"></div>
     <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" id="allowExcessChk" onchange="toggleAdjustmentReason()" style="width:auto"> Allow a loan's principal or interest payment to exceed the amount due (authorised adjustment)</label></div>
     <div class="field" id="adjustmentReasonField" style="display:none;margin-top:6px"><label>Reason for Authorised Adjustment *</label><input name="adjustmentReason" placeholder="e.g. advance interest paid by member, rounding settlement"></div>
+    <div class="card" id="decisionsSummaryBlock" style="margin-top:14px"></div>
+    <div class="field" style="margin-top:10px;max-width:260px"><label>Next Meeting Date (optional)</label><input type="date" name="nextMeetingDate"></div>
     <div class="row" style="margin-top:14px">
       <button type="button" class="btn secondary" onclick="goToMeetingStep(5)">← Back</button>
       <button class="btn" type="submit">Review &amp; Post Meeting</button>
@@ -2034,7 +2264,7 @@ const STANDARD_MEETING_AGENDA = [
 function freshMeetingAgenda(){ return JSON.parse(JSON.stringify(STANDARD_MEETING_AGENDA)); }
 let MEETING_AGENDA = [{topic:'', discussion:''}];
 const MEETING_STEP_NAMES = ['Date, Place & Attendance','Minutes of Meeting','Members Savings & Fine','Loan Repayment','Journal / Other Entries','Review & Post'];
-function startNewMeeting(){ MEETING_STEP=1; MEETING_AGENDA=freshMeetingAgenda(); go('meetingnew'); }
+function startNewMeeting(){ MEETING_STEP=1; MEETING_AGENDA=buildAgendaWithFollowups(); MEETING_ENTERPRISE={sales:'',purchases:'',expenses:'',profit:'',stock:'',workingCapital:'',problems:'',nextPlan:''}; go('meetingnew'); }
 function goToMeetingStep(n){
   if(n<1) n=1; if(n>6) n=6;
   MEETING_STEP = n;
@@ -2043,6 +2273,7 @@ function goToMeetingStep(n){
   const prog = document.getElementById('meetingStepDots');
   if(prog) Array.from(prog.children).forEach((d,i)=>{ d.style.background = (i+1===n) ? 'var(--navy-2)' : (i+1<n ? 'var(--green)' : '#D9E1E8'); });
   if(n===2) updateAttendanceSummary();
+  if(n===6) updateDecisionsSummary();
   window.scrollTo(0,0);
 }
 // Reads the live state of the Step-1 Present checkboxes and produces a by-name Present/Absent
@@ -2071,13 +2302,21 @@ function updateAttendanceSummary(){
 function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
 function speechLang(){ return (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN'; }
 function renderAgendaList(){
-  return MEETING_AGENDA.map((item,i)=>`
-    <div class="card" style="margin-bottom:8px;padding:10px 12px" id="agendaItem_${i}">
+  return MEETING_AGENDA.map((item,i)=>{
+    const engTopic = (item.topic||'').split(' / ')[0].trim();
+    const isHot = MEETING_HOT_TOPICS && MEETING_HOT_TOPICS.has(engTopic);
+    const flagged = isHot || item.suggested;
+    return `
+    <div class="card" style="margin-bottom:8px;padding:10px 12px${flagged?';border:1.5px solid var(--amber,#C78A1E)':''}" id="agendaItem_${i}">
+      <div class="row" style="align-items:center">
+        ${flagged?badge(item.suggested?'Suggested — Needs Attention':'Relevant to current data','amber'):''}
+        ${item.apId?badge('Follow-up','grey'):''}
+      </div>
       <div class="row">
         <div class="field" style="flex:3"><label>Agenda Item ${i+1}</label><input value="${esc(item.topic)}" oninput="updateAgendaField(${i},'topic',this.value)" placeholder="e.g. Review of loan repayments"></div>
         ${MEETING_AGENDA.length>1?`<button type="button" class="btn small danger" style="align-self:flex-end;height:38px" onclick="removeAgendaItem(${i})">Remove</button>`:''}
       </div>
-      <label style="margin-top:6px">Discussion / Decision</label>
+      <label style="margin-top:6px">Discussion</label>
       <div class="row" style="align-items:flex-start;gap:6px">
         <textarea rows="2" style="flex:1" oninput="updateAgendaField(${i},'discussion',this.value)" placeholder="Type, or use the mic to dictate">${esc(item.discussion)}</textarea>
         <div style="display:flex;flex-direction:column;gap:4px">
@@ -2085,15 +2324,26 @@ function renderAgendaList(){
           <button type="button" class="btn small secondary" onclick="replayAgendaText(${i})" title="Play back">🔊</button>
         </div>
       </div>
-    </div>`).join('') + (speechSupported()?'':'<p class="hint">Voice input isn\'t supported on this browser/device — minutes can still be typed normally.</p>');
+      <div class="row" style="margin-top:6px">
+        <div class="field"><label>Decision Taken</label><input value="${esc(item.decision||'')}" oninput="updateAgendaField(${i},'decision',this.value)" placeholder="What was decided"></div>
+        <div class="field"><label>Responsible Person</label><input value="${esc(item.responsible||'')}" oninput="updateAgendaField(${i},'responsible',this.value)" placeholder="Member/office-bearer name"></div>
+        <div class="field"><label>Target Date</label><input type="date" value="${esc(item.targetDate||'')}" oninput="updateAgendaField(${i},'targetDate',this.value)"></div>
+        <div class="field"><label>Status</label><select onchange="updateAgendaField(${i},'status',this.value)">
+          <option value="" ${!item.status?'selected':''}>— (discussion only)</option>
+          <option value="Open" ${item.status==='Open'?'selected':''}>Open</option>
+          <option value="In Progress" ${item.status==='In Progress'?'selected':''}>In Progress</option>
+          <option value="Completed" ${item.status==='Completed'?'selected':''}>Completed</option>
+        </select></div>
+      </div>
+    </div>`;}).join('') + (speechSupported()?'':'<p class="hint">Voice input isn\'t supported on this browser/device — minutes can still be typed normally.</p>');
 }
 function refreshAgendaUI(){ const el=document.getElementById('agendaList'); if(el) el.innerHTML = renderAgendaList(); syncMinutesJSON(); }
-function addAgendaItem(){ MEETING_AGENDA.push({topic:'', discussion:''}); refreshAgendaUI(); }
+function addAgendaItem(){ MEETING_AGENDA.push({topic:'', discussion:'', decision:'', responsible:'', targetDate:'', status:''}); refreshAgendaUI(); }
 // Lets the Secretary start over from the standard bilingual agenda if the list was cleared or
 // edited into a mess — a confirm() guards it since it discards whatever is currently typed.
 function resetToStandardAgenda(){
   if(!confirm('Replace the current agenda items with the standard agenda? Anything typed in the current items will be lost (Attendance is unaffected — it is always regenerated separately).')) return;
-  MEETING_AGENDA = freshMeetingAgenda();
+  MEETING_AGENDA = freshMeetingAgenda().map(it=>Object.assign({decision:'', responsible:'', targetDate:'', status:''}, it));
   refreshAgendaUI();
 }
 function removeAgendaItem(i){ if(MEETING_AGENDA.length<=1) return; MEETING_AGENDA.splice(i,1); refreshAgendaUI(); }
@@ -2142,7 +2392,13 @@ function postMeeting(ev){
   const allowExcess = !!f.get('allowExcess');
   const adjustmentReason = (f.get('adjustmentReason')||'').trim();
   let minutes = [];
-  try{ minutes = JSON.parse(f.get('minutesJSON')||'[]').filter(a=>(a.topic||'').trim()||(a.discussion||'').trim()); }catch(e){ minutes = []; }
+  try{ minutes = JSON.parse(f.get('minutesJSON')||'[]').filter(a=>(a.topic||'').trim()||(a.discussion||'').trim()||(a.decision||'').trim()||(a.responsible||'').trim()||(a.targetDate||'').trim()); }catch(e){ minutes = []; }
+  let enterprise = null;
+  try{
+    const rawEnt = JSON.parse(f.get('enterpriseJSON')||'{}');
+    if(Object.values(rawEnt).some(v=>(v||'').toString().trim())) enterprise = rawEnt;
+  }catch(e){ enterprise = null; }
+  const nextMeetingDate = f.get('nextMeetingDate')||'';
   if(!date){ flash('error','Meeting date is required.'); render(); return false; }
   if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
   const members = activeMembers();
@@ -2275,7 +2531,7 @@ function postMeeting(ev){
     const repayingCount = memberEntries.filter(r=>r.loanRows.length>0).length;
     const multiLoanRepayCount = memberEntries.filter(r=>r.loanRows.length>1).length;
 
-    PENDING_MEETING_PLAN = { date, place, mode, modeBankLoanId, allowExcess, adjustmentReason, anyOverrideUsed, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings, minutes,
+    PENDING_MEETING_PLAN = { date, place, mode, modeBankLoanId, allowExcess, adjustmentReason, anyOverrideUsed, memberEntries, newLoan, expense, deposit, actualReceived, reconDiff, dupWarnings, minutes, enterprise, nextMeetingDate,
       totals, totalCollection, netCash, present, totalMembers:members.length, presentIds, absentIds,
       savingCount, repayingCount, multiLoanRepayCount,
       dueCount: (()=>{ let c=0; members.forEach(m=>memberDueInfos(m.id,date).forEach(d=>{ if(d.totalDue>0.5) c++; })); return c; })() };
@@ -2350,7 +2606,10 @@ function confirmPostMeeting(){
     // A foreclosure mutates an EXISTING loan record's status/nextDueDate in place — a plain
     // length-truncate (which only undoes pushes) can't undo that, so its previous values are
     // captured here explicitly and restored in the catch block below if anything later fails.
-    loanStates: p.memberEntries.flatMap(r=>r.loanRows).filter(lr=>lr.foreclose).map(lr=>({loan:lr.loan, status:lr.loan.status, nextDueDate:lr.loan.nextDueDate})) };
+    loanStates: p.memberEntries.flatMap(r=>r.loanRows).filter(lr=>lr.foreclose).map(lr=>({loan:lr.loan, status:lr.loan.status, nextDueDate:lr.loan.nextDueDate})),
+    // Action points are only ever appended or have a field mutated in place (never removed), so a
+    // deep clone taken here is enough to fully restore them if posting fails partway through.
+    actionPoints: JSON.parse(JSON.stringify(DB.actionPoints||[])) };
   const meetingId = nextId('MTG');
   try{
     p.memberEntries.forEach(r=>{
@@ -2399,13 +2658,19 @@ function confirmPostMeeting(){
     const closingCash = accountBalance('CASH');
     DB.meetings.push({id:meetingId, date:p.date, place:p.place||'', totalMembers:p.totalMembers, present:p.present, presentIds:p.presentIds, absentIds:p.absentIds,
       totals:p.totals, actualReceived:p.actualReceived, mode:p.mode, closingCash, minutes:p.minutes||[],
+      enterprise: p.enterprise||null, nextMeetingDate: p.nextMeetingDate||'',
       bankDeposit: p.deposit ? {amount:p.deposit.amount, bankAccount:p.deposit.bankAccount, ref:p.deposit.ref} : null,
       postedBy: DB.settings.currentUserName, postedAt: nowStamp()});
+    // Action points are a tracking list only — never a ledger posting — so reconciling them here
+    // (after every postTxn() above has already succeeded) can never duplicate or affect a financial
+    // entry; see reconcileActionPointsFromMeeting()'s own comment for exactly what it does.
+    reconcileActionPointsFromMeeting(meetingId, p.minutes, p.date);
     logAudit('POST_MEETING', meetingId+' on '+p.date+' — '+p.present+'/'+p.totalMembers+' present, total collection '+rupee(p.totalCollection));
     let msg = 'Meeting posted. All registers, ledgers, loan positions and grading update automatically.';
     if(p.reconDiff!=null && p.reconDiff!==0) msg += ' Counted-vs-entries difference of '+rupee(Math.abs(p.reconDiff))+' was saved with the meeting.';
     if(p.mode==='CASH' && !p.deposit && p.totalCollection>0) msg += ' Remember to deposit cash collected when convenient (Transfer Funds).';
-    MEETING_STEP = 1; MEETING_AGENDA = freshMeetingAgenda();
+    MEETING_STEP = 1; MEETING_AGENDA = freshMeetingAgenda().map(it=>Object.assign({decision:'', responsible:'', targetDate:'', status:''}, it));
+    MEETING_ENTERPRISE = {sales:'',purchases:'',expenses:'',profit:'',stock:'',workingCapital:'',problems:'',nextPlan:''};
     closeModal();
     flash('ok', msg);
     ROUTE='meetings'; render();
@@ -2415,6 +2680,7 @@ function confirmPostMeeting(){
     DB.auditLog = snapshot.auditLog;
     DB.loans.length = snapshot.loansLen;
     DB.seq = snapshot.seq;
+    DB.actionPoints = snapshot.actionPoints;
     // Undo any foreclosure status change made above — a loan mutated in place is not covered
     // by truncating DB.loans.length, so it is restored explicitly from the snapshot taken
     // before this attempt began.
@@ -5578,12 +5844,25 @@ const REGISTER_LIST = [
   {id:'meeting', label:'Meeting Register'},
   {id:'attendance', label:'Attendance Register'},
   {id:'interest', label:'Interest Register'},
-  {id:'passbook', label:'Individual Pass Book (Savings + Loan, combined)'}
+  {id:'passbook', label:'Individual Pass Book (Savings + Loan, combined)'},
+  {id:'actionpoints', label:'Action Points / Follow-up Tracker'}
 ];
 // Registers that describe the SHG as of a point in time (a membership list, a position
 // statement) rather than activity within a date range — the Period selector is hidden for these,
 // and they always work off "to" (today, or the chosen year/month-end/custom end date) alone.
-const REGISTERS_AS_ON = ['members','assets','trialbalance','balancesheet'];
+// Action points are a status list (open/completed), not period activity, so it belongs here too.
+const REGISTERS_AS_ON = ['members','assets','trialbalance','balancesheet','actionpoints'];
+// -- Action Points / Follow-up Tracker: every decision/action point raised across all meetings,
+// newest first — the "action-point summary" referred to in the meeting-module enhancement spec,
+// sharable via the same Print/Share/WhatsApp/Email mechanism as every other register. Not derived
+// from, or posted to, the accounting ledger — purely a follow-up tracking list.
+function registerActionPointsRows(){
+  return (DB.actionPoints||[]).slice().sort((a,b)=>(a.createdDate||'')<(b.createdDate||'')?1:-1).map(ap=>{
+    const mt = DB.meetings.find(m=>m.id===ap.meetingId);
+    return [mt?fmtDate(mt.date):'—', esc(ap.topic||'—'), esc(ap.decision||'—'), esc(ap.responsible||'—'),
+      ap.targetDate?fmtDate(ap.targetDate):'—', badge(ap.status, ap.status==='Completed'?'green':'amber')];
+  });
+}
 function registersUI(){
   if(!window.__reg){ const to = todayStr();
     window.__reg = { period:'month', month: to.slice(0,7), year: to.slice(0,4), from: to.slice(0,8)+'01', to,
@@ -5692,10 +5971,19 @@ function registerMembersRows(){
 // (not just attendance/collection totals, which the separate Meeting Register already covers). --
 function registerMinutesRows(from,to){
   return DB.meetings.filter(mt=>mt.date>=from && mt.date<=to).sort((a,b)=>a.date<b.date?-1:1).map(mt=>{
+    // Decision/Responsible/Target/Status are newer, optional fields — appended only when present,
+    // so a meeting posted before they existed still renders exactly as it always did.
     const decisions = (mt.minutes&&mt.minutes.length)
-      ? mt.minutes.map((a,i)=>(i+1)+'. '+esc(a.topic||'(untitled)')+(a.discussion?' — '+esc(a.discussion):'')).join('<br>')
+      ? mt.minutes.map((a,i)=>{
+          let line = (i+1)+'. '+esc(a.topic||'(untitled)')+(a.discussion?' — '+esc(a.discussion):'');
+          if(a.decision) line += ' | Decision: '+esc(a.decision);
+          if(a.responsible) line += ' | Responsible: '+esc(a.responsible);
+          if(a.targetDate) line += ' | Target: '+fmtDate(a.targetDate);
+          if(a.status) line += ' | Status: '+esc(a.status);
+          return line;
+        }).join('<br>')
       : '—';
-    return [fmtDate(mt.date), esc(mt.place||'—'), mt.present+' / '+mt.totalMembers, decisions];
+    return [fmtDate(mt.date), esc(mt.place||'—'), mt.present+' / '+mt.totalMembers, decisions+(mt.nextMeetingDate?('<br><b>Next Meeting:</b> '+fmtDate(mt.nextMeetingDate)):'')];
   });
 }
 // -- Register 11: Receipts & Payments Account — every transaction that actually brought money
@@ -5982,6 +6270,13 @@ function viewRegisters(){
     const rows = registerLoanCIFRows(from,to);
     shareHeaders = ['Type','ID','Date','Member / Source','Principal / Amount','Rate','Outstanding','Status']; shareRows = rows;
     bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No loans disbursed or CIF received in this period.</div>`;
+  } else if(w.register==='actionpoints'){
+    const rows = registerActionPointsRows();
+    const openCount = (DB.actionPoints||[]).filter(a=>a.status!=='Completed').length;
+    shareHeaders = ['Meeting Date','Action / Topic','Decision','Responsible','Target Date','Status']; shareRows = rows;
+    shareAfter = ['Still Open: '+openCount+' of '+rows.length];
+    bodyHtml += `<div class="grid cols2 no-print">${stat('Open Action Points', openCount)}${stat('Total Recorded', rows.length)}</div>`;
+    bodyHtml += rows.length ? tbl(shareHeaders, rows) : `<div class="empty">No action points recorded yet — these are created automatically from a meeting's Minutes whenever a Decision Taken, Responsible Person or Target Date is filled in.</div>`;
   }
   bodyHtml += `</div>`;
 
