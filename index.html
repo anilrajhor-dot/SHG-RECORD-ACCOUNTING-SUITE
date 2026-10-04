@@ -777,8 +777,12 @@ function generateLoanSchedule(loanId, asOfDate){
   const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
   const totalFlatInterest = Math.round(loan.principal*(loan.interestRate||0)/100 * (n/periodsPerYear)*100)/100;
   // Actual repayments against this loan, oldest first, split into principal and interest legs.
-  const repayTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.credit==='MEMBER_LOANS').sort((a,b)=>a.date<b.date?-1:1);
-  const interestTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.credit==='INTEREST_INCOME').sort((a,b)=>a.date<b.date?-1:1);
+  // CRITICAL: only transactions dated ON OR BEFORE asOfDate count — a repayment posted after the
+  // selected date (e.g. at a later meeting already entered ahead of a backdated one being reviewed
+  // now) must never reduce the dues/outstanding shown for an earlier date. Without this filter a
+  // historical schedule would be silently contaminated by future postings.
+  const repayTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.date<=asOfDate && t.credit==='MEMBER_LOANS').sort((a,b)=>a.date<b.date?-1:1);
+  const interestTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.date<=asOfDate && t.credit==='INTEREST_INCOME').sort((a,b)=>a.date<b.date?-1:1);
   let principalPool = repayTx.reduce((s,t)=>s+t.amount,0);
   let interestPool = interestTx.reduce((s,t)=>s+t.amount,0);
   let runningOutstanding = loan.principal;
@@ -913,7 +917,10 @@ function viewCIFEMIReference(cifId){
 // overdue on that loan before that.
 function memberDueInfos(memberId, asOfDate){
   asOfDate = asOfDate || todayStr();
-  return DB.loans.filter(l=>l.memberId===memberId && l.status!=='Closed').map(loan=>{
+  // Ledger-true relevance test (loanRelevantAsOf), never the loan's CURRENT status alone — see its
+  // own comment: a loan closed today can still have been genuinely active on an earlier meeting
+  // date, and a loan disbursed after asOfDate must never appear.
+  return DB.loans.filter(l=>l.memberId===memberId && loanRelevantAsOf(l, asOfDate)).map(loan=>{
     const schedule = generateLoanSchedule(loan.id, asOfDate);
     const dueRows = schedule.filter(s=>s.status!=='Paid' && s.dueDate<=asOfDate);
     // "Current instalment" = the most recent instalment that has fallen due; every earlier
@@ -930,7 +937,7 @@ function memberDueInfos(memberId, asOfDate){
     const totalPrincipalDue = Math.round((principalDue+arrearsPrincipal)*100)/100;
     const totalInterestDue = Math.round((interestDue+arrearsInterest)*100)/100;
     const fullySettled = schedule.every(s=>s.status==='Paid');
-    return { loan, outstanding: loanOutstanding(loan.id).principal,
+    return { loan, outstanding: loanOutstandingAsOf(loan.id, asOfDate),
       principalDue, interestDue, arrears, arrearsPrincipal, arrearsInterest,
       totalPrincipalDue, totalInterestDue, fullySettled,
       totalDue: Math.round((totalPrincipalDue+totalInterestDue)*100)/100 };
@@ -1690,6 +1697,41 @@ function carriedActionPoints(){
 function loanOutstandingAsOf(loanId, asOfDate){
   return Math.max(0, Math.round(accountBalance('MEMBER_LOANS',{loanId, upToDate:asOfDate})*100)/100);
 }
+// Ledger-true test for whether a loan should be treated as active/relevant AS OF a given date —
+// deliberately NEVER uses the loan's CURRENT status field alone: a loan closed today may still
+// have been genuinely outstanding on an earlier meeting date (it must still appear for that
+// historical meeting), and a loan disbursed after the selected date must never appear at all. A
+// loan counts as relevant as of asOfDate when it had already been disbursed by that date AND its
+// ledger-derived outstanding principal — computed strictly from transactions dated on or before
+// asOfDate via loanOutstandingAsOf() above — was still greater than zero at that date, regardless
+// of what loan.status says right now. This is pure ledger truth, so it is automatically correct
+// for every combination the date audit calls out: historical loans later closed, loans disbursed
+// after the selected date, and ordinary current-date use (today behaves exactly like the old
+// status-based check in all normal cases, since a Closed loan's ledger outstanding is already 0).
+function loanRelevantAsOf(loan, asOfDate){
+  const disb = loan.disbursementDate || loan.sanctionDate || '';
+  if(!disb || disb > asOfDate) return false;
+  return loanOutstandingAsOf(loan.id, asOfDate) > 0.5;
+}
+// True once a loan already has at least one un-reversed transaction dated AFTER asOfDate. Used to
+// block operations (foreclosure in particular) that would otherwise rewrite a loan's position at
+// an earlier date while later, already-posted entries exist for it — doing so safely would require
+// re-deriving every later entry, which this app deliberately does not attempt; it blocks instead
+// of producing an inconsistent record (per the historical-foreclosure safety rule).
+function loanHasActivityAfter(loanId, asOfDate){
+  return DB.transactions.some(t=>!t.reversed && t.loanId===loanId && t.date>asOfDate);
+}
+// Returns a human (bilingual-friendly, plain-English) reason string if foreclosing this loan as of
+// asOfDate cannot be done safely, or null if it is safe to proceed. Only backdated foreclosures
+// (asOfDate before today) with later activity already on record are blocked — an ordinary,
+// present-dated foreclosure is never affected by this check.
+function foreclosureBlockedReason(loanId, asOfDate){
+  if(!asOfDate || asOfDate>=todayStr()) return null;
+  if(loanHasActivityAfter(loanId, asOfDate)){
+    return 'This loan already has transaction(s) recorded after '+fmtDate(asOfDate)+'. Foreclosing it as of an earlier date would conflict with those later entries, so this cannot be done safely here. Post the foreclosure at today’s date instead, or correct/reverse the later entries first. / इस ऋण में '+fmtDate(asOfDate)+' के बाद की प्रविष्टियाँ पहले से मौजूद हैं, इसलिए इस पुरानी तिथि पर फोरक्लोज़र सुरक्षित रूप से नहीं किया जा सकता।';
+  }
+  return null;
+}
 // Everything in "Automatic Financial Snapshot" — Members/Attendance, Savings, Loan Outstanding,
 // Amount Due, Overdue Amount, Cash/Bank Balance — derived entirely from the existing accounting
 // engine and memberDueInfos(), never a separate parallel calculation and never asked of the user.
@@ -1814,12 +1856,86 @@ function reloadMeetingSmartData(newDate){
   // the untouched suggested items).
   refreshAgendaUI();
 }
-// Single onchange handler for the Meeting Date field — keeps the existing per-loan due-date
-// refresh (reloadMeetingDueDate) AND adds the new Snapshot/Smart-Issues refresh, so every
-// date-dependent figure in the wizard updates together whenever the date changes.
+// Tracks the Meeting Date last applied to the wizard (as opposed to whatever the date input shows
+// right now) — set in startNewMeeting()/meetingWorkflow() and updated at the end of
+// onMeetingDateChange() once a date change is actually applied. Used only to restore the input if
+// the user cancels a date change that would have cleared already-entered financial figures.
+let MEETING_LAST_DATE = todayStr();
+// True if any date-dependent financial field anywhere in the wizard currently holds a non-zero
+// value — savings, fine, withdrawal, loan principal/interest paid, new loan amount, expense amount,
+// or deposit amount. Used to decide whether changing the Meeting Date needs the user's confirmation
+// (point 8) before anything is recalculated/cleared.
+function meetingHasEnteredFinancialData(){
+  const prefixes = ['sav_','fine_','wd_','rp_','ri_'];
+  let found = false;
+  prefixes.forEach(p=>{
+    document.querySelectorAll('input[name^="'+p+'"]').forEach(el=>{ if((parseFloat(el.value)||0)>0) found = true; });
+  });
+  ['newloan_amount','exp_amount','depositAmount'].forEach(name=>{
+    const el = document.querySelector('[name="'+name+'"]');
+    if(el && (parseFloat(el.value)||0)>0) found = true;
+  });
+  return found;
+}
+// Clears every date-dependent financial entry in the wizard (but leaves Place, Collect-In,
+// Minutes/Agenda, Enterprise discussion and the new-loan member/purpose/rate/instalment choices
+// untouched) — used when the user confirms a Meeting Date change after already entering figures
+// for the previous date, per point 8's "recalculate/clear date-dependent financial entries" option.
+function clearMeetingFinancialEntries(){
+  ['sav_','fine_','wd_','rp_','ri_'].forEach(p=>{
+    document.querySelectorAll('input[name^="'+p+'"]').forEach(el=>{ if(!el.disabled) el.value=''; });
+  });
+  document.querySelectorAll('input[id^="foreclose_"]').forEach(chk=>{ if(chk.checked){ chk.checked=false; meetingToggleForeclose(chk.id.replace('foreclose_',''), ''); } });
+  const newloanAmt = document.querySelector('[name="newloan_amount"]'); if(newloanAmt) newloanAmt.value='';
+  const expAmt = document.querySelector('[name="exp_amount"]'); if(expAmt) expAmt.value='';
+  const depAmt = document.querySelector('[name="depositAmount"]'); if(depAmt) depAmt.value='';
+  const actualEl = document.getElementById('actualReceived'); if(actualEl) actualEl.value='';
+  meetingCalcGrandTotal();
+}
+// Fully regenerates Step 4's loan-wise repayment cards for the given date — necessary (not just a
+// cell-patch) because the SET of loans/members shown can itself change with the date: a loan
+// closed today may need to reappear for an earlier date, and a loan not yet disbursed as of an
+// earlier date must disappear. Always safe to call even with nothing entered yet.
+function refreshLoanRepaymentCards(newDate){
+  const el = document.getElementById('loanRepaymentCardsBlock'); if(!el) return;
+  const membersWithLoans = activeMembers().filter(m=>memberDueInfos(m.id, newDate).length>0);
+  el.innerHTML = membersWithLoans.length ? membersWithLoans.map(m=>renderLoanRepaymentCard(m, newDate)).join('') : '';
+}
+// Refreshes every member's "Savings Balance as on Meeting Date" display in Step 3.
+function refreshMemberSavingsBalances(newDate){
+  activeMembers().forEach(m=>{
+    const el = document.getElementById('savbal_'+m.id);
+    if(el) el.textContent = rupee(memberSavingsBalance(m.id, newDate));
+  });
+}
+// Shows/hides the bilingual future-date banner in Step 1.
+function refreshFutureDateWarning(newDate){
+  const el = document.getElementById('futureDateWarning');
+  if(el) el.style.display = (newDate > todayStr()) ? '' : 'none';
+}
+// Single onchange handler for the Meeting Date field — the one place that keeps EVERY date-
+// dependent figure in the wizard (Financial Snapshot, Smart Issues/Agenda, Savings balances, Loan
+// Repayment cards & due summary, future-date warning) synchronised with whichever date is selected.
+// If financial figures have already been typed in for the previous date, the user is warned and
+// asked to confirm before those figures are cleared and everything is recalculated for the new
+// date — a repayment amount computed for one date must never be silently carried over and posted
+// against a different date.
 function onMeetingDateChange(newDate){
+  const dateInput = document.getElementById('meetingDate');
+  if(meetingHasEnteredFinancialData()){
+    const ok = confirm('Changing the Meeting Date may change dues and balances. Date-dependent financial entries already typed in (Savings, Fine, Withdrawal, Loan Repayment, New Loan, Expenses, Deposit) will be cleared so they can be re-entered correctly for the new date.\n\nContinue?\n\n/ बैठक की तिथि बदलने से देय राशि व शेष बदल सकते हैं। पहले से भरी गई तिथि-निर्भर वित्तीय प्रविष्टियाँ (बचत, जुर्माना, निकासी, ऋण चुकौती, नया ऋण, व्यय, जमा) हटा दी जाएँगी ताकि नई तिथि के लिए सही ढंग से पुनः दर्ज की जा सकें।\n\nजारी रखें?');
+    if(!ok){
+      if(dateInput) dateInput.value = MEETING_LAST_DATE;
+      return;
+    }
+    clearMeetingFinancialEntries();
+  }
+  MEETING_LAST_DATE = newDate;
   reloadMeetingDueDate(newDate);
   reloadMeetingSmartData(newDate);
+  refreshLoanRepaymentCards(newDate);
+  refreshMemberSavingsBalances(newDate);
+  refreshFutureDateWarning(newDate);
 }
 // Set once per full render of the meeting wizard (meetingWorkflow()) and read by
 // renderAgendaList() to highlight the standard agenda items that current data makes relevant —
@@ -1934,7 +2050,9 @@ function showMemberReview(mid){
   const dues = memberDueInfos(m.id, date);
   const loanOS = dues.reduce((s,d)=>s+d.outstanding,0);
   const instDue = dues.reduce((s,d)=>s+d.totalDue,0);
-  const history = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && (t.type==='Loan Repayment'||t.type==='Interest Received'||t.type==='Loan Foreclosure'))
+  // Only transactions up to the selected Meeting Date — reviewing a backdated meeting must never
+  // show repayment activity that happened later (even if it has since been posted into the books).
+  const history = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.date<=date && (t.type==='Loan Repayment'||t.type==='Interest Received'||t.type==='Loan Foreclosure'))
     .sort((a,b)=>a.date<b.date?1:-1).slice(0,5);
   const pendingIssues = (DB.actionPoints||[]).filter(a=>a.status!=='Completed' && (a.responsible||'').trim().toLowerCase()===m.name.trim().toLowerCase());
   el.innerHTML = `<div class="grid cols4">
@@ -1955,7 +2073,10 @@ function syncEnterpriseJSON(){ const el=document.getElementById('enterpriseJSON'
 function meetingWorkflow(){
   if(!activeMembers().length) return `<div class="card"><div class="empty">Add members first before conducting a meeting.</div></div>`;
   const members = activeMembers();
-  const today = todayStr();
+  // Re-uses whichever Meeting Date was last applied (e.g. if the wizard is being re-rendered after
+  // a validation error) rather than silently resetting the date field back to today — a Meeting
+  // Date must never be silently swapped out from under the user (point 1/8).
+  const today = MEETING_LAST_DATE || todayStr();
   const dueList = [];
   members.forEach(m=> memberDueInfos(m.id, today).forEach(d=>{ if(d.totalDue>0.5) dueList.push({m,d}); }));
   const membersWithLoans = members.filter(m=>memberDueInfos(m.id, today).length>0);
@@ -1991,6 +2112,7 @@ function meetingWorkflow(){
       <div class="field"><label>Place / Venue</label><input name="place" placeholder="e.g. Community Hall, Sample Village"></div>
       <div class="field"><label>Collect In</label><select name="mode" id="meetingMode" onchange="toggleDepositSection()">${paymentModeOptionsHTML('CASH')}</select></div>
     </div>
+    <div id="futureDateWarning" style="display:${today>todayStr()?'':'none'}" class="msg amber">Meeting Date is in the future — it may be used for planning / next-meeting / draft minutes only. Savings, repayments, withdrawals, fines, new loan disbursements, expenses and bank deposits cannot be posted on a future date. / बैठक की तिथि भविष्य की है — इसका उपयोग केवल योजना/अगली बैठक/प्रारूप कार्यवाही के लिए किया जा सकता है। भविष्य की तिथि पर बचत, चुकौती, निकासी, जुर्माना, नया ऋण, व्यय या बैंक जमा दर्ज नहीं किया जा सकता।</div>
     <h3 style="margin-top:14px">Attendance</h3>
     <p class="hint">All members are listed below — mark only who is absent; everyone else stays present.</p>
     <div class="tablewrap"><table><thead><tr><th>Member</th><th>Present</th></tr></thead><tbody>
@@ -2048,7 +2170,7 @@ function meetingWorkflow(){
     <h3>Members Savings &amp; Fine</h3>
     <div class="helpbox">Enter each member's savings and any fine — this is the only place savings need to be entered; the Members Savings ledger updates automatically. A member who wants to withdraw from her savings this meeting can do so in the same row.</div>
     ${members.map(m=>`<div class="card" style="margin-top:8px;padding:10px 12px">
-      <div style="font-weight:600;margin-bottom:6px">${esc(m.name)} <span class="hint" style="font-weight:normal">· Savings balance: ${rupee(memberSavingsBalance(m.id))}</span></div>
+      <div style="font-weight:600;margin-bottom:6px">${esc(m.name)} <span class="hint" style="font-weight:normal">· Savings Balance as on Meeting Date: <span id="savbal_${m.id}">${rupee(memberSavingsBalance(m.id, today))}</span></span></div>
       <div class="row">
         <div class="field"><label>Savings ₹</label><input type="number" min="0" step="0.01" name="sav_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
         <div class="field"><label>Fine ₹</label><input type="number" min="0" step="0.01" name="fine_${m.id}" oninput="meetingCalcMemberRow('${m.id}')"></div>
@@ -2067,7 +2189,7 @@ function meetingWorkflow(){
   <div class="mstep" data-step="4" style="display:none">
     <h3>Loan Repayment</h3>
     <div id="meetingDueSummaryBlock">${renderDueSummaryBlock(dueList)}</div>
-    ${membersWithLoans.length ? membersWithLoans.map(m=>renderLoanRepaymentCard(m, today)).join('') : ''}
+    <div id="loanRepaymentCardsBlock">${membersWithLoans.length ? membersWithLoans.map(m=>renderLoanRepaymentCard(m, today)).join('') : ''}</div>
     <div class="row" style="margin-top:14px">
       <button type="button" class="btn secondary" onclick="goToMeetingStep(3)">← Back</button>
       <button type="button" class="btn" onclick="goToMeetingStep(5)">Next: Journal / Other Entries →</button>
@@ -2128,9 +2250,10 @@ function meetingWorkflow(){
       <div class="stat"><div class="lbl">Net Collection (after new loans, expenses &amp; withdrawals)</div><div class="val" id="meetingNetCollection">₹0.00</div></div>
     </div>
     <div class="row" style="margin-top:10px">
-      <div class="field"><label>Actual Cash/Bank Counted Today ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
+      <div class="field"><label>Actual Cash/Bank Counted (as on Meeting Date) ₹ (optional)</label><input type="number" min="0" step="0.01" name="actualReceived" id="actualReceived" oninput="meetingCalcGrandTotal()"></div>
     </div>
     <div class="hint" id="meetingReconDiff"></div>
+    <p class="hint">This counted figure is for reconciliation only — any difference from the entries above is saved with the meeting for follow-up and never automatically creates an accounting entry.</p>
     <div class="field" style="margin-top:10px"><label style="display:flex;align-items:center;gap:6px;font-weight:normal"><input type="checkbox" name="allowExcess" id="allowExcessChk" onchange="toggleAdjustmentReason()" style="width:auto"> Allow a loan's principal or interest payment to exceed the amount due (authorised adjustment)</label></div>
     <div class="field" id="adjustmentReasonField" style="display:none;margin-top:6px"><label>Reason for Authorised Adjustment *</label><input name="adjustmentReason" placeholder="e.g. advance interest paid by member, rounding settlement"></div>
     <div class="card" id="decisionsSummaryBlock" style="margin-top:14px"></div>
@@ -2195,6 +2318,12 @@ function meetingToggleForeclose(loanId, mid){
   const quoteRow = document.getElementById('forecloseQuoteRow_'+loanId), quoteText = document.getElementById('forecloseQuoteText_'+loanId);
   if(chk && chk.checked){
     const date = (document.getElementById('meetingDate')||{}).value || todayStr();
+    const blocked = foreclosureBlockedReason(loanId, date);
+    if(blocked){
+      chk.checked = false;
+      alert(blocked);
+      return;
+    }
     const q = computeLoanForeclosure(loanId, date);
     if(rpEl){ rpEl.value = q.principal; rpEl.disabled = true; }
     if(riEl){ riEl.value = q.totalInterest; riEl.disabled = true; }
@@ -2296,10 +2425,11 @@ function meetingCalcGrandTotal(){
   setText('meetingTotWd', totWd);
   setText('meetingGrandTotal', grand); setText('meetingNetCollection', netCollection);
   let present=0, saving=0, repaying=0, multiLoan=0;
+  const mcgtDate = (document.getElementById('meetingDate')||{}).value || todayStr();
   activeMembers().forEach(m=>{
     if((document.querySelector('[name="present_'+m.id+'"]')||{}).checked) present++;
     if((parseFloat((document.querySelector('[name="sav_'+m.id+'"]')||{}).value)||0)>0) saving++;
-    const loans = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed');
+    const loans = DB.loans.filter(l=>l.memberId===m.id && loanRelevantAsOf(l, mcgtDate));
     if(loans.length>1) multiLoan++;
     if(loans.some(l=>(parseFloat((document.querySelector('[name="rp_'+l.id+'"]')||{}).value)||0)>0 || (parseFloat((document.querySelector('[name="ri_'+l.id+'"]')||{}).value)||0)>0)) repaying++;
   });
@@ -2373,7 +2503,7 @@ const STANDARD_MEETING_AGENDA = [
 function freshMeetingAgenda(){ return JSON.parse(JSON.stringify(STANDARD_MEETING_AGENDA)); }
 let MEETING_AGENDA = [{topic:'', discussion:''}];
 const MEETING_STEP_NAMES = ['Date, Place & Attendance','Minutes of Meeting','Members Savings & Fine','Loan Repayment','Journal / Other Entries','Review & Post'];
-function startNewMeeting(){ MEETING_STEP=1; MEETING_AGENDA=buildAgendaWithFollowups(); MEETING_ENTERPRISE={sales:'',purchases:'',expenses:'',profit:'',stock:'',workingCapital:'',problems:'',nextPlan:''}; go('meetingnew'); }
+function startNewMeeting(){ MEETING_STEP=1; MEETING_LAST_DATE=todayStr(); MEETING_AGENDA=buildAgendaWithFollowups(); MEETING_ENTERPRISE={sales:'',purchases:'',expenses:'',profit:'',stock:'',workingCapital:'',problems:'',nextPlan:''}; go('meetingnew'); }
 function goToMeetingStep(n){
   if(n<1) n=1; if(n>6) n=6;
   MEETING_STEP = n;
@@ -2491,6 +2621,39 @@ function replayAllMinutes(){
   utter.lang = speechLang();
   speechSynthesis.cancel(); speechSynthesis.speak(utter);
 }
+// Consolidated duplicate-posting check for the whole meeting being validated (point 14): same
+// Meeting Date + same member/loan + same amount + same transaction type as something already
+// posted (un-reversed), across every kind of entry the Meeting module can create — not just loan
+// principal repayments. Returns an array of plain-language warning strings; it never blocks
+// posting by itself (a genuine second transaction on the same day is a real, legitimate case), but
+// every warning is shown to the Secretary on the Review & Post screen and must be explicitly
+// confirmed before anything is posted — see confirmPostMeeting()'s DUPLICATE_CONFIRMED audit entry.
+function detectMeetingDuplicates(date, memberEntries, newLoan, expense){
+  const warnings = [];
+  if(DB.meetings.some(mt=>mt.date===date)){
+    warnings.push('A meeting is already posted for '+fmtDate(date)+'. Posting another meeting on the same date may be intentional (e.g. a correction/supplementary meeting) — please confirm this is not a duplicate.');
+  }
+  const amtMatches = (t, amount) => Math.abs(t.amount-amount)<0.005;
+  memberEntries.forEach(r=>{
+    if(r.sav>0 && DB.transactions.some(t=>!t.reversed && t.memberId===r.m.id && t.date===date && t.type==='Savings' && amtMatches(t,r.sav)))
+      warnings.push(r.m.name+': a Savings entry of '+rupee(r.sav)+' on '+fmtDate(date)+' already exists.');
+    if(r.fine>0 && DB.transactions.some(t=>!t.reversed && t.memberId===r.m.id && t.date===date && t.type==='Fine' && amtMatches(t,r.fine)))
+      warnings.push(r.m.name+': a Fine entry of '+rupee(r.fine)+' on '+fmtDate(date)+' already exists.');
+    if(r.wd>0 && DB.transactions.some(t=>!t.reversed && t.memberId===r.m.id && t.date===date && t.type==='Savings Withdrawal' && amtMatches(t,r.wd)))
+      warnings.push(r.m.name+': a Savings Withdrawal of '+rupee(r.wd)+' on '+fmtDate(date)+' already exists.');
+    r.loanRows.forEach(lr=>{
+      if(lr.rp>0 && DB.transactions.some(t=>!t.reversed && t.loanId===lr.loan.id && t.date===date && t.credit==='MEMBER_LOANS' && amtMatches(t,lr.rp)))
+        warnings.push(r.m.name+' — loan '+lr.loan.id+': a principal repayment of '+rupee(lr.rp)+' on '+fmtDate(date)+' already exists.');
+      if(lr.ri>0 && DB.transactions.some(t=>!t.reversed && t.loanId===lr.loan.id && t.date===date && t.credit==='INTEREST_INCOME' && amtMatches(t,lr.ri)))
+        warnings.push(r.m.name+' — loan '+lr.loan.id+': an interest payment of '+rupee(lr.ri)+' on '+fmtDate(date)+' already exists.');
+    });
+  });
+  if(newLoan && DB.loans.some(l=>l.memberId===newLoan.memberId && l.disbursementDate===date && Math.abs(l.principal-newLoan.amount)<0.005))
+    warnings.push(memberName(newLoan.memberId)+': a new loan of '+rupee(newLoan.amount)+' disbursed on '+fmtDate(date)+' already exists.');
+  if(expense && DB.transactions.some(t=>!t.reversed && t.date===date && t.debit==='EXP_'+expense.cat && Math.abs(t.amount-expense.amount)<0.005))
+    warnings.push('An expense of '+rupee(expense.amount)+' in category '+expense.cat+' on '+fmtDate(date)+' already exists.');
+  return warnings;
+}
 function postMeeting(ev){
   ev.preventDefault();
   const f = new FormData(ev.target);
@@ -2512,6 +2675,9 @@ function postMeeting(ev){
   if(isPeriodClosed(date)){ flash('error','That period is closed. Reopen it in Settings first.'); render(); return false; }
   const members = activeMembers();
   try{
+    // Chronology: a Next Meeting Date, if given, should always be after this meeting's own date —
+    // never on/before it (point 37).
+    if(nextMeetingDate && nextMeetingDate<=date) throw new Error('Next Meeting Date must be after the Meeting Date. / अगली बैठक की तिथि इस बैठक की तिथि के बाद होनी चाहिए।');
     const memberEntries = [];
     let present=0; const presentIds=[], absentIds=[];
     let dupWarnings = [];
@@ -2525,27 +2691,38 @@ function postMeeting(ev){
       if(sav<0||fine<0||wd<0) throw new Error('Negative amounts are not allowed ('+m.name+'). Enter zero or a positive amount.');
       let wdOverride = false;
       if(wd>0){
-        // Withdrawal is checked against the member's balance AFTER this same meeting's own
-        // deposit is credited (sav), not just her balance coming in — a member depositing and
-        // withdrawing in the same meeting is a normal pattern, not an excess.
-        const balanceAfterDeposit = Math.round((memberSavingsBalance(m.id)+sav)*100)/100;
+        // Withdrawal is checked against the member's balance AS OF THE MEETING DATE, AFTER this
+        // same meeting's own deposit is credited (sav) — never today's current balance, which for
+        // a backdated meeting could already include later deposits that had not happened yet as of
+        // this meeting (point 5/6). A member depositing and withdrawing in the same meeting is a
+        // normal pattern, not an excess.
+        const balanceAfterDeposit = Math.round((memberSavingsBalance(m.id, date)+sav)*100)/100;
         if(wd > balanceAfterDeposit+0.5){
-          if(!allowExcess) throw new Error('Savings withdrawal for '+m.name+' ('+rupee(wd)+') exceeds her savings balance ('+rupee(balanceAfterDeposit)+' after today\'s deposit). Reduce the amount, or tick the authorised-adjustment checkbox.');
+          if(!allowExcess) throw new Error('Savings withdrawal for '+m.name+' ('+rupee(wd)+') exceeds her savings balance as on the Meeting Date ('+rupee(balanceAfterDeposit)+' after this meeting\'s own deposit). Reduce the amount, or tick the authorised-adjustment checkbox.');
           wdOverride = true; anyOverrideUsed = true;
         }
       }
-      const loans = DB.loans.filter(l=>l.memberId===m.id && l.status!=='Closed');
+      // Ledger-true relevance as of the Meeting Date — never the loan's CURRENT status alone, so a
+      // loan that was still active on this (possibly backdated) date is always offered here even if
+      // it has since been closed, and a loan not yet disbursed as of this date never is (point 2/7).
+      const loans = DB.loans.filter(l=>l.memberId===m.id && loanRelevantAsOf(l, date));
       const loanRows = [];
       loans.forEach(loan=>{
         const foreclose = !!f.get('foreclose_'+loan.id);
         let rp, ri;
         if(foreclose){
-          // Foreclosure ALWAYS uses a freshly computed, up-to-date quote — never whatever is
-          // sitting in the Principal/Interest boxes — so a stale auto-fill (e.g. the meeting
-          // date was changed after the boxes were filled) can never close a loan for the wrong
-          // amount. It also deliberately bypasses the normal "exceeds amount due" excess checks
-          // below: closing out the FULL outstanding balance plus its up-to-date interest is the
-          // whole point of a foreclosure, not an excess needing authorised-adjustment.
+          // A backdated foreclosure that would conflict with transactions already posted after
+          // this date is blocked outright rather than silently producing an inconsistent record
+          // (point 4) — meetingToggleForeclose() already prevents ticking the box in this case, but
+          // this is re-checked here too since a stale form could in principle still submit one.
+          const blocked = foreclosureBlockedReason(loan.id, date);
+          if(blocked) throw new Error('Cannot foreclose loan '+loan.id+' ('+m.name+'): '+blocked);
+          // Foreclosure ALWAYS uses a freshly computed, up-to-date (as of the Meeting Date) quote —
+          // never whatever is sitting in the Principal/Interest boxes — so a stale auto-fill (e.g.
+          // the meeting date was changed after the boxes were filled) can never close a loan for
+          // the wrong amount. It also deliberately bypasses the normal "exceeds amount due" excess
+          // checks below: closing out the FULL outstanding balance plus its up-to-date interest is
+          // the whole point of a foreclosure, not an excess needing authorised-adjustment.
           const q = computeLoanForeclosure(loan.id, date);
           rp = q.principal; ri = q.totalInterest;
           if(rp<=0 && ri<=0) return;
@@ -2557,7 +2734,9 @@ function postMeeting(ev){
         if(rp<0||ri<0) throw new Error('Negative amounts are not allowed on loan '+loan.id+' ('+m.name+').');
         if(rp===0 && ri===0) return;
         const due = memberDueInfos(m.id, date).find(d=>d.loan.id===loan.id);
-        const outstanding = loanOutstanding(loan.id).principal;
+        // Outstanding AS OF the Meeting Date — never today's live outstanding, which for a
+        // backdated meeting could already reflect repayments that had not happened yet (point 2).
+        const outstanding = loanOutstandingAsOf(loan.id, date);
         let override = false;
         if(rp > outstanding+0.5){
           if(!allowExcess) throw new Error('Principal repayment for '+m.name+' on loan '+loan.id+' ('+rupee(rp)+') exceeds that loan\'s outstanding balance ('+rupee(outstanding)+'). Reduce the amount, or tick the authorised-adjustment checkbox.');
@@ -2576,10 +2755,6 @@ function postMeeting(ev){
           override = true;
         }
         if(override) anyOverrideUsed = true;
-        // Cross-meeting duplicate check: the same loan already has an identical, un-reversed
-        // repayment posted on the same date — warn (shown in the review screen) rather than block.
-        const dupe = DB.transactions.some(t=>!t.reversed && t.loanId===loan.id && t.date===date && t.credit==='MEMBER_LOANS' && t.amount===rp && rp>0);
-        if(dupe) dupWarnings.push(m.name+' — loan '+loan.id+': a principal repayment of '+rupee(rp)+' on '+fmtDate(date)+' already exists.');
         loanRows.push({loan, rp, ri, override});
       });
       if(sav>0||fine>0||wd>0||loanRows.length) memberEntries.push({m, sav, fine, wd, wdOverride, loanRows});
@@ -2627,10 +2802,29 @@ function postMeeting(ev){
     const depositAmount = parseFloat(f.get('depositAmount'))||0;
     if(depositAmount>0){
       if(mode!=='CASH') throw new Error('A bank deposit only applies when this meeting\'s collection mode is Cash.');
-      const availableCash = Math.round((accountBalance('CASH')+netCash)*100)/100;
-      if(depositAmount > availableCash+0.5) throw new Error('Deposit amount ('+rupee(depositAmount)+') exceeds cash available after this meeting ('+rupee(availableCash)+').');
-      deposit = { amount:depositAmount, date: f.get('depositDate')||date, bankAccount: f.get('depositBank')||'', ref: f.get('depositRef')||'', remarks: f.get('depositRemarks')||'' };
+      const depositDateVal = f.get('depositDate')||date;
+      if(depositDateVal < date) throw new Error('Deposit Date cannot be before the Meeting Date — the cash being deposited is collected at this meeting.');
+      if(depositDateVal > todayStr()) throw new Error('Deposit Date cannot be in the future.');
+      // Available-cash check uses cash AS OF THE MEETING DATE from the ledger, plus this meeting's
+      // own net cash movement — never today's live cash balance, which for a backdated meeting may
+      // already include later movements that had not happened yet as of this date (point 18).
+      const availableCash = Math.round((accountBalance('CASH',{upToDate:date})+netCash)*100)/100;
+      if(depositAmount > availableCash+0.5) throw new Error('Deposit amount ('+rupee(depositAmount)+') exceeds cash available as on the Meeting Date after this meeting ('+rupee(availableCash)+').');
+      deposit = { amount:depositAmount, date: depositDateVal, bankAccount: f.get('depositBank')||'', ref: f.get('depositRef')||'', remarks: f.get('depositRemarks')||'' };
     }
+
+    // Future Meeting Dates may be used for planning/next-meeting/draft minutes only — no actual
+    // financial posting is ever allowed against a future date (point 13).
+    if(date > todayStr()){
+      const anyFinancial = totals.savings>0.005||totals.principal>0.005||totals.interest>0.005||totals.fines>0.005||totals.withdrawals>0.005||totals.newLoans>0.005||totals.expenses>0.005||(deposit&&deposit.amount>0.005);
+      if(anyFinancial) throw new Error('Meeting Date is in the future ('+fmtDate(date)+'). Future-dated financial postings (savings, repayments, withdrawals, fines, new loans, expenses, bank deposits) are not allowed — set the Meeting Date to today or earlier to post these, or remove all financial entries to save this as a planning/draft meeting. / बैठक की तिथि भविष्य की है — भविष्य की तिथि पर वित्तीय प्रविष्टियाँ दर्ज नहीं की जा सकतीं।');
+    }
+
+    // Consolidated duplicate-posting check, across every kind of entry this meeting would create —
+    // shown to the user in the review screen; posting is still allowed (it may be a genuine second
+    // transaction) but only after the Secretary explicitly confirms via Confirm & Post, and that
+    // confirmation is itself recorded in the audit trail by confirmPostMeeting() (point 14).
+    dupWarnings = detectMeetingDuplicates(date, memberEntries, newLoan, expense);
 
     const actualRaw = f.get('actualReceived');
     const actualReceived = (actualRaw!=null && actualRaw!=='') ? parseFloat(actualRaw) : null;
@@ -2764,7 +2958,11 @@ function confirmPostMeeting(){
       if(p.deposit.remarks) narration += ' · '+p.deposit.remarks;
       postTxn({date:p.deposit.date,type:'Bank Deposit',debit:'BANK',credit:'CASH',amount:p.deposit.amount,meetingId,narration});
     }
-    const closingCash = accountBalance('CASH');
+    // Closing Cash AS ON THE MEETING DATE, computed from the ledger up to and including that date —
+    // never today's live balance, which for a backdated meeting could include later movements this
+    // meeting's own closing figure must not reflect (point 29). All of this meeting's own entries
+    // above are already posted (dated p.date), so they are correctly included.
+    const closingCash = accountBalance('CASH', {upToDate:p.date});
     DB.meetings.push({id:meetingId, date:p.date, place:p.place||'', totalMembers:p.totalMembers, present:p.present, presentIds:p.presentIds, absentIds:p.absentIds,
       totals:p.totals, actualReceived:p.actualReceived, mode:p.mode, closingCash, minutes:p.minutes||[],
       enterprise: p.enterprise||null, nextMeetingDate: p.nextMeetingDate||'',
@@ -2774,6 +2972,9 @@ function confirmPostMeeting(){
     // (after every postTxn() above has already succeeded) can never duplicate or affect a financial
     // entry; see reconcileActionPointsFromMeeting()'s own comment for exactly what it does.
     reconcileActionPointsFromMeeting(meetingId, p.minutes, p.date);
+    if(p.dupWarnings && p.dupWarnings.length){
+      logAudit('DUPLICATE_CONFIRMED', meetingId+' — Secretary confirmed posting despite possible duplicate(s): '+p.dupWarnings.join(' | '));
+    }
     logAudit('POST_MEETING', meetingId+' on '+p.date+' — '+p.present+'/'+p.totalMembers+' present, total collection '+rupee(p.totalCollection));
     let msg = 'Meeting posted. All registers, ledgers, loan positions and grading update automatically.';
     if(p.reconDiff!=null && p.reconDiff!==0) msg += ' Counted-vs-entries difference of '+rupee(Math.abs(p.reconDiff))+' was saved with the meeting.';
@@ -3185,7 +3386,9 @@ function computeLoanForeclosure(loanId, asOfDate){
   const loan = DB.loans.find(l=>l.id===loanId);
   if(!loan) return null;
   asOfDate = asOfDate || todayStr();
-  const principal = Math.max(0, loanOutstanding(loanId).principal);
+  // Outstanding AS OF the closure date, never today's live outstanding — a backdated foreclosure
+  // must never pick up a later repayment's effect, and must never use today's balance by mistake.
+  const principal = Math.max(0, loanOutstandingAsOf(loanId, asOfDate));
   const sched = generateLoanSchedule(loanId, asOfDate);
   const dueRows = sched.filter(s=>s.dueDate<=asOfDate);
   const interestAlreadyDue = Math.round(dueRows.reduce((s,r)=>s+Math.max(0,r.interestDue-r.interestPaid),0)*100)/100;
