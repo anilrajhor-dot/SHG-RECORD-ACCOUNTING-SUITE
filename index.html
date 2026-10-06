@@ -7076,10 +7076,216 @@ function commitBulkImportTransactions(){
   u.txns = null;
   render();
 }
+/* ---- Migration of an ALREADY-RUNNING SHG: opening savings per member + existing (part-repaid) loans ----
+   Most SHGs adopting this app have been running for years, so they need to bring in "where we stand
+   today" rather than every historical meeting. Both imports below post through the ordinary
+   postTxn() engine against SHG Fund/Capital (the same account Opening Cash/Bank is posted against),
+   so Debit = Credit holds, the Trial Balance stays balanced and SHG Fund ends up equal to the
+   group's true opening net worth (cash + bank + loans out − member savings − borrowings). They use
+   their own transaction types ("Opening Savings", "Opening Loan") so they never get mistaken for a
+   meeting's savings collection/disbursement and are never touched by the Opening Cash/Bank
+   re-posting logic. Enter Opening Cash/Bank first in Settings. */
+function downloadOpeningSavingsImportTemplate(){
+  downloadFile('opening_savings_import_template.csv', toCSV(
+    ['MemberName','SavingsBalance','AsOnDate'],
+    [['Sunita Devi','4500','2026-09-30']]
+  ));
+}
+function downloadExistingLoansImportTemplate(){
+  downloadFile('existing_loans_import_template.csv', toCSV(
+    ['LoanRef','MemberName','Purpose','DisbursementDate','Principal','InterestRate','Instalments','Frequency','InterestMethod','PrincipalRepaidTillDate','InterestPaidTillDate','AsOnDate'],
+    [['L-101','Sunita Devi','Agriculture','2026-03-10','10000','12','10','Monthly','reducing','3000','450','2026-09-30']]
+  ));
+}
+// Finds exactly one member by name (case-insensitive) — ambiguous or missing names are reported
+// per row rather than guessed, so a balance can never land on the wrong person.
+function bulkFindMemberByName(name){
+  const key = String(name||'').trim().toLowerCase();
+  if(!key) return {err:'MemberName is required'};
+  const hits = DB.members.filter(x=>x.name.trim().toLowerCase()===key);
+  if(!hits.length) return {err:'Member "'+name+'" not found — import Members first, spelled exactly the same'};
+  if(hits.length>1) return {err:'More than one member is named "'+name+'" — make the names unique first'};
+  return {m:hits[0]};
+}
+function bulkImportOpeningSavingsFile(){
+  const inp = document.getElementById('bulkImportOpenSavFile');
+  if(!inp.files.length){ alert('Choose a CSV file first.'); return; }
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const objs = csvRowsToObjects(parseCSV(e.target.result));
+    const u = bulkImportUI(); const seen = {};
+    u.openSav = objs.map(o=>{
+      const errors = [];
+      const f = bulkFindMemberByName(o.MemberName); if(f.err) errors.push(f.err);
+      const amount = Math.round((parseFloat(o.SavingsBalance)||0)*100)/100;
+      if(!(amount>0)) errors.push('SavingsBalance must be a positive number');
+      const date = o.AsOnDate||'';
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.push('AsOnDate must be YYYY-MM-DD');
+      else if(date>todayStr()) errors.push('AsOnDate cannot be in the future');
+      if(f.m){
+        if(seen[f.m.id]) errors.push('Member appears more than once in this file'); seen[f.m.id]=true;
+        if(DB.transactions.some(t=>!t.reversed && t.type==='Opening Savings' && t.memberId===f.m.id)) errors.push('Opening savings already imported for this member');
+      }
+      return { memberId:f.m?f.m.id:'', memberName:o.MemberName||'', amount, date, errors };
+    });
+    render();
+  };
+  reader.readAsText(inp.files[0]);
+}
+function commitBulkImportOpeningSavings(){
+  const u = bulkImportUI(); if(!u.openSav || !u.openSav.length) return;
+  const snap = { txnLen:DB.transactions.length, auditLog:DB.auditLog.slice(), seq:DB.seq };
+  let posted=0, skipped=0; const reasons=[];
+  try{
+    u.openSav.forEach(r=>{
+      if(r.errors.length){ skipped++; return; }
+      const rowSnap = { txnLen:DB.transactions.length, auditLog:DB.auditLog.slice(), seq:DB.seq };
+      try{
+        postTxn({date:r.date, type:'Opening Savings', debit:'SHG_FUND', credit:'MEMBER_SAVINGS', amount:r.amount, memberId:r.memberId, narration:'Opening savings balance brought forward (bulk import)'});
+        posted++;
+      }catch(e){ DB.transactions.length=rowSnap.txnLen; DB.auditLog=rowSnap.auditLog; DB.seq=rowSnap.seq; skipped++; reasons.push(r.memberName+': '+e.message); }
+    });
+    logAudit('BULK_IMPORT_OPENING_SAVINGS', posted+' member opening savings balance(s) imported; '+skipped+' skipped'+(reasons.length?(' ('+reasons.join('; ')+')'):''));
+    saveDBOrThrow();
+  }catch(e){
+    DB.transactions.length=snap.txnLen; DB.auditLog=snap.auditLog; DB.seq=snap.seq;
+    flash('error','Import could not be saved. Nothing was imported. ('+e.message+')'); u.openSav=null; render(); return;
+  }
+  flash(skipped?'error':'ok', posted+' opening savings balance(s) imported.'+(skipped?(' '+skipped+' row(s) skipped.'+(reasons.length?' '+reasons.join('; '):'')):''));
+  u.openSav = null; render();
+}
+function bulkImportExistingLoansFile(){
+  const inp = document.getElementById('bulkImportLoansFile');
+  if(!inp.files.length){ alert('Choose a CSV file first.'); return; }
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const objs = csvRowsToObjects(parseCSV(e.target.result));
+    const u = bulkImportUI(); const seenKeys = [];
+    u.loans = objs.map(o=>{
+      const errors = [];
+      const f = bulkFindMemberByName(o.MemberName); if(f.err) errors.push(f.err);
+      const isDate = s=>/^\d{4}-\d{2}-\d{2}$/.test(s||'');
+      const disb = o.DisbursementDate||'', asOn = o.AsOnDate||'';
+      if(!isDate(disb)) errors.push('DisbursementDate must be YYYY-MM-DD');
+      if(!isDate(asOn)) errors.push('AsOnDate must be YYYY-MM-DD');
+      else if(asOn>todayStr()) errors.push('AsOnDate cannot be in the future');
+      if(isDate(disb) && isDate(asOn) && asOn<disb) errors.push('AsOnDate cannot be before DisbursementDate');
+      const principal = Math.round((parseFloat(o.Principal)||0)*100)/100;
+      if(!(principal>0)) errors.push('Principal must be a positive number');
+      const rate = parseFloat(o.InterestRate);
+      if(isNaN(rate) || rate<0 || rate>60) errors.push('InterestRate must be a number between 0 and 60');
+      const inst = parseInt(o.Instalments,10);
+      if(!(inst>=1 && inst<=360)) errors.push('Instalments must be a whole number of 1 or more');
+      const frequency = ['Monthly','Weekly','Fortnightly'].find(x=>x.toLowerCase()===String(o.Frequency||'Monthly').trim().toLowerCase());
+      if(!frequency) errors.push('Frequency must be Monthly, Weekly or Fortnightly');
+      const interestMethod = String(o.InterestMethod||'reducing').trim().toLowerCase();
+      if(!['flat','reducing'].includes(interestMethod)) errors.push('InterestMethod must be flat or reducing');
+      const repaid = Math.round((parseFloat(o.PrincipalRepaidTillDate)||0)*100)/100;
+      const intPaid = Math.round((parseFloat(o.InterestPaidTillDate)||0)*100)/100;
+      if(repaid<0 || intPaid<0) errors.push('Repaid amounts cannot be negative');
+      if(principal>0 && repaid>=principal) errors.push('Loan is already fully repaid — fully repaid loans need not be imported');
+      if(f.m && isDate(disb)){
+        const key = f.m.id+'|'+disb+'|'+principal;
+        if(seenKeys.includes(key)) errors.push('Same loan appears twice in this file'); seenKeys.push(key);
+        if(DB.loans.some(l=>l.memberId===f.m.id && l.disbursementDate===disb && Math.abs(l.principal-principal)<0.005)) errors.push('A loan with the same member, date and principal already exists');
+      }
+      return { legacyRef:o.LoanRef||'', memberId:f.m?f.m.id:'', memberName:o.MemberName||'', purpose:o.Purpose||'', disb, asOn, principal, rate, inst, frequency, interestMethod, repaid, intPaid, errors };
+    });
+    render();
+  };
+  reader.readAsText(inp.files[0]);
+}
+function commitBulkImportExistingLoans(){
+  const u = bulkImportUI(); if(!u.loans || !u.loans.length) return;
+  const snap = { txnLen:DB.transactions.length, auditLog:DB.auditLog.slice(), loansLen:DB.loans.length, seq:DB.seq };
+  let posted=0, skipped=0; const reasons=[];
+  try{
+    u.loans.forEach(r=>{
+      if(r.errors.length){ skipped++; return; }
+      const rowSnap = { txnLen:DB.transactions.length, auditLog:DB.auditLog.slice(), loansLen:DB.loans.length, seq:DB.seq };
+      try{
+        const loan = { id:nextId('LOAN'), memberId:r.memberId, purpose:r.purpose, sanctionDate:r.disb, disbursementDate:r.disb,
+          principal:r.principal, interestRate:r.rate, instalments:r.inst, frequency:r.frequency, interestMethod:r.interestMethod,
+          status:'Active', nextDueDate:'', legacyRef:r.legacyRef, importedOpening:true };
+        DB.loans.push(loan);
+        const base = {date:r.asOn, type:'Opening Loan', memberId:r.memberId, loanId:loan.id};
+        postTxn(Object.assign({}, base, {debit:'MEMBER_LOANS', credit:'SHG_FUND', amount:r.principal, narration:'Existing loan brought forward — original principal'+(r.legacyRef?(' (Ref '+r.legacyRef+')'):'')+' (bulk import)'}));
+        if(r.repaid>0) postTxn(Object.assign({}, base, {debit:'SHG_FUND', credit:'MEMBER_LOANS', amount:r.repaid, narration:'Existing loan brought forward — principal repaid till '+r.asOn+' (bulk import)'}));
+        if(r.intPaid>0) postTxn(Object.assign({}, base, {debit:'SHG_FUND', credit:'INTEREST_INCOME', amount:r.intPaid, narration:'Existing loan brought forward — interest paid till '+r.asOn+' (bulk import)'}));
+        const nxt = generateLoanSchedule(loan.id, r.asOn).find(s=>s.status!=='Paid');
+        loan.nextDueDate = nxt ? nxt.dueDate : '';
+        logAudit('BULK_IMPORT_LOAN', loan.id+' ('+r.memberName+') imported — principal '+rupee(r.principal)+', repaid '+rupee(r.repaid)+', outstanding '+rupee(r.principal-r.repaid));
+        posted++;
+      }catch(e){ DB.transactions.length=rowSnap.txnLen; DB.auditLog=rowSnap.auditLog; DB.loans.length=rowSnap.loansLen; DB.seq=rowSnap.seq; skipped++; reasons.push(r.memberName+': '+e.message); }
+    });
+    logAudit('BULK_IMPORT_LOANS', posted+' existing loan(s) imported; '+skipped+' skipped'+(reasons.length?(' ('+reasons.join('; ')+')'):''));
+    saveDBOrThrow();
+  }catch(e){
+    DB.transactions.length=snap.txnLen; DB.auditLog=snap.auditLog; DB.loans.length=snap.loansLen; DB.seq=snap.seq;
+    flash('error','Import could not be saved. Nothing was imported. ('+e.message+')'); u.loans=null; render(); return;
+  }
+  flash(skipped?'error':'ok', posted+' existing loan(s) imported.'+(skipped?(' '+skipped+' row(s) skipped.'+(reasons.length?' '+reasons.join('; '):'')):''));
+  u.loans = null; render();
+}
+/* ---- Download-all templates + migration instructions (shared by Bulk Import screen, Help and Ask AI) ---- */
+const MIGRATION_STEPS_EN = [
+  'Set the SHG\'s Opening Cash / Bank balances in Settings first (the date should be your cut-off date).',
+  'Members: download the Members template, fill one row per member from your register, save as CSV and upload. Use exact, unique names.',
+  'Opening Savings: one row per member with the total savings accumulated as on the cut-off date (AsOnDate). MemberName must match the Members list exactly. A member can be imported only once.',
+  'Existing Loans: one row per running loan with its ORIGINAL terms (disbursement date, principal, rate, instalments, frequency, method) plus principal and interest repaid till AsOnDate. Fully repaid loans need not be imported.',
+  'Preview each file, fix any rows marked in red, then click Confirm Import. Nothing is saved until you confirm; rows with issues are skipped.',
+  'Afterwards check Trial Balance and Data Quality Check, then start recording new meetings in the app from the cut-off date onwards. Do not re-enter old meetings.'
+];
+const MIGRATION_STEPS_HI = [
+  'सबसे पहले सेटिंग्स में एसएचजी का प्रारंभिक नकद / बैंक शेष दर्ज करें (तिथि आपकी कट-ऑफ तिथि हो)।',
+  'सदस्य: सदस्य टेम्पलेट डाउनलोड करें, रजिस्टर से हर सदस्य की एक पंक्ति भरें, CSV के रूप में सहेजें और अपलोड करें। सटीक और अद्वितीय नाम लिखें।',
+  'प्रारंभिक बचत: हर सदस्य की एक पंक्ति, कट-ऑफ तिथि (AsOnDate) तक की कुल जमा बचत के साथ। MemberName सदस्य सूची से हूबहू मेल खाना चाहिए। एक सदस्य केवल एक बार आयात हो सकता है।',
+  'मौजूदा ऋण: हर चालू ऋण की एक पंक्ति — मूल शर्तें (वितरण तिथि, मूलधन, ब्याज दर, किस्तें, आवृत्ति, पद्धति) और AsOnDate तक चुकाया गया मूलधन व ब्याज। पूरी तरह चुकाए ऋण आयात करना आवश्यक नहीं।',
+  'हर फ़ाइल का पूर्वावलोकन देखें, लाल चिह्नित पंक्तियाँ सुधारें, फिर Confirm Import दबाएँ। पुष्टि तक कुछ सहेजा नहीं जाता; त्रुटि वाली पंक्तियाँ छोड़ दी जाती हैं।',
+  'इसके बाद Trial Balance और Data Quality Check देखें, फिर कट-ऑफ तिथि के बाद की नई बैठकें ऐप में दर्ज करें। पुरानी बैठकें दोबारा दर्ज न करें।'
+];
+function migrationHelpTextEN(){ return 'To bring in an SHG that is already running, open Bulk Data Import (📥) from the left menu and follow these steps in order: '+MIGRATION_STEPS_EN.map((x,i)=>(i+1)+') '+x).join(' ')+' Use "Download all templates" there to get one Excel-openable file with a sheet per template plus an Instructions sheet, or the four CSV files.'; }
+function migrationHelpTextHI(){ return 'पहले से चल रहे एसएचजी का डेटा लाने के लिए बाएँ मेनू से Bulk Data Import (📥) खोलें और इन चरणों को क्रम से करें: '+MIGRATION_STEPS_HI.map((x,i)=>(i+1)+') '+x).join(' ')+' वहाँ "Download all templates" से हर टेम्पलेट की अलग शीट और Instructions शीट वाली एक Excel-फ़ाइल, या चारों CSV फ़ाइलें प्राप्त करें।'; }
+function importTemplateSheets(){
+  return [
+    {name:'Instructions', headers:['Step','What to do'], rows:MIGRATION_STEPS_EN.map((x,i)=>[String(i+1),x]).concat([['Note','Excel: after filling a sheet, use File > Save As > CSV (Comma delimited) for that sheet, then upload the .csv in the matching section. Dates must be YYYY-MM-DD. Delete the sample row before uploading.']])},
+    {name:'1_Members', headers:['Name','Gender','Relation','FatherHusband','Mobile','Email','Village','DOJ','Status','Occupation','Nominee','BankAccno','BankIfsc'], rows:[['Sunita Devi','Female','W/o','Ram Lal','9876543210','sunita.devi@example.com','Rampur','2025-04-01','Active','Agriculture','Geeta Devi','','']]},
+    {name:'2_Opening_Savings', headers:['MemberName','SavingsBalance','AsOnDate'], rows:[['Sunita Devi','4500','2026-09-30']]},
+    {name:'3_Existing_Loans', headers:['LoanRef','MemberName','Purpose','DisbursementDate','Principal','InterestRate','Instalments','Frequency','InterestMethod','PrincipalRepaidTillDate','InterestPaidTillDate','AsOnDate'], rows:[['L-101','Sunita Devi','Agriculture','2026-03-10','10000','12','10','Monthly','reducing','3000','450','2026-09-30']]},
+    {name:'4_Transactions', headers:['Date','Type','DebitAccount','CreditAccount','Amount','MemberName','Narration'], rows:[['2025-04-05','Journal','CASH','MEMBER_SAVINGS','100','Sunita Devi','Opening savings balance brought forward']]}
+  ];
+}
+function importTemplatesToSpreadsheetXML(sheets){
+  const x = v => String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  let out = '<?xml version="1.0"?>\n<?mso-application progid="Excel.Sheet"?>\n<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">\n<Styles><Style ss:ID="h"><Font ss:Bold="1"/><Interior ss:Color="#DDEBF7" ss:Pattern="Solid"/></Style></Styles>\n';
+  sheets.forEach(sh=>{
+    out += '<Worksheet ss:Name="'+x(sh.name)+'"><Table>';
+    out += '<Row>'+sh.headers.map(h=>'<Cell ss:StyleID="h"><Data ss:Type="String">'+x(h)+'</Data></Cell>').join('')+'</Row>';
+    sh.rows.forEach(r=>{ out += '<Row>'+r.map(v=>'<Cell><Data ss:Type="String">'+x(v)+'</Data></Cell>').join('')+'</Row>'; });
+    out += '</Table></Worksheet>\n';
+  });
+  return out+'</Workbook>';
+}
+function downloadAllImportTemplatesExcel(){
+  downloadFile('SHG_Data_Upload_Templates.xls', importTemplatesToSpreadsheetXML(importTemplateSheets()), 'application/vnd.ms-excel');
+}
+function downloadAllImportTemplatesCSV(){
+  downloadMembersImportTemplate();
+  setTimeout(downloadOpeningSavingsImportTemplate, 400);
+  setTimeout(downloadExistingLoansImportTemplate, 800);
+  setTimeout(downloadTransactionsImportTemplate, 1200);
+}
+function migrationInstructionsHTML(){
+  return `<ol style="margin:6px 0 0 18px;padding:0;font-size:13.5px;line-height:1.5">${MIGRATION_STEPS_EN.map(x=>'<li>'+esc(x)+'</li>').join('')}</ol>`;
+}
 function viewBulkImport(){
   const u = bulkImportUI();
   let html = `<div class="section-title"><h2>Bulk Data Import</h2></div>`;
   html += `<div class="msg info">Bring existing records in from Excel/CSV instead of typing every entry one at a time. Download a template below, fill it in Excel (save as CSV — Excel opens .csv files directly), then upload it here. Nothing is saved until you review the preview and click Confirm Import.</div>`;
+  html += `<div class="card"><h3>Download all templates</h3>
+    <div class="row"><button class="btn" onclick="downloadAllImportTemplatesExcel()">Download all (Excel file, one sheet per template)</button><button class="btn secondary" onclick="downloadAllImportTemplatesCSV()">Download all 4 CSV files</button></div>
+    <details style="margin-top:10px" open><summary class="hint" style="cursor:pointer"><b>How to upload an existing SHG's data — step by step</b></summary>${migrationInstructionsHTML()}
+    <p class="hint" style="margin-top:8px">The Excel file includes an Instructions sheet. The app reads only CSV: open a sheet in Excel and use Save As → CSV for each one before uploading. Dates are YYYY-MM-DD. Delete the sample row first.</p></details></div>`;
 
   html += `<div class="card"><h3>1. Members</h3>
     <p class="hint">Bulk-add members from your existing register. Same fields as Add Member. Subject to the ${SHG_MIN_MEMBERS}–${SHG_MAX_MEMBERS} member cap.</p>
@@ -7097,7 +7303,40 @@ function viewBulkImport(){
   }
   html += `</div>`;
 
-  html += `<div class="card"><h3>2. Transactions / Journal (historical postings)</h3>
+  html += `<div class="msg info"><b>Migrating an SHG that is already running?</b> Do these in order: (1) Opening Cash / Bank in Settings, (2) Members, (3) Opening Savings, (4) Existing Loans. Together they bring the group's position as on a cut-off date into the books — you do not need to re-enter old meetings. Everything goes through the normal posting engine against SHG Fund/Capital, so the Trial Balance stays balanced. Interest already paid on imported loans is shown as interest income in the As-On month.</div>`;
+  html += `<div class="card"><h3>2. Opening Savings Balance per Member</h3>
+    <p class="hint">One row per member: the total savings she has accumulated as on the cut-off date (AsOnDate). MemberName must match the Members list exactly. A member can be imported only once.</p>
+    <div class="row"><button class="btn secondary" onclick="downloadOpeningSavingsImportTemplate()">Download Template (.csv)</button></div>
+    <div class="row" style="margin-top:8px"><input type="file" id="bulkImportOpenSavFile" accept=".csv,text/csv"><button class="btn secondary" onclick="bulkImportOpeningSavingsFile()">Preview File</button></div>`;
+  if(u.openSav){
+    const errCount = u.openSav.filter(r=>r.errors.length).length;
+    html += tbl(['Member','Savings Balance','As On','Issues'], u.openSav.map(r=>[
+      esc(r.memberName), rightCell(r.amount?rupee(r.amount):'—'), esc(r.date),
+      r.errors.length ? badge(r.errors.join('; '),'red') : badge('OK','green')
+    ]));
+    html += `<p class="hint">${u.openSav.length} row(s) parsed — ${u.openSav.length-errCount} ready to import, ${errCount} with issues (will be skipped).</p>
+      <button class="btn" onclick="commitBulkImportOpeningSavings()">Confirm Import (${u.openSav.length-errCount})</button>
+      <button class="btn secondary" onclick="bulkImportUI().openSav=null;render();">Cancel</button>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="card"><h3>3. Existing Loans (part-repaid)</h3>
+    <p class="hint">One row per running member loan, with its ORIGINAL terms plus how much principal and interest has been repaid up to AsOnDate. The app rebuilds the repayment schedule from the original disbursement date, so dues and arrears after the cut-off date are calculated correctly. Frequency: Monthly / Weekly / Fortnightly. InterestMethod: flat or reducing. LoanRef (your old register number) is optional. Fully repaid loans need not be imported.</p>
+    <div class="row"><button class="btn secondary" onclick="downloadExistingLoansImportTemplate()">Download Template (.csv)</button></div>
+    <div class="row" style="margin-top:8px"><input type="file" id="bulkImportLoansFile" accept=".csv,text/csv"><button class="btn secondary" onclick="bulkImportExistingLoansFile()">Preview File</button></div>`;
+  if(u.loans){
+    const errCount = u.loans.filter(r=>r.errors.length).length;
+    html += tbl(['Member','Ref','Disbursed','Principal','Repaid','Outstanding','As On','Issues'], u.loans.map(r=>[
+      esc(r.memberName), esc(r.legacyRef||'—'), esc(r.disb), rightCell(r.principal?rupee(r.principal):'—'), rightCell(rupee(r.repaid)), rightCell(rupee(Math.max(0,r.principal-r.repaid))), esc(r.asOn),
+      r.errors.length ? badge(r.errors.join('; '),'red') : badge('OK','green')
+    ]));
+    html += `<p class="hint">${u.loans.length} row(s) parsed — ${u.loans.length-errCount} ready to import, ${errCount} with issues (will be skipped).</p>
+      <button class="btn" onclick="commitBulkImportExistingLoans()">Confirm Import (${u.loans.length-errCount})</button>
+      <button class="btn secondary" onclick="bulkImportUI().loans=null;render();">Cancel</button>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="card"><h3>4. Transactions / Journal (historical postings)</h3>
     <p class="hint">Bulk-post historical entries (opening savings, past deposits, fines, etc.) through the same double-entry posting engine used everywhere in this app — Trial Balance and Data Quality apply exactly as they would to entries made individually. MemberName is optional — leave it blank for entries that are not tied to one member.</p>
     <div class="row"><button class="btn secondary" onclick="downloadTransactionsImportTemplate()">Download Template (.csv)</button></div>
     <div class="row" style="margin-top:8px"><input type="file" id="bulkImportTxnFile" accept=".csv,text/csv"><button class="btn secondary" onclick="bulkImportTransactionsFile()">Preview File</button></div>`;
@@ -7389,6 +7628,7 @@ function viewHelp(){
     ['Example — Cash Deposited into Bank','Debit: Bank. Credit: Cash. Record this as a Journal Voucher under Transactions.'],
     ['Example — CIF Received','Debit: Bank. Credit: CIF (liability — repayable to VO/CLF/NRLM).'],
     ['Example — Meeting Expense','Debit: the relevant Expense account. Credit: Cash/Bank.'],
+    ['Bringing in an Existing SHG (Bulk Data Import)', migrationHelpTextEN()],
     ['Common Mistakes','Entering the same collection twice from both the Meeting screen and a separate Savings entry; forgetting to select the correct loan when recording a repayment; posting into a closed period without reopening it first.']
   ];
   html += items.map(([t,d])=>`<div class="card"><h3>${esc(t)}</h3><p style="margin:0;color:var(--muted);font-size:13.5px">${esc(d)}</p></div>`).join('');
@@ -7509,6 +7749,12 @@ function aiAsk(qRaw){
   const base = {confidence:aiT('Data verified — calculated from this app\'s own stored records','डेटा सत्यापित — इस ऐप के अपने संग्रहीत रिकॉर्ड से गणना की गई')};
   if(!q) return Object.assign({answer:aiT('Please type a question.','कृपया एक प्रश्न लिखें।')}, base, {confidence:'—'});
   const has = (...words)=>words.some(w=>q.includes(w));
+  if(has('upload','import','migrate','migration','existing data','existing shg','already running','already in existence','old records','old data','excel','csv','template','अपलोड','आयात','मौजूदा डेटा','पुराना डेटा','पुराने रिकॉर्ड','एक्सेल') && has('data','shg','group','member','loan','saving','template','excel','csv','file','upload','डेटा','समूह','सदस्य','ऋण','बचत','फ़ाइल','अपलोड')) return Object.assign({}, base, {
+    answer: aiT('To bring in an SHG that is already running, open Bulk Data Import (📥) in the left menu, download the templates (one Excel file or four CSVs) and follow these steps in order:','पहले से चल रहे एसएचजी का डेटा लाने के लिए बाएँ मेनू में Bulk Data Import (📥) खोलें, टेम्पलेट (एक Excel फ़ाइल या चार CSV) डाउनलोड करें और इन चरणों को क्रम से करें:'),
+    figures: aiT(MIGRATION_STEPS_EN, MIGRATION_STEPS_HI),
+    evidence:[aiT('From this app\'s own Bulk Data Import instructions (menu 📥 Bulk Data Import)','इस ऐप के अपने Bulk Data Import निर्देशों से (मेनू 📥 Bulk Data Import)')],
+    action: aiT('Open Bulk Data Import and click "Download all templates".','Bulk Data Import खोलें और "Download all templates" दबाएँ।'),
+    confidence: aiT('Instructions from this app\'s Help content — no figures are calculated','इस ऐप की सहायता सामग्री से निर्देश — कोई आँकड़ा गणना नहीं किया गया')});
 
   if(has('cash','नकद','कैश') && !has('bank','बैंक')) return Object.assign({}, base, {
     answer: aiT(`${c.shgName} currently has ${rupee(c.cash)} in cash.`, `${c.shgName} के पास वर्तमान में ${rupee(c.cash)} नकद है।`),
@@ -8092,6 +8338,7 @@ function aiTrainingQuick(q){
 
 /* ============================================================ HELP ASSISTANT (offline, rule-based — not a live/connected AI) */
 const HELP_KB = [
+  {kw:['upload','import','existing data','existing shg','already running','migrate','migration','excel','csv','template','bulk','opening savings','existing loan','old data','old records'], a:migrationHelpTextEN()},
   {kw:['savings','saving','collect savings','record savings'], a:'Go to Meetings → Conduct New Meeting and enter each member\'s savings amount, or use Savings → "Record a Standalone Savings / Withdrawal Entry" for a one-off entry. The app posts Debit Cash/Bank, Credit Member Savings automatically.'},
   {kw:['loan','disburse','disbursement','new loan','issue loan'], a:'Record a new loan from Loans → "+ New Loan", or directly inside a Meeting under "New Loan Disbursed at this Meeting". You set the principal, interest rate and number of instalments — nothing is hard-coded.'},
   {kw:['repay','repayment','instalment','installment','emi'], a:'Repayments are entered per member during a Meeting (Repay Principal / Repay Interest columns), or you can post a Journal Voucher under Transactions if it happens outside a meeting. The app automatically reduces the loan\'s outstanding principal and credits Interest Income for the interest portion.'},
