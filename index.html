@@ -6368,11 +6368,17 @@ function mstStatusBadges(h){
 }
 function markMonthlyStatementsSent(){
   const u = mstUI(); const ym = monthKey(todayStr());
-  if(mstValidDate(u.from) && mstValidDate(u.to) && u.from<=u.to){
+  const validPeriod = mstValidDate(u.from) && mstValidDate(u.to) && u.from<=u.to;
+  if(validPeriod){
     const h = mstEnsureGenerated(u.from,u.to); h.sentAt = nowStamp(); h.sentBy = DB.settings.currentUserName;
   }
-  DB.settings.lastMonthlyStatementsYM = ym;
-  logAudit('MONTHLY_STATEMENTS_SENT', 'Monthly Savings & Loan statements marked as sent'+(mstValidDate(u.from)?(' for '+mstPeriodLabel(u.from,u.to)):'')+' ('+activeMembers().length+' member(s)); reminder cleared for '+ym+'.');
+  // The current month's reminder is cleared ONLY when the period marked as sent is the one
+  // currently required (the previous completed month). Marking any other (historical) period
+  // updates just that period's history record.
+  const reqB = mstMonthBounds(mstPrevMonthKey(todayStr()));
+  const isRequiredPeriod = validPeriod && u.from===reqB.from && u.to===reqB.to;
+  if(isRequiredPeriod) DB.settings.lastMonthlyStatementsYM = ym;
+  logAudit('MONTHLY_STATEMENTS_SENT', 'Monthly Savings & Loan statements marked as sent'+(validPeriod?(' for '+mstPeriodLabel(u.from,u.to)):'')+' ('+activeMembers().length+' member(s))'+(isRequiredPeriod?'; reminder cleared for '+ym+'.':'; current-month reminder unchanged.'));
   flash('ok','Marked as sent — recorded in the statement history and audit trail.'); render();
 }
 // concise WhatsApp/Email text — presentation only; the printed statement never uses this text.
@@ -6571,7 +6577,7 @@ function mstOpenDoc(kind, memberId, autoPrint, printAnyway){
     title = 'All members';
   }
   mstEnsureGenerated(from,to);
-  window.__mstCurrent = {kind, memberId:memberId||'', from, to, count: kind==='all' ? v.mdata.length+2 : 1};
+  window.__mstCurrent = {kind, memberId:memberId||'', from, to, count: kind==='all' ? v.mdata.length+3 : 1};
   const warn = (v.critical.length && kind!=='member') ? `<div class="msg err no-print">${esc(aiT('Statement generation should be reviewed because accounting/data-quality issues were found.','विवरण तैयार करने की समीक्षा की जानी चाहिए क्योंकि लेखा/डेटा-गुणवत्ता संबंधी समस्याएँ पाई गईं।'))} (${v.critical.length})</div>` : '';
   openModal(`<button class="close" onclick="closeModal()">×</button>
     <div class="row no-print" style="margin-bottom:8px"><button class="btn" onclick="mstDoPrint()">🖨 ${aiT('Print','प्रिंट')}</button><button class="btn secondary" onclick="closeModal()">${aiT('Close','बंद करें')}</button>
