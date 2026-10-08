@@ -145,6 +145,44 @@ footer.byline{font-size:11px;color:var(--muted);text-align:center;padding:18px 0
 }
 ::-webkit-scrollbar{height:9px;width:9px;}
 ::-webkit-scrollbar-thumb{background:#c5d0da;border-radius:5px;}
+
+/* ---- Monthly Member Statements: official-record look (screen + A4 print) ---- */
+.stmt-doc{font-size:12.5px;color:#111;}
+.stmt-page{background:#fff;padding:6px 4px 14px;margin-bottom:18px;border-bottom:2px dashed #cfd8e0;}
+.stmt-shg{text-align:center;border-bottom:2px solid #1d3b53;padding-bottom:6px;margin-bottom:8px;}
+.stmt-shgname{font-size:18px;font-weight:700;letter-spacing:.02em;}
+.stmt-small{font-size:11px;color:#444;}
+.stmt-title{text-align:center;margin:8px 0 4px;font-size:15px;letter-spacing:.04em;}
+.stmt-cover{text-align:center;font-size:26px;margin:60px 0 6px;}
+.stmt-cover2{text-align:center;font-size:16px;margin-bottom:24px;}
+.stmt-meta{display:flex;flex-wrap:wrap;gap:6px 22px;justify-content:center;margin-bottom:8px;}
+.stmt-doc h4{margin:12px 0 4px;font-size:13px;border-left:4px solid #1d3b53;padding-left:6px;}
+.stmt-doc h5{margin:8px 0 3px;font-size:12px;color:#1d3b53;}
+.stmt-loan{border:1px solid #b9c4cd;padding:4px 8px 8px;margin-top:10px;border-radius:4px;}
+.stmt-table{width:100%;border-collapse:collapse;margin:2px 0 6px;}
+.stmt-table th,.stmt-table td{border:1px solid #9aa7b2;padding:3px 6px;vertical-align:top;font-size:12px;}
+.stmt-table th{background:#e8eef3;text-align:left;}
+.stmt-table th.num,.stmt-table td.num{text-align:right;white-space:nowrap;}
+.stmt-table tr.stmt-total td{font-weight:700;background:#f3f6f9;}
+.stmt-txn td,.stmt-txn th{font-size:11px;}
+.stmt-cols{display:grid;grid-template-columns:1fr 1.25fr;gap:14px;align-items:start;}
+.stmt-note{font-size:11.5px;border:1px solid #b9c4cd;padding:5px 8px;background:#f9fafb;margin-top:6px;}
+.stmt-st{font-weight:700;white-space:nowrap;}
+.stmt-st.ok{color:#17703a;}.stmt-st.warn{color:#b26a00;}.stmt-st.bad{color:#b3261e;}
+.stmt-warnbox{border:2px solid #b3261e;padding:6px 10px;margin-top:10px;color:#7a1510;}
+.stmt-sign{height:26px;}
+.stmt-sig td{height:30px;}
+.stmt-portrait{page:stmtp;}.stmt-landscape{page:stmtl;}
+.stmt-screen-doc{overflow-x:auto;}
+@media print{
+  .stmt-page{break-after:page;page-break-after:always;border-bottom:0;margin:0;padding:0;}
+  .stmt-page:last-child{break-after:auto;page-break-after:auto;}
+  .stmt-table thead{display:table-header-group;}
+  .stmt-table tr{break-inside:avoid;page-break-inside:avoid;}
+  .stmt-loan,.stmt-note{break-inside:avoid;}
+  .stmt-doc h4,.stmt-doc h5{break-after:avoid;}
+  .stmt-table,.stmt-table th,.stmt-table td{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+}
 .printhead{display:none;}
 .print-only{display:none;}
 @media print{
@@ -243,6 +281,7 @@ const TRANSLATIONS = {
   // Nav groups
   'Overview':'अवलोकन','Field Operations':'फील्ड कार्य','Accounting':'लेखांकन',
   'Quality & Compliance':'गुणवत्ता एवं अनुपालन','Records':'अभिलेख','System':'सिस्टम',
+  'Statements':'विवरण','Monthly Member Statements':'मासिक सदस्य विवरण','Consolidated Monthly Statement':'समेकित मासिक विवरण','Month-wise Savings & Loan Statement – Printable SHG Record':'माह-वार बचत एवं ऋण विवरण – मुद्रण योग्य एसएचजी अभिलेख','Generate Monthly Statements':'मासिक विवरण तैयार करें','Print All Members – Monthly Statements':'सभी सदस्यों का मासिक विवरण प्रिंट करें','View Statement':'विवरण देखें','Print Statement':'विवरण प्रिंट करें','Statement History':'विवरण इतिहास','Financial Year':'वित्तीय वर्ष','Month':'माह','From Date':'आरंभ तिथि','To Date':'अंतिम तिथि','View Consolidated':'समेकित देखें','Print Consolidated':'समेकित प्रिंट करें','Mark This Month as Sent':'इस माह को भेजा हुआ चिह्नित करें','Open / Regenerate':'खोलें / पुनः तैयार करें','Opening Savings':'प्रारंभिक बचत','Closing Savings':'अंतिम बचत','Loan O/S (closing)':'ऋण शेष (अंतिम)','Overdue (closing)':'अतिदेय (अंतिम)','Statement':'विवरण',
   // Nav items / section titles
   'Dashboard':'डैशबोर्ड','SHG Profile':'एसएचजी प्रोफ़ाइल','Members':'सदस्य','Meetings':'बैठकें',
   'Savings':'बचत','Loans':'ऋण','CIF':'सीआईएफ','Transactions / Vouchers':'लेन-देन / वाउचर',
@@ -397,6 +436,7 @@ function freshDB(){
     transactions:[],
     expenseCategories: DEFAULT_EXPENSE_CATS.slice(),
     closedPeriods:[],
+    statementHistory:[],
     auditLog:[],
     // Cross-meeting action points / unfinished decisions — tracked purely for follow-up (never
     // posted to the ledger). Each: {id, meetingId, topic, decision, responsible, targetDate,
@@ -1106,8 +1146,10 @@ const NAV = [
   {grp:'Records'},
   {id:'reports', label:'Reports', icon:'▤'},
   {id:'registers', label:'Registers (Print)', icon:'🖨'},
+  {grp:'Statements'},
+  {id:'monthlystatements', label:'Monthly Member Statements', icon:'✉'},
+  {id:'consolidatedstatement', label:'Consolidated Monthly Statement', icon:'🧾'},
   {id:'memberstatement', label:'Member Statement', icon:'▤'},
-  {id:'monthlystatements', label:'Monthly Statements', icon:'✉'},
   {id:'statementextract', label:'Statement Extract', icon:'📑'},
   {grp:'System'},
   {id:'bulkimport', label:'Bulk Data Import', icon:'📥'},
@@ -1156,7 +1198,7 @@ function render(){
       cashbook: ()=>viewBook('CASH','Cash Book'), bankbook: ()=>viewBook('BANK','Bank Book'), upibook: ()=>viewBook('UPI','UPI Book'),
       ledger: viewLedger, trialbalance: viewTrialBalance, statements: viewStatements,
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
-      lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement, monthlystatements: viewMonthlyStatements, statementextract: viewStatementExtract,
+      lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement, monthlystatements: viewMonthlyStatements, consolidatedstatement: viewConsolidatedStatement, statementextract: viewStatementExtract,
       bulkimport: viewBulkImport,
       backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI,
       aimanager: viewAIManager, aiask: viewAIAsk, aidaily: viewAIDailyReview, aidq: viewAIDataQuality,
@@ -5993,35 +6035,654 @@ function mailtoLink(email, subject, body){
 // (there is no bulk-messaging API available without a server, a paid WhatsApp Business account,
 // and every member's prior opt-in — none of which exist here). A monthly reminder banner (see
 // viewDashboard) nudges the animator to come back and do this on/after the 1st of each month.
-function viewMonthlyStatements(){
+/* ============================================================ MONTHLY MEMBER STATEMENTS
+   Month-wise Savings & Loan Statement — printable SHG record.
+   STRICT RULE: this section is a PRESENTATION and RECORD-KEEPING layer only. It never posts,
+   alters or re-computes any accounting figure with its own formula. Every number is read from the
+   same engine the Cash Book, Loan Register, Trial Balance and Financial Statements use:
+   accountBalance()/ledgerMovement() with upToDate/fromDate/memberId/loanId filters,
+   memberSavingsBalance(), loanOutstandingAsOf(), generateLoanSchedule(), memberDueInfos(),
+   calculateCorpus(), generateTrialBalance()/allLedgerCodes(), computeBankRecon(), runDataQuality().
+   A statement is generated strictly AS AT the selected period end (opening = balance at the day
+   before the period starts), never from today's balances, so a closed month can be reproduced
+   later even after newer transactions are entered. */
+const MST_MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function mstR2(x){ return Math.round((x||0)*100)/100; }
+function mstDayBefore(d){ const dt=new Date(d+'T00:00:00Z'); dt.setUTCDate(dt.getUTCDate()-1); return dt.toISOString().slice(0,10); }
+function mstMonthBounds(ym){ const [y,m]=ym.split('-').map(Number); const last=new Date(Date.UTC(y,m,0)).getUTCDate(); return {from:ym+'-01', to:ym+'-'+String(last).padStart(2,'0')}; }
+function mstPrevMonthKey(d){ const [y,m]=d.slice(0,7).split('-').map(Number); return new Date(Date.UTC(y,m-2,1)).toISOString().slice(0,7); }
+function mstMonthLabel(ym){ const [y,m]=ym.split('-').map(Number); return MST_MONTHS[m-1]+' '+y; }
+function mstPeriodLabel(from,to){ const b=mstMonthBounds(from.slice(0,7)); return (from===b.from && to===b.to) ? mstMonthLabel(from.slice(0,7)) : fmtDate(from)+' – '+fmtDate(to); }
+function mstValidDate(d){ return /^\d{4}-\d{2}-\d{2}$/.test(d||'') && !isNaN(new Date(d+'T00:00:00Z').getTime()); }
+function mstFYLabel(from){ const y=fyStartYearOf(from); return 'FY '+y+'-'+String(y+1).slice(2); }
+// Completed months (before the current month) that have transactions, plus the previous month itself.
+function mstSelectableMonths(){
+  const cur = monthKey(todayStr());
+  const set = new Set(DB.transactions.map(t=>t.date&&t.date.slice(0,7)).filter(Boolean));
+  set.add(mstPrevMonthKey(todayStr()));
+  return Array.from(set).filter(ym=>ym<cur).sort().reverse();
+}
+function mstUI(){
+  if(!window.__mstUI){ const ym = mstPrevMonthKey(todayStr()); const b = mstMonthBounds(ym); window.__mstUI = {ym, from:b.from, to:b.to, fy:String(fyStartYearOf(b.from))}; }
+  return window.__mstUI;
+}
+function mstSetMonth(ym){ const u=mstUI(); const b=mstMonthBounds(ym); u.ym=ym; u.from=b.from; u.to=b.to; u.fy=String(fyStartYearOf(b.from)); render(); }
+function mstSetFY(fy){ const u=mstUI(); u.fy=fy; const months=mstSelectableMonths().filter(ym=>String(fyStartYearOf(mstMonthBounds(ym).from))===fy); if(months.length) mstSetMonth(months[0]); else render(); }
+function mstSetDate(field,val){ const u=mstUI(); u[field]=val; u.ym=''; render(); }
+function mstOpenFor(ym){ mstSetMonthSilent(ym); go('monthlystatements'); }
+function mstSetMonthSilent(ym){ const u=mstUI(); const b=mstMonthBounds(ym); u.ym=ym; u.from=b.from; u.to=b.to; u.fy=String(fyStartYearOf(b.from)); }
+
+/* ---- classification helpers (read-only views of ledger lines) ---- */
+function mstIsRev(t){ return t.type==='Reversal' || !!t.reversalOf; }
+function mstSavingsKind(t){ if(mstIsRev(t) || t.type==='Opening Savings') return 'adj'; return t.credit==='MEMBER_SAVINGS' ? 'dep' : 'wd'; }
+function mstSavingsMovement(txns){
+  let dep=0, wd=0, adj=0;
+  txns.forEach(t=>{
+    if(t.credit!=='MEMBER_SAVINGS' && t.debit!=='MEMBER_SAVINGS') return;
+    const k = mstSavingsKind(t);
+    if(k==='dep') dep+=t.amount; else if(k==='wd') wd+=t.amount; else adj += (t.credit==='MEMBER_SAVINGS' ? t.amount : -t.amount);
+  });
+  return {dep:mstR2(dep), wd:mstR2(wd), adj:mstR2(adj)};
+}
+
+/* ---- per-member statement data ---- */
+function mstMemberData(memberId, from, to){
+  const m = DB.members.find(x=>x.id===memberId); if(!m) return null;
+  const d0 = mstDayBefore(from);
+  const pt = DB.transactions.filter(t=>t.date>=from && t.date<=to);
+  const mine = pt.filter(t=>t.memberId===memberId);
+  const sOpen = memberSavingsBalance(memberId, d0), sClose = memberSavingsBalance(memberId, to);
+  const sm = mstSavingsMovement(mine);
+  const savings = {open:sOpen, dep:sm.dep, wd:sm.wd, adj:sm.adj, close:sClose, diff:mstR2(sOpen+sm.dep-sm.wd+sm.adj-sClose)};
+  const openInfos = memberDueInfos(memberId, d0), closeInfos = memberDueInfos(memberId, to);
+  const myLoans = DB.loans.filter(l=>l.memberId===memberId);
+  const myLoanIds = new Set(myLoans.map(l=>l.id));
+  const loans = myLoans.map(loan=>{
+    const disbDate = loan.disbursementDate || loan.sanctionDate || '';
+    if(!disbDate || disbDate>to) return null;
+    const oP = loanOutstandingAsOf(loan.id, d0), cP = loanOutstandingAsOf(loan.id, to);
+    const lt = pt.filter(t=>t.loanId===loan.id);
+    if(oP<=0.5 && cP<=0.5 && !lt.length) return null;
+    let disb=0, rep=0, padj=0, intPaid=0, intRev=0;
+    lt.forEach(t=>{
+      const rev = mstIsRev(t);
+      if(t.debit==='MEMBER_LOANS'){ if(rev) padj += t.amount; else disb += t.amount; }
+      if(t.credit==='MEMBER_LOANS'){ if(rev) padj -= t.amount; else rep += t.amount; }
+      if(t.credit==='INTEREST_INCOME' && !rev) intPaid += t.amount;
+      if(t.debit==='INTEREST_INCOME') intRev += t.amount;
+    });
+    const oi = openInfos.find(i=>i.loan.id===loan.id), ci = closeInfos.find(i=>i.loan.id===loan.id);
+    const sch = generateLoanSchedule(loan.id, to);
+    const dueRows = sch.filter(s=>s.dueDate>=from && s.dueDate<=to);
+    const instPrin = mstR2(dueRows.reduce((s,r)=>s+r.principalDue,0)), instInt = mstR2(dueRows.reduce((s,r)=>s+r.interestDue,0));
+    const openIntDue = oi ? oi.totalInterestDue : 0, closeIntDue = ci ? ci.totalInterestDue : 0;
+    const openPrinOver = oi ? oi.totalPrincipalDue : 0, closePrinOver = ci ? ci.totalPrincipalDue : 0;
+    const intAdj = mstR2(closeIntDue - (openIntDue + instInt - (intPaid - intRev)));
+    const next = sch.find(s=>s.status!=='Paid' && s.dueDate>to);
+    return {
+      loan, status: cP<=0.5 ? (oP>0.5 ? 'Closed during period' : 'Closed') : (loan.status||'Active'),
+      prin:{open:oP, disb:mstR2(disb), rep:mstR2(rep), adj:mstR2(padj), close:cP, diff:mstR2(oP+disb-rep+padj-cP)},
+      int:{open:openIntDue, accrued:instInt, paid:mstR2(intPaid), reversed:mstR2(intRev), adj:intAdj, close:closeIntDue},
+      inst:{count:dueRows.length, prin:instPrin, int:instInt, total:mstR2(instPrin+instInt), paidPrin:mstR2(rep), paidInt:mstR2(intPaid),
+            arrearsBF: oi ? oi.totalDue : 0, closeOverdue: ci ? ci.totalDue : 0, closeOverduePrin: closePrinOver, closeOverdueInt: closeIntDue, openOverduePrin: openPrinOver, next: next ? next.dueDate : ''}
+    };
+  }).filter(Boolean);
+  // transaction details (everything the ledger holds for this member or her loans in the period)
+  const det = pt.filter(t=>t.memberId===memberId || (t.loanId && myLoanIds.has(t.loanId)));
+  let sb = sOpen, lb = mstR2(Array.from(myLoanIds).reduce((s,id)=>s+accountBalance('MEMBER_LOANS',{loanId:id, upToDate:d0}),0));
+  const lOpenTotal = lb;
+  const incomeAcc = ['FINE_INCOME','OTHER_INCOME','DONATION_INCOME'];
+  const rows = det.map(t=>{
+    const sav = (t.credit==='MEMBER_SAVINGS'?t.amount:0) - (t.debit==='MEMBER_SAVINGS'?t.amount:0);
+    const prin = (t.debit==='MEMBER_LOANS'?t.amount:0) - (t.credit==='MEMBER_LOANS'?t.amount:0);
+    const int = (t.credit==='INTEREST_INCOME'?t.amount:0) - (t.debit==='INTEREST_INCOME'?t.amount:0);
+    let other = (incomeAcc.includes(t.credit)?t.amount:0) - (incomeAcc.includes(t.debit)?t.amount:0);
+    if(!sav && !prin && !int && !other) other = t.amount;
+    if(t.memberId===memberId) sb = mstR2(sb+sav);
+    lb = mstR2(lb+prin);
+    const tag = t.reversed ? ' [reversed]' : (t.reversalOf ? ' [reversal]' : '');
+    return {date:t.date, voucher:t.voucherNo, particulars:(t.type||'')+(t.loanId?(' ('+t.loanId+')'):'')+(t.narration?(' — '+t.narration):'')+tag, sav:mstR2(sav), prin:mstR2(prin), int:mstR2(int), other:mstR2(other), savBal:sb, loanBal:lb};
+  });
+  const loansCloseTotal = mstR2(Array.from(myLoanIds).reduce((s,id)=>s+accountBalance('MEMBER_LOANS',{loanId:id, upToDate:to}),0));
+  const intDueTotal = mstR2(closeInfos.reduce((s,i)=>s+i.totalInterestDue,0));
+  const position = {savings:sClose, loanPrincipal:loansCloseTotal, interestDue:intDueTotal, payableToShg:mstR2(loansCloseTotal+intDueTotal)};
+  position.derivedNet = mstR2(position.savings - position.payableToShg);
+  const checks = {savingsDiff:savings.diff, loanDiffs:loans.map(l=>l.prin.diff),
+    runningSavingsDiff:mstR2(sb - sClose), runningLoanDiff:mstR2(lb - loansCloseTotal),
+    loanSectionVsLedger: mstR2(loans.reduce((s,l)=>s+l.prin.close,0) - loansCloseTotal)};
+  checks.ok = Math.abs(checks.savingsDiff)<0.5 && checks.loanDiffs.every(d=>Math.abs(d)<0.5) && Math.abs(checks.runningSavingsDiff)<0.5 && Math.abs(checks.runningLoanDiff)<0.5 && Math.abs(checks.loanSectionVsLedger)<0.5;
+  return {member:m, from, to, d0, savings, loans, rows, loanOpenTotal:lOpenTotal, position, checks, hadActivity: det.length>0};
+}
+
+/* ---- consolidated SHG data ---- */
+function mstTrialBalanceAsOf(date){
+  let dr=0, cr=0;
+  allLedgerCodes().forEach(c=>{
+    const bal = accountBalance(c,{upToDate:date}); const type = accountType(c);
+    const normalDebit = (type==='asset'||type==='expense');
+    const d = normalDebit ? Math.max(bal,0) : Math.max(-bal,0), k = normalDebit ? Math.max(-bal,0) : Math.max(bal,0);
+    dr+=d; cr+=k;
+  });
+  return {dr:mstR2(dr), cr:mstR2(cr), diff:mstR2(dr-cr)};
+}
+function mstReceiptsPayments(from, to){
+  const d0 = mstDayBefore(from);
+  const cols = ['CASH','BANK'].concat(hasLegacyUPIData() ? ['UPI'] : []);
+  const FUND = ['CASH','BANK','UPI'];
+  const RK = ['sav','loanPrin','interest','cifrf','bankDraw','capital','otherRec'];
+  const PK = ['disb','wd','bankRepay','bankInt','cifrfRepay','expenses','bankCharges','capitalPay','otherPay'];
+  const mk = ()=>{ const o={}; cols.forEach(c=>o[c]=0); return o; };
+  const rec = {}, pay = {}; RK.forEach(k=>rec[k]=mk()); PK.forEach(k=>pay[k]=mk());
+  const contraIn = mk(), contraOut = mk();
+  DB.transactions.filter(t=>t.date>=from && t.date<=to).forEach(t=>{
+    const dIsF = FUND.includes(t.debit), cIsF = FUND.includes(t.credit);
+    if(dIsF && cIsF){ if(cols.includes(t.debit)) contraIn[t.debit]+=t.amount; if(cols.includes(t.credit)) contraOut[t.credit]+=t.amount; return; }
+    if(dIsF && cols.includes(t.debit)){
+      const o = t.credit; let k='otherRec';
+      if(o==='MEMBER_SAVINGS') k='sav'; else if(o==='MEMBER_LOANS') k='loanPrin'; else if(o==='INTEREST_INCOME') k='interest';
+      else if(o==='CIF'||o==='REVOLVING_FUND') k='cifrf'; else if(o==='BANK_TL'||o==='BANK_CC') k='bankDraw'; else if(o==='SHG_FUND') k='capital';
+      rec[k][t.debit]+=t.amount;
+    } else if(cIsF && cols.includes(t.credit)){
+      const o = t.debit; let k='otherPay';
+      if(o==='MEMBER_LOANS') k='disb'; else if(o==='MEMBER_SAVINGS') k='wd'; else if(o==='BANK_TL'||o==='BANK_CC') k='bankRepay';
+      else if(o==='INTEREST_EXPENSE') k='bankInt'; else if(o==='CIF'||o==='REVOLVING_FUND') k='cifrfRepay';
+      else if(o==='EXP_Bank Charges') k='bankCharges'; else if(o.startsWith('EXP_')) k='expenses'; else if(o==='SHG_FUND') k='capitalPay';
+      pay[k][t.credit]+=t.amount;
+    }
+  });
+  const open = {}, close = {}, bookClose = {}, totRec = mk(), totPay = mk();
+  cols.forEach(c=>{
+    open[c] = accountBalance(c,{upToDate:d0}); bookClose[c] = accountBalance(c,{upToDate:to});
+    RK.forEach(k=>{ rec[k][c]=mstR2(rec[k][c]); totRec[c]+=rec[k][c]; });
+    PK.forEach(k=>{ pay[k][c]=mstR2(pay[k][c]); totPay[c]+=pay[k][c]; });
+    contraIn[c]=mstR2(contraIn[c]); contraOut[c]=mstR2(contraOut[c]);
+    close[c] = mstR2(open[c] + totRec[c] - totPay[c] + contraIn[c] - contraOut[c]);
+    totRec[c]=mstR2(totRec[c]); totPay[c]=mstR2(totPay[c]);
+  });
+  const diff = {}; cols.forEach(c=>diff[c]=mstR2(close[c]-bookClose[c]));
+  return {cols, rec, pay, contraIn, contraOut, open, close, bookClose, totRec, totPay, diff, ok: cols.every(c=>Math.abs(diff[c])<0.5)};
+}
+function mstConsolidatedData(from, to){
+  const d0 = mstDayBefore(from);
+  const pt = DB.transactions.filter(t=>t.date>=from && t.date<=to);
+  const sm = mstSavingsMovement(pt);
+  const savings = {open:accountBalance('MEMBER_SAVINGS',{upToDate:d0}), dep:sm.dep, wd:sm.wd, adj:sm.adj, close:accountBalance('MEMBER_SAVINGS',{upToDate:to})};
+  savings.diff = mstR2(savings.open+savings.dep-savings.wd+savings.adj-savings.close);
+  let disb=0, rep=0, padj=0, intRecd=0, intRev=0;
+  pt.forEach(t=>{
+    const rev = mstIsRev(t);
+    if(t.debit==='MEMBER_LOANS'){ if(rev) padj+=t.amount; else disb+=t.amount; }
+    if(t.credit==='MEMBER_LOANS'){ if(rev) padj-=t.amount; else rep+=t.amount; }
+    if(t.credit==='INTEREST_INCOME' && !rev) intRecd+=t.amount;
+    if(t.debit==='INTEREST_INCOME') intRev+=t.amount;
+  });
+  let overduePrin=0, overdueInt=0;
+  DB.members.forEach(m=>{ memberDueInfos(m.id, to).forEach(i=>{ overduePrin+=i.totalPrincipalDue; overdueInt+=i.totalInterestDue; }); });
+  const loans = {open:accountBalance('MEMBER_LOANS',{upToDate:d0}), disb:mstR2(disb), rep:mstR2(rep), adj:mstR2(padj), close:accountBalance('MEMBER_LOANS',{upToDate:to}),
+    interestReceived:mstR2(intRecd-intRev), interestOutstanding:mstR2(overdueInt), overduePrincipal:mstR2(overduePrin), overdueInterest:mstR2(overdueInt)};
+  loans.diff = mstR2(loans.open+loans.disb-loans.rep+loans.adj-loans.close);
+  const corpusObj = calculateCorpus(to);
+  const funds = {cif:accountBalance('CIF',{upToDate:to}), rf:accountBalance('REVOLVING_FUND',{upToDate:to}),
+    corpus: (corpusObj && typeof corpusObj==='object') ? corpusObj.total : corpusObj,
+    capitalFund: (corpusObj && typeof corpusObj==='object') ? corpusObj.capitalFund : 0,
+    tl:accountBalance('BANK_TL',{upToDate:to}), cc:accountBalance('BANK_CC',{upToDate:to}), otherLiab:accountBalance('OTHER_LIABILITIES',{upToDate:to})};
+  const rp = mstReceiptsPayments(from, to);
+  // members covered by the statements vs the ledger control totals
   const members = activeMembers();
-  const ym = monthKey(todayStr());
-  const alreadySentThisMonth = DB.settings.lastMonthlyStatementsYM===ym;
-  let html = `<div class="section-title"><h2>Monthly Statements — Savings &amp; Loan</h2></div>`;
-  html += `<div class="msg info">Generates every active member's Savings + Loan statement below. WhatsApp and email each need one tap per member to actually send (no page without a server can deliver to someone else's phone or inbox on its own) — but everything is pre-filled, so it's a quick tap-through rather than retyping anything.</div>`;
-  if(alreadySentThisMonth) html += `<div class="msg ok">Already marked as sent for ${esc(ym)}. You can still resend to anyone below.</div>`;
-  if(!members.length){ html += `<div class="card"><div class="empty">No active members yet.</div></div>`; return html; }
-  html += `<div class="card"><div class="row" style="justify-content:space-between;align-items:center">
-    <span class="hint">${members.length} active member(s)</span>
-    <button class="btn secondary small" onclick="markMonthlyStatementsSent()">Mark This Month as Sent</button>
-  </div></div>`;
-  html += `<div class="card">${tbl(['Member','Mobile','Email','Savings Bal.','Loan O/S','Send via WhatsApp','Send via Email'],
-    members.map(m=>{
-      const text = memberCombinedStatementText(m.id);
-      const wa = waLink(m.mobile, text);
-      const mail = mailtoLink(m.email, (DB.profile.name||'SHG')+' — Monthly Statement — '+esc(m.name), text);
-      return [esc(m.name), esc(m.mobile||'—'), esc(m.email||'—'), rightCell(rupee(memberSavingsBalance(m.id))), rightCell(rupee(memberLoanOutstanding(m.id))),
-        wa ? `<a class="btn small secondary" href="${wa}" target="_blank" rel="noopener">WhatsApp</a>` : `<span class="hint">No mobile on file</span>`,
-        mail ? `<a class="btn small secondary" href="${mail}">Email</a>` : `<span class="hint">No email on file</span>`];
-    }))}</div>`;
-  return html;
+  const sumSav = mstR2(members.reduce((s,m)=>s+memberSavingsBalance(m.id,to),0));
+  const sumLoan = mstR2(members.reduce((s,m)=>s+DB.loans.filter(l=>l.memberId===m.id).reduce((a,l)=>a+accountBalance('MEMBER_LOANS',{loanId:l.id,upToDate:to}),0),0));
+  return {from, to, d0, savings, loans, funds, rp, memberCount:members.length, sumSav, sumLoan,
+    savingsOutside: mstR2(savings.close - sumSav), loansOutside: mstR2(loans.close - sumLoan)};
+}
+function mstFingerprint(from, to){
+  const pt = DB.transactions.filter(t=>t.date>=from && t.date<=to);
+  const s = [pt.length, mstR2(pt.reduce((a,t)=>a+t.amount,0)), accountBalance('MEMBER_SAVINGS',{upToDate:to}), accountBalance('MEMBER_LOANS',{upToDate:to}),
+    accountBalance('CASH',{upToDate:to}), accountBalance('BANK',{upToDate:to}), accountBalance('MEMBER_SAVINGS',{upToDate:mstDayBefore(from)})].join('|');
+  let h = 5381; for(let i=0;i<s.length;i++) h = ((h<<5)+h + s.charCodeAt(i)) | 0;
+  return (h>>>0).toString(16)+':'+pt.length;
+}
+
+/* ---- control checks & pre-print validation ---- */
+function mstControlChecks(from, to, cons){
+  cons = cons || mstConsolidatedData(from,to);
+  const out = [];
+  const add = (label, status, detail)=>out.push({label, status, detail});
+  const rp = cons.rp;
+  add('Cash Book Closing Balance', Math.abs(rp.diff.CASH)<0.5?'ok':'bad', Math.abs(rp.diff.CASH)<0.5 ? rupee(rp.bookClose.CASH)+' — agrees with Receipts & Payments' : 'Difference '+rupee(rp.diff.CASH)+' between Cash Book ('+rupee(rp.bookClose.CASH)+') and Receipts & Payments ('+rupee(rp.close.CASH)+')');
+  add('Bank Book Closing Balance', Math.abs(rp.diff.BANK)<0.5?'ok':'bad', Math.abs(rp.diff.BANK)<0.5 ? rupee(rp.bookClose.BANK)+' — agrees with Receipts & Payments' : 'Difference '+rupee(rp.diff.BANK)+' between Bank Book ('+rupee(rp.bookClose.BANK)+') and Receipts & Payments ('+rupee(rp.close.BANK)+')');
+  const sd = Math.abs(cons.savingsOutside)<0.5, ld = Math.abs(cons.loansOutside)<0.5;
+  add('Ledger Closing Balance — Member Savings', Math.abs(cons.savings.diff)>=0.5?'bad':(sd?'ok':'warn'),
+    Math.abs(cons.savings.diff)>=0.5 ? 'Opening + movement does not equal closing; difference '+rupee(cons.savings.diff) :
+    (sd ? 'Sum of member statements = ledger '+rupee(cons.savings.close) : 'Ledger '+rupee(cons.savings.close)+' vs active members '+rupee(cons.sumSav)+' — '+rupee(cons.savingsOutside)+' is held for members who are not Active (not in these statements)'));
+  add('Ledger Closing Balance — Member Loans', Math.abs(cons.loans.diff)>=0.5?'bad':(ld?'ok':'warn'),
+    Math.abs(cons.loans.diff)>=0.5 ? 'Opening + movement does not equal closing; difference '+rupee(cons.loans.diff) :
+    (ld ? 'Sum of member statements = ledger '+rupee(cons.loans.close) : 'Ledger '+rupee(cons.loans.close)+' vs active members '+rupee(cons.sumLoan)+' — '+rupee(cons.loansOutside)+' belongs to members who are not Active'));
+  const tbA = mstTrialBalanceAsOf(to), tbN = generateTrialBalance();
+  add('Trial Balance Status', (tbA.diff===0 && tbN.diff===0)?'ok':'bad', (tbA.diff===0 && tbN.diff===0) ? 'Debit = Credit as at '+fmtDate(to)+' and today' : 'Difference '+rupee(Math.abs(tbA.diff||tbN.diff))+' (as at period end '+rupee(Math.abs(tbA.diff))+', today '+rupee(Math.abs(tbN.diff))+')');
+  let reconStatus='warn', reconDetail='No bank reconciliation has been recorded';
+  try{
+    const rc = computeBankRecon();
+    if(DB.bankRecon && DB.bankRecon.statementDate){
+      if(!rc.tallies){ reconStatus='bad'; reconDetail='Last recorded reconciliation (statement date '+fmtDate(DB.bankRecon.statementDate)+') shows a difference of '+rupee(rc.diff); }
+      else if(DB.bankRecon.statementDate < to){ reconStatus='warn'; reconDetail='Reconciled up to '+fmtDate(DB.bankRecon.statementDate)+' — before the end of this period'; }
+      else { reconStatus='ok'; reconDetail='Reconciled (statement date '+fmtDate(DB.bankRecon.statementDate)+')'; }
+    }
+  }catch(e){}
+  add('Bank Reconciliation Status', reconStatus, reconDetail);
+  const dq = runDataQuality(); const red = dq.filter(i=>i.sev==='red').length, amber = dq.filter(i=>i.sev==='amber').length;
+  add('Data Quality Status', red?'bad':(amber?'warn':'ok'), red+' critical, '+amber+' warning(s)');
+  const b = mstMonthBounds(from.slice(0,7)); const isMonth = (from===b.from && to===b.to);
+  const closed = isMonth ? isPeriodClosed(from) : (DB.closedPeriods.length>0 && mstMonthsInRange(from,to).every(ym=>isPeriodClosed(ym+'-01')));
+  add('Month-End Closing Status', closed?'ok':'warn', closed ? 'Period is closed' : 'Period is not closed yet — figures can still change');
+  return out;
+}
+function mstMonthsInRange(from,to){ const out=[]; let ym=from.slice(0,7); const end=to.slice(0,7); let guard=0; while(ym<=end && guard++<600){ out.push(ym); const [y,m]=ym.split('-').map(Number); ym = new Date(Date.UTC(y,m,1)).toISOString().slice(0,7); } return out; }
+function mstClosedMonthIntegrity(to){
+  const issues = [], notes = [];
+  (DB.closedPeriods||[]).filter(ym=>ym<=to.slice(0,7)).forEach(ym=>{
+    const closeEntry = (DB.auditLog||[]).find(a=>a.action==='MONTH_CLOSE' && (a.details||'').startsWith(ym+' '));
+    const reopenEntry = (DB.auditLog||[]).find(a=>a.action==='REOPEN_PERIOD' && (a.details||'').startsWith(ym+' '));
+    if(!closeEntry || (reopenEntry && reopenEntry.ts>closeEntry.ts)) return;
+    const late = DB.transactions.filter(t=>t.date.slice(0,7)===ym && t.createdAt && t.createdAt>closeEntry.ts);
+    if(late.length) issues.push(ym+': '+late.length+' transaction(s) dated in this closed month were created after it was closed');
+    const rev = DB.transactions.filter(t=>t.date.slice(0,7)===ym && t.reversed && t.modifiedAt && t.modifiedAt>closeEntry.ts);
+    if(rev.length) notes.push(ym+': '+rev.length+' entr'+(rev.length>1?'ies':'y')+' reversed after closing (correction by reversal is the permitted method)');
+  });
+  return {issues, notes};
+}
+function mstValidate(from, to){
+  const items = [];
+  const add = (label, sev, ok, detail)=>items.push({label, sev, ok, detail});
+  const cons = mstConsolidatedData(from,to);
+  const controls = mstControlChecks(from,to,cons);
+  const tb = controls.find(c=>c.label==='Trial Balance Status');
+  add('Trial Balance tallies', 'red', tb.status==='ok', tb.detail);
+  // cash never negative on any date in the period (and at period end)
+  let minCash = accountBalance('CASH',{upToDate:mstDayBefore(from)}), minDate = mstDayBefore(from);
+  Array.from(new Set(DB.transactions.filter(t=>t.date>=from&&t.date<=to).map(t=>t.date))).sort().slice(0,500).forEach(d=>{ const b=accountBalance('CASH',{upToDate:d}); if(b<minCash){ minCash=b; minDate=d; } });
+  add('Cash is not negative', 'red', minCash>=-0.005, minCash>=-0.005 ? 'Lowest cash in the period '+rupee(minCash) : 'Cash was '+rupee(minCash)+' on '+fmtDate(minDate));
+  const bankClose = accountBalance('BANK',{upToDate:to});
+  add('Bank balance is valid', 'red', bankClose>=-0.005, 'Bank balance at period end '+rupee(bankClose));
+  const members = activeMembers();
+  const mdata = members.map(m=>mstMemberData(m.id,from,to));
+  const sBad = mdata.filter(d=>d && (Math.abs(d.savings.diff)>=0.5 || Math.abs(d.checks.runningSavingsDiff)>=0.5));
+  add('Savings balances reconcile', 'red', sBad.length===0 && Math.abs(cons.savings.diff)<0.5, sBad.length ? sBad.length+' member statement(s) do not reconcile with the savings ledger' : 'Every member\'s opening + movement = closing');
+  const lBad = mdata.filter(d=>d && (d.checks.loanDiffs.some(x=>Math.abs(x)>=0.5) || Math.abs(d.checks.runningLoanDiff)>=0.5 || Math.abs(d.checks.loanSectionVsLedger)>=0.5));
+  add('Loan outstanding reconciles', 'red', lBad.length===0 && Math.abs(cons.loans.diff)<0.5, lBad.length ? lBad.length+' member statement(s) do not reconcile with the loan ledger' : 'Every loan\'s opening + movement = closing');
+  const orphan = DB.loans.filter(l=>!DB.members.some(m=>m.id===l.memberId));
+  add('No orphan member loans', 'red', orphan.length===0, orphan.length ? orphan.length+' loan(s) belong to a member who does not exist ('+orphan.slice(0,3).map(l=>l.id).join(', ')+')' : 'All loans belong to a member');
+  const seen = new Set(), dup = [];
+  DB.loans.forEach(l=>{ if(seen.has(l.id)) dup.push(l.id); seen.add(l.id); });
+  add('No duplicate loan IDs', 'red', dup.length===0, dup.length ? 'Duplicate: '+dup.join(', ') : 'All loan IDs are unique');
+  const bad = DB.transactions.filter(t=>t.date<=to && (!mstValidDate(t.date) || !(t.amount>0) || !isFinite(t.amount) || !t.debit || !t.credit || t.debit===t.credit));
+  add('No invalid transactions', 'red', bad.length===0, bad.length ? bad.length+' transaction(s) have a missing/invalid date, amount or account' : 'All transactions are well-formed');
+  const dateOk = mstValidDate(from) && mstValidDate(to) && from<=to;
+  add('Month-end date is valid', 'red', dateOk, dateOk ? 'Period '+fmtDate(from)+' to '+fmtDate(to) : 'Invalid From/To date');
+  const future = dateOk && to>=todayStr();
+  add('Period is complete', 'amber', !future, future ? 'The period has not ended yet — figures are not final' : 'Period has ended');
+  const integ = mstClosedMonthIntegrity(to);
+  add('Closed-month transactions not improperly altered', 'red', integ.issues.length===0, integ.issues.length ? integ.issues.join('; ') : ('No transaction was added to a closed month after closing'+(integ.notes.length?(' ('+integ.notes.join('; ')+')'):'')));
+  const h = mstHistEntry(from,to);
+  if(h && h.fingerprint){ const fp = mstFingerprint(from,to); add('Figures unchanged since first generated', 'amber', fp===h.fingerprint, fp===h.fingerprint ? 'Same figures as when first generated on '+fmtDate((h.firstGeneratedAt||'').slice(0,10)) : 'Figures differ from the first generation (a backdated entry or a reopened period may have changed this month)'); }
+  const dqc = controls.find(c=>c.label==='Data Quality Status');
+  add('Data Quality — no critical issues', 'red', dqc.status!=='bad', dqc.detail);
+  const critical = items.filter(i=>!i.ok && i.sev==='red');
+  return {items, critical, warnings: items.filter(i=>!i.ok && i.sev==='amber'), cons, controls, mdata};
+}
+
+/* ---- statement history (record of what was generated / printed / shared / sent) ----
+   Only metadata is stored (counts, dates, check result, a fingerprint of the key figures). The
+   statements themselves are NEVER stored: they are regenerated on demand from the ledger, so a
+   closed month can be reproduced later without duplicating any transaction record. */
+function mstHistKey(from,to){ return from+'_'+to; }
+function mstHistEntry(from,to){ return (DB.statementHistory||[]).find(h=>h.key===mstHistKey(from,to)); }
+function mstGenerate(from, to){
+  if(!DB.statementHistory) DB.statementHistory = [];
+  const v = mstValidate(from,to);
+  const fp = mstFingerprint(from,to);
+  const now = nowStamp(); const b = mstMonthBounds(from.slice(0,7));
+  const closed = v.controls.find(c=>c.label==='Month-End Closing Status').status==='ok';
+  let h = mstHistEntry(from,to);
+  if(!h){
+    h = {key:mstHistKey(from,to), from, to, label:mstPeriodLabel(from,to), ym:(from===b.from&&to===b.to)?from.slice(0,7):'',
+      firstGeneratedAt:now, generatedCount:0, printedCount:0, sharedCount:0, printedAt:'', sharedAt:'', sentAt:'', sentBy:'', fingerprint:fp, fingerprintChanged:false};
+    DB.statementHistory.push(h);
+  } else if(h.fingerprint!==fp){ h.fingerprintChanged = true; }
+  h.lastGeneratedAt = now; h.generatedCount++; h.members = v.mdata.length; h.statements = v.mdata.length + 1;
+  h.checksPassed = v.critical.length===0; h.criticalCount = v.critical.length; h.closed = closed; h.generatedBy = DB.settings.currentUserName;
+  logAudit('MONTHLY_STATEMENTS_GENERATED', h.label+': '+h.members+' member statement(s) + consolidated; accounting checks '+(h.checksPassed?'passed':'FAILED ('+h.criticalCount+' critical)')+'; month '+(closed?'closed':'not closed')+(h.fingerprintChanged?'; figures differ from first generation':''));
+  saveDB();
+  return h;
+}
+function mstEnsureGenerated(from,to){ return mstHistEntry(from,to) || mstGenerate(from,to); }
+function mstMark(kind, n){
+  const u = mstUI(); const h = mstEnsureGenerated(u.from,u.to); const now = nowStamp();
+  if(kind==='printed'){ h.printedAt = now; h.printedCount += (n||1); logAudit('MONTHLY_STATEMENTS_PRINTED', h.label+': print dialog opened for '+(n||1)+' statement(s)'); }
+  if(kind==='shared'){ h.sharedAt = now; h.sharedCount += (n||1); logAudit('MONTHLY_STATEMENTS_SHARED', h.label+': WhatsApp/Email link opened ('+(n||1)+')'); }
+  saveDB();
+}
+function mstNoteShared(){ try{ mstMark('shared',1); }catch(e){} }
+function mstStatusBadges(h){
+  if(!h) return badge('Not generated','amber');
+  return [badge('Generated','green'), h.printedAt?badge('Printed','green'):badge('Not printed','grey'), h.sharedAt?badge('Shared','green'):badge('Not shared','grey'), h.sentAt?badge('Sent','green'):badge('Not sent','grey')].join(' ');
 }
 function markMonthlyStatementsSent(){
-  const ym = monthKey(todayStr());
+  const u = mstUI(); const ym = monthKey(todayStr());
+  if(mstValidDate(u.from) && mstValidDate(u.to) && u.from<=u.to){
+    const h = mstEnsureGenerated(u.from,u.to); h.sentAt = nowStamp(); h.sentBy = DB.settings.currentUserName;
+  }
   DB.settings.lastMonthlyStatementsYM = ym;
-  logAudit('MONTHLY_STATEMENTS_SENT', 'Monthly Savings & Loan statements marked as sent for '+ym+' to '+activeMembers().length+' member(s).');
-  flash('ok','Marked — this month\'s statements are recorded as sent.'); render();
+  logAudit('MONTHLY_STATEMENTS_SENT', 'Monthly Savings & Loan statements marked as sent'+(mstValidDate(u.from)?(' for '+mstPeriodLabel(u.from,u.to)):'')+' ('+activeMembers().length+' member(s)); reminder cleared for '+ym+'.');
+  flash('ok','Marked as sent — recorded in the statement history and audit trail.'); render();
 }
+// concise WhatsApp/Email text — presentation only; the printed statement never uses this text.
+function mstMemberText(d){
+  const p = d.position, lines = [(DB.profile.name||'SHG')+' — '+aiT('Monthly Statement','मासिक विवरण')+' '+mstPeriodLabel(d.from,d.to), d.member.name+' ('+d.member.id+'), '+aiT('as on','दिनांक')+' '+fmtDate(d.to), '',
+    aiT('Savings','बचत')+': '+aiT('Opening','प्रारंभिक')+' '+rupee(d.savings.open)+', '+aiT('Deposited','जमा')+' '+rupee(d.savings.dep)+', '+aiT('Withdrawn','निकासी')+' '+rupee(d.savings.wd)+', '+aiT('Closing','अंतिम')+' '+rupee(d.savings.close)];
+  d.loans.forEach(l=>lines.push(aiT('Loan','ऋण')+' '+l.loan.id+': '+aiT('Principal outstanding','मूलधन शेष')+' '+rupee(l.prin.close)+', '+aiT('Repaid this period','इस अवधि में चुकाया')+' '+rupee(l.prin.rep)+' + '+aiT('Interest','ब्याज')+' '+rupee(l.int.paid)+(l.inst.closeOverdue>0.5?(', '+aiT('Overdue','अतिदेय')+' '+rupee(l.inst.closeOverdue)):'')+(l.inst.next?(', '+aiT('Next due','अगली देय तिथि')+' '+fmtDate(l.inst.next)):'')));
+  lines.push('', aiT('Loan principal payable to SHG','एसएचजी को देय ऋण मूलधन')+': '+rupee(p.loanPrincipal)+'  |  '+aiT('Interest due','देय ब्याज')+': '+rupee(p.interestDue));
+  return lines.join('\n');
+}
+
+/* ---- document rendering (print-ready) ---- */
+function mstA(n){ return rightCell(rupee(n||0)); }
+function mstT(headers, rows, opts){
+  opts = opts||{};
+  let h = `<table class="stmt-table${opts.cls?(' '+opts.cls):''}"><thead><tr>${headers.map((x,i)=>`<th${(opts.num&&opts.num.includes(i))?' class="num"':''}>${esc(x)}</th>`).join('')}</tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const bold = r.bold; const cells = r.cells || r;
+    h += '<tr'+(bold?' class="stmt-total"':'')+'>' + cells.map(c=>{
+      if(typeof c==='string' && c.startsWith('§R§')) return `<td class="num">${c.slice(3)}</td>`;
+      return `<td>${c}</td>`;
+    }).join('') + '</tr>';
+  });
+  return h+'</tbody></table>';
+}
+function mstShgHeaderHTML(){
+  const p = DB.profile, b = (p.banks||[])[0];
+  const loc = [p.village,p.gp,p.block,p.district,p.state].filter(Boolean).map(esc).join(' / ');
+  return `<div class="stmt-shg"><div class="stmt-shgname">${esc(p.name||aiT('Self Help Group','स्वयं सहायता समूह'))}</div>
+    <div>${loc || '&nbsp;'}</div>
+    <div class="stmt-small">${aiT('Village / GP / Block / District / State','गाँव / ग्राम पंचायत / ब्लॉक / जिला / राज्य')}${p.shgId?(' &nbsp;|&nbsp; '+aiT('SHG ID','एसएचजी आईडी')+': '+esc(p.shgId)):''}${b?(' &nbsp;|&nbsp; '+aiT('Bank','बैंक')+': '+esc(b.bank||'')+(b.accno?(' A/c '+esc(b.accno)):'')):''}</div></div>`;
+}
+function mstKV(rows){ return mstT([aiT('Particular','विवरण'),aiT('Details','ब्यौरा')], rows.map(r=>[esc(r[0]), r[2]?r[1]:esc(r[1]||'—')]), {cls:'stmt-kv'}); }
+function mstMemberDocHTML(d){
+  const m = d.member, lbl = mstPeriodLabel(d.from,d.to);
+  const P = aiT('Particular','विवरण'), AMT = aiT('Amount (₹)','राशि (₹)');
+  let h = `<section class="stmt-page stmt-portrait">${mstShgHeaderHTML()}
+    <h3 class="stmt-title">${aiT('MEMBER MONTHLY STATEMENT','सदस्य मासिक विवरण')}</h3>
+    <div class="stmt-meta"><span>${aiT('Month','माह')}: <b>${esc(lbl)}</b></span><span>${aiT('Financial Year','वित्तीय वर्ष')}: <b>${esc(mstFYLabel(d.from))}</b></span><span>${aiT('Period','अवधि')}: ${esc(fmtDate(d.from))} – ${esc(fmtDate(d.to))}</span></div>`;
+  h += `<h4>${aiT('Member Details','सदस्य विवरण')}</h4>` + mstKV([
+    [aiT('Member ID','सदस्य आईडी'), m.id], [aiT('Member Name','सदस्य का नाम'), m.name], [aiT('Father\'s/Husband\'s Name','पिता/पति का नाम'), m.fatherHusband],
+    [aiT('Date of Joining','जुड़ने की तिथि'), m.doj?fmtDate(m.doj):(m.joinDate?fmtDate(m.joinDate):'')], [aiT('Mobile','मोबाइल'), m.mobile]]);
+  const s = d.savings;
+  h += `<h4>${aiT('Savings Statement','बचत विवरण')}</h4>` + mstT([P,AMT],[
+    [aiT('Opening Savings Balance','प्रारंभिक बचत शेष'), mstA(s.open)], [aiT('Savings Deposited During Month','माह में जमा बचत'), mstA(s.dep)],
+    [aiT('Savings Withdrawn During Month','माह में निकाली गई बचत'), mstA(s.wd)], [aiT('Other Savings Adjustments (reversals / brought-forward)','अन्य बचत समायोजन (उलटाव / आगे लाया गया)'), mstA(s.adj)],
+    {cells:[aiT('Closing Savings Balance','अंतिम बचत शेष'), mstA(s.close)], bold:true}], {num:[1]});
+  if(!d.loans.length) h += `<h4>${aiT('Loan Statement','ऋण विवरण')}</h4><p class="stmt-small">${aiT('No loan outstanding or transacted in this period.','इस अवधि में कोई ऋण बकाया या लेन-देन नहीं।')}</p>`;
+  d.loans.forEach(L=>{
+    const ln = L.loan;
+    h += `<div class="stmt-loan"><h4>${aiT('Loan','ऋण')} ${esc(ln.id)}</h4>` + mstKV([
+      [aiT('Loan ID','ऋण आईडी'), ln.id], [aiT('Loan Date','ऋण तिथि'), fmtDate(ln.disbursementDate||ln.sanctionDate)], [aiT('Purpose','उद्देश्य'), ln.purpose],
+      [aiT('Principal Amount','मूलधन राशि'), rupee(ln.principal)], [aiT('Interest Rate','ब्याज दर'), (ln.interestRate||0)+'% '+aiT('p.a.','वार्षिक')],
+      [aiT('Interest Method','ब्याज पद्धति'), (ln.interestMethod==='reducing')?aiT('Reducing balance','घटते शेष पर'):aiT('Flat','फ्लैट')],
+      [aiT('Instalments','किस्तें'), String(ln.instalments||'')], [aiT('Frequency','आवृत्ति'), ln.frequency||'Monthly'], [aiT('Loan Status','ऋण स्थिति'), L.status]]);
+    h += `<h5>${aiT('Monthly Loan Movement (Principal)','मासिक ऋण गतिविधि (मूलधन)')}</h5>` + mstT([P,AMT],[
+      [aiT('Opening Principal Outstanding','प्रारंभिक मूलधन शेष'), mstA(L.prin.open)], [aiT('Principal Disbursed During Month','माह में वितरित मूलधन'), mstA(L.prin.disb)],
+      [aiT('Principal Repaid During Month','माह में चुकाया मूलधन'), mstA(L.prin.rep)], [aiT('Reversal Adjustments, if any','उलटाव समायोजन, यदि कोई'), mstA(L.prin.adj)],
+      {cells:[aiT('Closing Principal Outstanding','अंतिम मूलधन शेष'), mstA(L.prin.close)], bold:true}], {num:[1]});
+    h += `<h5>${aiT('Interest','ब्याज')}</h5>` + mstT([P,AMT],[
+      [aiT('Opening Interest Due','प्रारंभिक देय ब्याज'), mstA(L.int.open)], [aiT('Interest Accrued/Due During Month','माह में देय ब्याज'), mstA(L.int.accrued)],
+      [aiT('Interest Paid During Month','माह में चुकाया ब्याज'), mstA(L.int.paid)],
+      [aiT('Interest payments reversed during month','माह में उलटे गए ब्याज भुगतान'), mstA(L.int.reversed)],
+      [aiT('Interest Adjustment, if any (reversal / advance — derived)','ब्याज समायोजन, यदि कोई (उलटाव / अग्रिम — व्युत्पन्न)'), mstA(L.int.adj)],
+      {cells:[aiT('Closing Interest Due','अंतिम देय ब्याज'), mstA(L.int.close)], bold:true}], {num:[1]});
+    h += `<h5>${aiT('Instalment / Due Information','किस्त / देय जानकारी')}</h5>` + mstT([P,AMT],[
+      [aiT('Instalment(s) falling due during month','माह में देय किस्तें'), esc(String(L.inst.count))], [aiT('Principal due','देय मूलधन'), mstA(L.inst.prin)], [aiT('Interest due','देय ब्याज'), mstA(L.inst.int)],
+      [aiT('Total due','कुल देय'), mstA(L.inst.total)], [aiT('Principal paid','चुकाया मूलधन'), mstA(L.inst.paidPrin)], [aiT('Interest paid','चुकाया ब्याज'), mstA(L.inst.paidInt)],
+      [aiT('Arrears carried forward (opening overdue)','आगे लाया गया बकाया (प्रारंभिक अतिदेय)'), mstA(L.inst.arrearsBF)],
+      {cells:[aiT('Closing overdue amount (Principal + Interest)','अंतिम अतिदेय राशि (मूलधन + ब्याज)'), mstA(L.inst.closeOverdue)], bold:true},
+      [aiT('— of which Principal','— जिसमें मूलधन'), mstA(L.inst.closeOverduePrin)], [aiT('— of which Interest','— जिसमें ब्याज'), mstA(L.inst.closeOverdueInt)],
+      [aiT('Next due date','अगली देय तिथि'), L.inst.next?esc(fmtDate(L.inst.next)):'—']], {num:[1]});
+    h += `</div>`;
+  });
+  h += `<h4>${aiT('Transaction Details','लेन-देन विवरण')}</h4>`;
+  if(!d.rows.length) h += `<p class="stmt-small">${aiT('No transactions during this period.','इस अवधि में कोई लेन-देन नहीं।')}</p>`;
+  else {
+    const tot = d.rows.reduce((a,r)=>({sav:a.sav+r.sav,prin:a.prin+r.prin,int:a.int+r.int,other:a.other+r.other}),{sav:0,prin:0,int:0,other:0});
+    h += mstT([aiT('Date','तिथि'),aiT('Particulars','विवरण'),aiT('Savings (+Dep / −Wd)','बचत (+जमा / −निकासी)'),aiT('Loan Principal (+Disb / −Repaid)','ऋण मूलधन (+वितरण / −चुकौती)'),aiT('Interest Paid','ब्याज भुगतान'),aiT('Other','अन्य'),aiT('Savings Balance','बचत शेष'),aiT('Loan Principal Balance','ऋण मूलधन शेष')],
+      d.rows.map(r=>[esc(fmtDate(r.date)), esc(r.particulars), mstA(r.sav), mstA(r.prin), mstA(r.int), mstA(r.other), mstA(r.savBal), mstA(r.loanBal)])
+      .concat([{cells:[ '', aiT('Total for the period','अवधि का कुल'), mstA(tot.sav), mstA(tot.prin), mstA(tot.int), mstA(tot.other), '', ''], bold:true}]), {num:[2,3,4,5,6,7], cls:'stmt-txn'});
+  }
+  const p = d.position;
+  h += `<h4>${aiT('Member Financial Position as at Month-End','माह-अंत पर सदस्य की वित्तीय स्थिति')} (${esc(fmtDate(d.to))})</h4>` + mstT([P,AMT],[
+    [aiT('Savings Balance (payable by SHG to member)','बचत शेष (एसएचजी द्वारा सदस्य को देय)'), mstA(p.savings)],
+    [aiT('Total Loan Principal Outstanding','कुल ऋण मूलधन शेष'), mstA(p.loanPrincipal)], [aiT('Interest Due','देय ब्याज'), mstA(p.interestDue)],
+    {cells:[aiT('Total Amount Payable to SHG (Principal + Interest)','एसएचजी को देय कुल राशि (मूलधन + ब्याज)'), mstA(p.payableToShg)], bold:true},
+    [aiT('Net Member Position — derived figure for information only (Savings − Amount Payable to SHG)','सदस्य की शुद्ध स्थिति — केवल जानकारी हेतु व्युत्पन्न (बचत − एसएचजी को देय)'), mstA(p.derivedNet)]], {num:[1]});
+  h += `<p class="stmt-note">${aiT('Loan outstanding is an amount payable by the member to the SHG. Savings balance is an amount payable by the SHG to the member, subject to the SHG\'s rules and records.','ऋण शेष सदस्य द्वारा एसएचजी को देय राशि है। बचत शेष एसएचजी द्वारा सदस्य को देय राशि है, जो एसएचजी के नियमों और अभिलेखों के अधीन है।')}</p>`;
+  h += `<p class="stmt-small">${aiT('Prepared from the SHG\'s books of account. Generated on','एसएचजी की लेखा पुस्तकों से तैयार। तैयार किया गया')} ${esc(fmtDate(todayStr()))}.</p></section>`;
+  return h;
+}
+function mstCertificationHTML(){
+  const p = DB.profile;
+  return `<h4>${aiT('Certification','प्रमाणन')}</h4><p>${aiT('We certify that the above statement has been prepared from the books and records of the Self Help Group for the month shown above and represents the transactions recorded in the SHG\'s accounting system.','हम प्रमाणित करते हैं कि उपरोक्त विवरण स्वयं सहायता समूह की लेखा पुस्तकों और अभिलेखों से ऊपर दर्शाए माह के लिए तैयार किया गया है और यह समूह की लेखा प्रणाली में दर्ज लेन-देन को दर्शाता है।')}</p>` +
+    mstT([aiT('Designation','पदनाम'),aiT('Name','नाम'),aiT('Signature','हस्ताक्षर')],[
+      [aiT('President','अध्यक्ष'), esc(p.president||''), '<div class="stmt-sign"></div>'], [aiT('Secretary','सचिव'), esc(p.secretary||''), '<div class="stmt-sign"></div>'],
+      [aiT('Treasurer','कोषाध्यक्ष'), esc(p.treasurer||''), '<div class="stmt-sign"></div>'],
+      [aiT('Date','तिथि'), '', '<div class="stmt-sign"></div>'], [aiT('Place','स्थान'), esc(p.village||''), '<div class="stmt-sign"></div>']], {cls:'stmt-sig'});
+}
+function mstControlTableHTML(controls){
+  const sym = {ok:'✓ '+aiT('Reconciled','मिलान'), warn:'⚠ '+aiT('Attention Required','ध्यान आवश्यक'), bad:'✕ '+aiT('Difference Found','अंतर पाया गया')};
+  return mstT([aiT('Control','नियंत्रण'),aiT('Status','स्थिति'),aiT('Detail','विवरण')], controls.map(c=>[esc(c.label), `<span class="stmt-st ${c.status}">${sym[c.status]}</span>`, esc(c.detail)]), {cls:'stmt-ctl'});
+}
+function mstConsolidatedDocHTML(c, controls){
+  const lbl = mstPeriodLabel(c.from,c.to), P = aiT('Particular','विवरण'), AMT = aiT('Amount (₹)','राशि (₹)');
+  const s = c.savings, l = c.loans, f = c.funds, rp = c.rp;
+  let h = `<section class="stmt-page stmt-landscape">${mstShgHeaderHTML()}
+    <h3 class="stmt-title">${aiT('SHG CONSOLIDATED MONTHLY STATEMENT','एसएचजी समेकित मासिक विवरण')}</h3>
+    <div class="stmt-meta"><span>${aiT('Month','माह')}: <b>${esc(lbl)}</b></span><span>${aiT('Financial Year','वित्तीय वर्ष')}: <b>${esc(mstFYLabel(c.from))}</b></span><span>${aiT('Period','अवधि')}: ${esc(fmtDate(c.from))} – ${esc(fmtDate(c.to))}</span><span>${aiT('Active members','सक्रिय सदस्य')}: ${c.memberCount}</span></div>`;
+  h += `<div class="stmt-cols"><div>
+    <h4>A. ${aiT('Member Savings Summary','सदस्य बचत सारांश')}</h4>` + mstT([P,AMT],[
+      [aiT('Opening Member Savings','प्रारंभिक सदस्य बचत'), mstA(s.open)], [aiT('Savings During Month','माह में बचत'), mstA(s.dep)], [aiT('Withdrawals During Month','माह में निकासी'), mstA(s.wd)],
+      [aiT('Reversals / brought-forward adjustments','उलटाव / आगे लाए गए समायोजन'), mstA(s.adj)], {cells:[aiT('Closing Member Savings','अंतिम सदस्य बचत'), mstA(s.close)], bold:true}], {num:[1]}) +
+    `<h4>B. ${aiT('Internal Loan Summary','आंतरिक ऋण सारांश')}</h4>` + mstT([P,AMT],[
+      [aiT('Opening Loan Outstanding','प्रारंभिक ऋण शेष'), mstA(l.open)], [aiT('New Loans During Month','माह में नए ऋण'), mstA(l.disb)], [aiT('Principal Repaid','चुकाया मूलधन'), mstA(l.rep)],
+      [aiT('Reversal adjustments','उलटाव समायोजन'), mstA(l.adj)], {cells:[aiT('Closing Loan Outstanding','अंतिम ऋण शेष'), mstA(l.close)], bold:true},
+      [aiT('Interest Received','प्राप्त ब्याज'), mstA(l.interestReceived)], [aiT('Interest Outstanding (due & unpaid)','बकाया ब्याज (देय एवं अदत्त)'), mstA(l.interestOutstanding)],
+      [aiT('Overdue Principal','अतिदेय मूलधन'), mstA(l.overduePrincipal)], [aiT('Overdue Interest','अतिदेय ब्याज'), mstA(l.overdueInterest)]], {num:[1]}) +
+    `<h4>C. ${aiT('Other Funds (shown separately — borrowed funds are not added to member savings)','अन्य निधियाँ (अलग दर्शाई गई — उधार निधि को सदस्य बचत में नहीं जोड़ा गया)')}</h4>` + mstT([P,AMT],[
+      [aiT('CIF Outstanding','सीआईएफ बकाया'), mstA(f.cif)], [aiT('Revolving Fund','रिवॉल्विंग फंड'), mstA(f.rf)],
+      [aiT('Corpus / Own Funds (Savings + Capital Fund + Revolving Fund)','कोष / स्वयं की निधि (बचत + पूंजी निधि + रिवॉल्विंग फंड)'), mstA(f.corpus)],
+      [aiT('Bank Term Loan','बैंक सावधि ऋण'), mstA(f.tl)], [aiT('Bank Cash Credit','बैंक कैश क्रेडिट'), mstA(f.cc)], [aiT('Other Liabilities','अन्य देनदारियाँ'), mstA(f.otherLiab)]], {num:[1]}) +
+    `</div><div>`;
+  const cols = rp.cols, CL = {CASH:aiT('Cash','नकद'),BANK:aiT('Bank','बैंक'),UPI:'UPI'};
+  const rowOf = (label, o)=>[label].concat(cols.map(cn=>mstA(o[cn]))).concat([mstA(cols.reduce((a,cn)=>a+(o[cn]||0),0))]);
+  const sumRow = (label, o)=>({cells:rowOf(label,o), bold:true});
+  const hdr = [P].concat(cols.map(cn=>CL[cn])).concat([aiT('Total','कुल')]);
+  const nums = cols.map((_,i)=>i+1).concat([cols.length+1]);
+  const rLab = {sav:'Member Savings',loanPrin:'Loan Repayment – Principal',interest:'Interest Received',cifrf:'CIF / RF Receipts',bankDraw:'Bank Loan Drawal',capital:'Capital / Opening Balance Introduced',otherRec:'Other Receipts (fines, donations, bank interest, etc.)'};
+  const rHi = {sav:'सदस्य बचत',loanPrin:'ऋण चुकौती – मूलधन',interest:'प्राप्त ब्याज',cifrf:'सीआईएफ / आरएफ प्राप्तियाँ',bankDraw:'बैंक ऋण आहरण',capital:'पूंजी / प्रारंभिक शेष',otherRec:'अन्य प्राप्तियाँ (जुर्माना, दान, बैंक ब्याज आदि)'};
+  const pLab = {disb:'Member Loan Disbursement',wd:'Savings Withdrawal',bankRepay:'Bank Loan Repayment',bankInt:'Bank Loan Interest Paid',cifrfRepay:'CIF / RF Repayment',expenses:'Expenses',bankCharges:'Bank Charges',capitalPay:'Capital Returned',otherPay:'Other Payments'};
+  const pHi = {disb:'सदस्य ऋण वितरण',wd:'बचत निकासी',bankRepay:'बैंक ऋण चुकौती',bankInt:'बैंक ऋण ब्याज भुगतान',cifrfRepay:'सीआईएफ / आरएफ चुकौती',expenses:'व्यय',bankCharges:'बैंक शुल्क',capitalPay:'पूंजी वापसी',otherPay:'अन्य भुगतान'};
+  const rrows = [{cells:rowOf(aiT('Opening Balance','प्रारंभिक शेष'), rp.open), bold:true}];
+  Object.keys(rLab).forEach(k=>rrows.push(rowOf(aiT(rLab[k],rHi[k]), rp.rec[k])));
+  rrows.push(sumRow(aiT('Total Receipts','कुल प्राप्तियाँ'), rp.totRec));
+  Object.keys(pLab).forEach(k=>rrows.push(rowOf(aiT(pLab[k],pHi[k]), rp.pay[k])));
+  rrows.push(sumRow(aiT('Total Payments','कुल भुगतान'), rp.totPay));
+  rrows.push(rowOf(aiT('Cash ↔ Bank transfers in (contra)','नकद ↔ बैंक अंतरण प्राप्त'), rp.contraIn));
+  rrows.push(rowOf(aiT('Cash ↔ Bank transfers out (contra)','नकद ↔ बैंक अंतरण भेजा'), rp.contraOut));
+  rrows.push(sumRow(aiT('Closing Balance','अंतिम शेष'), rp.close));
+  const totalFunds = mstR2(cols.reduce((a,cn)=>a+rp.close[cn],0));
+  h += `<h4>${aiT('Monthly Receipts &amp; Payments Summary','मासिक प्राप्ति एवं भुगतान सारांश')}</h4>` + mstT(hdr, rrows, {num:nums}) +
+    `<p class="stmt-small">${aiT('Closing Cash','अंतिम नकद')}: <b>${rupee(rp.close.CASH)}</b> &nbsp; ${aiT('Closing Bank','अंतिम बैंक')}: <b>${rupee(rp.close.BANK)}</b> &nbsp; ${aiT('Total Closing Funds','कुल अंतिम निधि')}: <b>${rupee(totalFunds)}</b></p>` +
+    `</div></div>`;
+  h += `<h4>${aiT('Accounting Control Check','लेखा नियंत्रण जाँच')}</h4>` + mstControlTableHTML(controls);
+  h += mstCertificationHTML() + `</section>`;
+  return h;
+}
+function mstControlSummaryHTML(v, from, to){
+  const c = v.cons, mem = v.mdata;
+  const sumOpen = mstR2(mem.reduce((a,d)=>a+d.savings.open,0)), sumClose = mstR2(mem.reduce((a,d)=>a+d.savings.close,0));
+  const sumLoanClose = mstR2(mem.reduce((a,d)=>a+d.position.loanPrincipal,0)), sumInt = mstR2(mem.reduce((a,d)=>a+d.position.interestDue,0));
+  const okS = Math.abs(sumClose-c.savings.close)<0.5, okL = Math.abs(sumLoanClose-c.loans.close)<0.5;
+  const st = (ok, warnTxt)=>`<span class="stmt-st ${ok?'ok':'warn'}">${ok?'✓ '+aiT('Agrees','मेल खाता है'):'⚠ '+warnTxt}</span>`;
+  let h = `<section class="stmt-page stmt-portrait">${mstShgHeaderHTML()}<h3 class="stmt-title">${aiT('MONTHLY STATEMENT CONTROL SUMMARY','मासिक विवरण नियंत्रण सारांश')}</h3>
+    <div class="stmt-meta"><span>${aiT('Month','माह')}: <b>${esc(mstPeriodLabel(from,to))}</b></span><span>${aiT('Member statements','सदस्य विवरण')}: ${mem.length}</span></div>`;
+  h += mstT([aiT('Control','नियंत्रण'),aiT('Sum of all member statements','सभी सदस्य विवरणों का योग'),aiT('Accounting records (ledger)','लेखा अभिलेख (खाता-बही)'),aiT('Result','परिणाम')],[
+    [aiT('Member savings — closing','सदस्य बचत — अंतिम'), mstA(sumClose), mstA(c.savings.close), st(okS, aiT('Difference','अंतर')+' '+rupee(c.savings.close-sumClose)+' — '+aiT('held for non-active members','गैर-सक्रिय सदस्यों के पास'))],
+    [aiT('Member loan principal — closing','सदस्य ऋण मूलधन — अंतिम'), mstA(sumLoanClose), mstA(c.loans.close), st(okL, aiT('Difference','अंतर')+' '+rupee(c.loans.close-sumLoanClose)+' — '+aiT('non-active members','गैर-सक्रिय सदस्य'))],
+    [aiT('Member savings — opening','सदस्य बचत — प्रारंभिक'), mstA(sumOpen), mstA(c.savings.open), st(Math.abs(sumOpen-c.savings.open)<0.5, aiT('Difference','अंतर')+' '+rupee(c.savings.open-sumOpen))],
+    [aiT('Interest due & unpaid','देय एवं अदत्त ब्याज'), mstA(sumInt), mstA(c.loans.interestOutstanding), st(Math.abs(sumInt-c.loans.interestOutstanding)<0.5, aiT('Difference','अंतर')+' '+rupee(c.loans.interestOutstanding-sumInt))]],
+    {num:[1,2]});
+  h += `<h4>${aiT('Accounting Control Check','लेखा नियंत्रण जाँच')}</h4>` + mstControlTableHTML(v.controls);
+  if(v.critical.length) h += `<div class="stmt-warnbox">${esc(aiT('Statement generation should be reviewed because accounting/data-quality issues were found.','विवरण तैयार करने की समीक्षा की जानी चाहिए क्योंकि लेखा/डेटा-गुणवत्ता संबंधी समस्याएँ पाई गईं।'))}<ul>${v.critical.map(i=>'<li>'+esc(i.label)+' — '+esc(i.detail)+'</li>').join('')}</ul></div>`;
+  h += `</section>`;
+  return h;
+}
+function mstCoverHTML(v, from, to){
+  return `<section class="stmt-page stmt-portrait">${mstShgHeaderHTML()}<h2 class="stmt-cover">${aiT('Monthly Member Statements','मासिक सदस्य विवरण')}</h2>
+    <p class="stmt-cover2">${esc(mstPeriodLabel(from,to))} &nbsp;|&nbsp; ${esc(mstFYLabel(from))}</p>
+    ${mstKV([[aiT('Period','अवधि'), fmtDate(from)+' – '+fmtDate(to)],[aiT('Members covered','शामिल सदस्य'), String(v.mdata.length)],[aiT('Contents','विषय-सूची'), aiT('Consolidated Monthly Statement, one statement per member (each on a new page), Control Summary','समेकित मासिक विवरण, प्रत्येक सदस्य का एक विवरण (नए पृष्ठ पर), नियंत्रण सारांश')],
+      [aiT('Accounting checks','लेखा जाँच'), v.critical.length ? aiT('Issues found — please review before filing','समस्याएँ मिलीं — रिकॉर्ड में रखने से पहले देखें') : aiT('All critical checks passed','सभी महत्वपूर्ण जाँच सफल')],[aiT('Generated on','तैयार किया गया'), fmtDate(todayStr())]])}
+    <p class="stmt-small">${aiT('This is a presentation of the SHG\'s accounting records. It does not change any entry.','यह एसएचजी के लेखा अभिलेखों की प्रस्तुति है। यह किसी प्रविष्टि को नहीं बदलता।')}</p></section>`;
+}
+function mstPrintStyle(label){
+  const s = String((DB.profile.name||'SHG')+' — '+aiT('Monthly Statement','मासिक विवरण')+' — '+label).replace(/[\\"\n\r]/g,' ');
+  return `<style>@page stmtp{size:A4 portrait;margin:17mm 12mm 16mm 12mm;@top-left{content:"${s}";font-size:8pt;color:#444}@bottom-center{content:"${aiT('Page','पृष्ठ')} " counter(page) " ${aiT('of','/')} " counter(pages);font-size:8pt;color:#444}}
+@page stmtl{size:A4 landscape;margin:15mm 12mm 14mm 12mm;@top-left{content:"${s}";font-size:8pt;color:#444}@bottom-center{content:"${aiT('Page','पृष्ठ')} " counter(page) " ${aiT('of','/')} " counter(pages);font-size:8pt;color:#444}}</style>`;
+}
+
+/* ---- screens & actions ---- */
+function mstOpenDoc(kind, memberId, autoPrint, printAnyway){
+  const u = mstUI(), from = u.from, to = u.to;
+  if(!mstValidDate(from) || !mstValidDate(to) || from>to){ flash('error','Select a valid From and To date first.'); render(); return; }
+  const v = mstValidate(from,to);
+  let body = '', title = '';
+  if(kind==='member'){
+    const d = v.mdata.find(x=>x && x.member.id===memberId) || mstMemberData(memberId,from,to);
+    if(!d){ flash('error','Member not found.'); render(); return; }
+    body = mstMemberDocHTML(d); title = d.member.name;
+  } else if(kind==='consolidated'){
+    body = mstConsolidatedDocHTML(v.cons, v.controls); title = 'Consolidated Monthly Statement';
+  } else {
+    body = mstCoverHTML(v,from,to) + mstConsolidatedDocHTML(v.cons, v.controls) + v.mdata.filter(Boolean).map(mstMemberDocHTML).join('') + mstControlSummaryHTML(v,from,to);
+    title = 'All members';
+  }
+  mstEnsureGenerated(from,to);
+  window.__mstCurrent = {kind, memberId:memberId||'', from, to, count: kind==='all' ? v.mdata.length+2 : 1};
+  const warn = (v.critical.length && kind!=='member') ? `<div class="msg err no-print">${esc(aiT('Statement generation should be reviewed because accounting/data-quality issues were found.','विवरण तैयार करने की समीक्षा की जानी चाहिए क्योंकि लेखा/डेटा-गुणवत्ता संबंधी समस्याएँ पाई गईं।'))} (${v.critical.length})</div>` : '';
+  openModal(`<button class="close" onclick="closeModal()">×</button>
+    <div class="row no-print" style="margin-bottom:8px"><button class="btn" onclick="mstDoPrint()">🖨 ${aiT('Print','प्रिंट')}</button><button class="btn secondary" onclick="closeModal()">${aiT('Close','बंद करें')}</button>
+    <span class="hint" style="align-self:center">${esc(title)} — ${esc(mstPeriodLabel(from,to))}. ${aiT('A4 print: choose "Save as PDF" or your printer; keep margins on Default and Headers/footers off.','A4 प्रिंट: "Save as PDF" या प्रिंटर चुनें; मार्जिन Default रखें और Headers/footers बंद रखें।')}</span></div>
+    ${warn}${mstPrintStyle(mstPeriodLabel(from,to))}<div class="stmt-doc">${body}</div>`, true);
+  try{ const md = document.querySelector('#modalRoot .modal'); if(md) md.style.maxWidth = (kind==='member' ? '900px' : '1180px'); }catch(e){}
+  if(printAnyway) logAudit('STATEMENT_PRINT_ANYWAY', mstPeriodLabel(from,to)+': Print All opened despite '+v.critical.length+' critical accounting/data-quality item(s).');
+  if(autoPrint) setTimeout(mstDoPrint, 350);
+}
+function mstDoPrint(){
+  const c = window.__mstCurrent; if(!c) return;
+  if(typeof document!=='undefined' && document.body && !document.body.classList.contains('modal-open')) return; // user closed the preview before the delayed auto-print fired
+  const h = mstEnsureGenerated(c.from,c.to);
+  h.printedAt = nowStamp(); h.printedCount += c.count;
+  logAudit('MONTHLY_STATEMENTS_PRINTED', h.label+': print dialog opened for '+(c.kind==='all'?'all members':(c.kind==='consolidated'?'consolidated statement':'member '+c.memberId))+' (this records that printing was started, not that anything was sent)');
+  saveDB();
+  if(typeof window.print==='function') window.print();
+}
+// Print All Members — validates first; if critical issues exist the user can view them or print anyway.
+function mstPrintAll(){
+  const u = mstUI();
+  if(!mstValidDate(u.from) || !mstValidDate(u.to) || u.from>u.to){ flash('error','Select a valid From and To date first.'); render(); return; }
+  const v = mstValidate(u.from,u.to);
+  if(!v.critical.length){ mstOpenDoc('all','',true); return; }
+  openModal(`<button class="close" onclick="closeModal()">×</button><h3>${aiT('Review Required Before Printing','प्रिंट से पहले समीक्षा आवश्यक')}</h3>
+    <div class="msg err">${esc(aiT('Statement generation should be reviewed because accounting/data-quality issues were found.','विवरण तैयार करने की समीक्षा की जानी चाहिए क्योंकि लेखा/डेटा-गुणवत्ता संबंधी समस्याएँ पाई गईं।'))}</div>
+    <div id="mstErrList" style="display:none">${tbl([aiT('Check','जाँच'),aiT('Problem','समस्या')], v.critical.map(i=>[esc(i.label), esc(i.detail)]))}</div>
+    <p class="hint">${aiT('The app never alters data to make a statement tally. Fix the items, or print anyway — the printout will carry the warning.','ऐप विवरण मिलाने के लिए कभी डेटा नहीं बदलता। इन्हें ठीक करें, या फिर भी प्रिंट करें — प्रिंट में चेतावनी रहेगी।')}</p>
+    <div class="row"><button class="btn secondary" onclick="document.getElementById('mstErrList').style.display='block'">${aiT('View Errors','त्रुटियाँ देखें')}</button><button class="btn danger" onclick="closeModal();mstOpenDoc('all','',true,true)">${aiT('Print Anyway','फिर भी प्रिंट करें')}</button><button class="btn secondary" onclick="closeModal()">${aiT('Cancel','रद्द करें')}</button></div>`);
+}
+function mstGenerateClick(){
+  const u = mstUI();
+  if(!mstValidDate(u.from) || !mstValidDate(u.to) || u.from>u.to){ flash('error','Select a valid From and To date first.'); render(); return; }
+  const h = mstGenerate(u.from,u.to);
+  flash(h.checksPassed?'ok':'warn', 'Monthly statements generated for '+h.label+' — '+h.members+' member statement(s) + consolidated. Accounting checks '+(h.checksPassed?'passed.':'found '+h.criticalCount+' critical item(s) — review before printing.')); render();
+}
+function mstMarkSentClick(){ if(confirm('Mark these statements as SENT to members? Do this only after you have actually sent/handed them over. Printing or sharing alone does not count as sent.')) markMonthlyStatementsSent(); }
+function mstTabsHTML(mode){
+  return `<div class="row no-print" style="margin-bottom:8px"><button class="btn small ${mode==='members'?'':'secondary'}" onclick="go('monthlystatements')">${aiT('Member Statements','सदस्य विवरण')}</button><button class="btn small ${mode==='consolidated'?'':'secondary'}" onclick="go('consolidatedstatement')">${aiT('Consolidated Monthly Statement','समेकित मासिक विवरण')}</button></div>`;
+}
+function mstSelectorHTML(){
+  const u = mstUI(); const fys = financialYearsAvailable();
+  const months = mstSelectableMonths().filter(ym=>!u.fy || String(fyStartYearOf(mstMonthBounds(ym).from))===u.fy);
+  return `<div class="card no-print"><div class="row">
+    <div class="field"><label>Financial Year</label><select onchange="mstSetFY(this.value)">${fys.map(y=>`<option value="${y.value}" ${u.fy===y.value?'selected':''}>${esc(y.label)}</option>`).join('')}</select></div>
+    <div class="field"><label>Month</label><select onchange="mstSetMonth(this.value)">${u.ym?'':'<option value="" selected>Custom range</option>'}${months.map(ym=>`<option value="${ym}" ${u.ym===ym?'selected':''}>${esc(mstMonthLabel(ym))}</option>`).join('')}</select></div>
+    <div class="field"><label>From Date</label><input type="date" value="${esc(u.from)}" onchange="mstSetDate('from',this.value)"></div>
+    <div class="field"><label>To Date</label><input type="date" value="${esc(u.to)}" onchange="mstSetDate('to',this.value)"></div></div>
+    <p class="hint" style="margin:6px 0 0">Statements are produced strictly as at the period end: Opening = balance on the day before From; Closing = balance at To. Today's balances are never used. Default is the previous completed month.</p></div>`;
+}
+function mstHistoryHTML(){
+  const hist = (DB.statementHistory||[]).slice().sort((a,b)=>a.from<b.from?1:-1);
+  if(!hist.length) return `<div class="card"><h3>Statement History</h3><div class="empty">No statements generated yet.</div></div>`;
+  return `<div class="card no-print"><h3>Statement History</h3>${tbl(['Month','Members','Generated','Printed / Shared / Sent','Checks','Month Closed',''], hist.map(h=>[
+    esc(h.label), String(h.members||0), esc(fmtDate((h.lastGeneratedAt||'').slice(0,10)))+(h.generatedCount>1?(' ('+h.generatedCount+'×)'):''),
+    (h.printedAt?badge('Printed '+fmtDate(h.printedAt.slice(0,10)),'green'):badge('Not printed','grey'))+' '+(h.sharedAt?badge('Shared '+fmtDate(h.sharedAt.slice(0,10)),'green'):badge('Not shared','grey'))+' '+(h.sentAt?badge('Sent '+fmtDate(h.sentAt.slice(0,10)),'green'):badge('Not sent','grey')),
+    (h.checksPassed?badge('Passed','green'):badge('Issues','red'))+(h.fingerprintChanged?' '+badge('Figures changed since first generated','amber'):''),
+    h.closed?badge('Closed','green'):badge('Open','amber'),
+    `<button class="btn small secondary" onclick="mstReopenHistory('${esc(h.from)}','${esc(h.to)}')">Open / Regenerate</button>`]))}
+    <p class="hint">Only the record that a statement was generated, printed, shared or sent is kept here — the statements themselves are always regenerated from the ledger, so nothing is duplicated and no earlier accounting data is overwritten.</p></div>`;
+}
+function mstReopenHistory(from,to){ const u = mstUI(); u.from=from; u.to=to; const b=mstMonthBounds(from.slice(0,7)); u.ym=(from===b.from&&to===b.to)?from.slice(0,7):''; u.fy=String(fyStartYearOf(from)); go('monthlystatements'); }
+function mstChecksBannerHTML(v){
+  let h = '';
+  if(v.critical.length) h += `<div class="msg err no-print"><b>${esc(aiT('Statement generation should be reviewed because accounting/data-quality issues were found.','विवरण तैयार करने की समीक्षा की जानी चाहिए क्योंकि लेखा/डेटा-गुणवत्ता संबंधी समस्याएँ पाई गईं।'))}</b><ul style="margin:6px 0 0 18px">${v.critical.map(i=>'<li>'+esc(i.label)+' — '+esc(i.detail)+'</li>').join('')}</ul></div>`;
+  else h += `<div class="msg ok no-print">All critical accounting checks passed for this period.</div>`;
+  if(v.warnings.length) h += `<div class="msg amber no-print">${v.warnings.map(i=>esc(i.label)+' — '+esc(i.detail)).join('<br>')}</div>`;
+  return h;
+}
+function viewMonthlyStatements(){ return mstScreen('members'); }
+function viewConsolidatedStatement(){ return mstScreen('consolidated'); }
+function mstScreen(mode){
+  const members = activeMembers(); const u = mstUI();
+  const alreadySentThisMonth = DB.settings.lastMonthlyStatementsYM===monthKey(todayStr());
+  let html = `<div class="section-title"><div><h2>Monthly Member Statements</h2><div class="hint">Month-wise Savings &amp; Loan Statement – Printable SHG Record</div></div></div>`;
+  html += `<div class="msg info no-print">A printable monthly record for every member and for the whole SHG, generated straight from the books — nothing is entered twice. Workflow: Enter transactions → Validate → Reconcile → Close month → Generate Monthly Statements → Print/Share → Preserve record. WhatsApp and email each need one tap per member to actually send (no page without a server can deliver to someone else's phone or inbox on its own).</div>`;
+  if(alreadySentThisMonth) html += `<div class="msg ok no-print">Already marked as sent for ${esc(monthKey(todayStr()))}. You can still resend to anyone below.</div>`;
+  html += mstTabsHTML(mode);
+  if(!members.length){ html += `<div class="card"><div class="empty">No active members yet.</div></div>`; return html; }
+  html += mstSelectorHTML();
+  if(!mstValidDate(u.from) || !mstValidDate(u.to) || u.from>u.to){ html += `<div class="msg err">Select a valid From and To date.</div>`; return html + mstHistoryHTML(); }
+  const v = mstValidate(u.from,u.to);
+  const h = mstHistEntry(u.from,u.to);
+  html += mstChecksBannerHTML(v);
+  html += `<div class="card no-print"><div class="row" style="justify-content:space-between;align-items:center">
+    <span><b>${esc(mstPeriodLabel(u.from,u.to))}</b> · ${members.length} active member(s) · Statements: ${mstStatusBadges(h)}</span>
+    <span class="row"><button class="btn small" onclick="mstGenerateClick()">Generate Monthly Statements</button>
+    <button class="btn small secondary" onclick="mstPrintAll()">Print All Members – Monthly Statements</button>
+    <button class="btn small secondary" onclick="mstOpenDoc('consolidated')">View Consolidated</button>
+    <button class="btn small secondary" onclick="mstOpenDoc('consolidated','',true)">Print Consolidated</button>
+    <button class="btn secondary small" onclick="mstMarkSentClick()">Mark This Month as Sent</button></span></div></div>`;
+  if(mode==='consolidated'){
+    html += `<div class="card stmt-screen-doc"><div class="stmt-doc">${mstPrintStyle(mstPeriodLabel(u.from,u.to))}${mstConsolidatedDocHTML(v.cons, v.controls)}</div></div>` + mstHistoryHTML();
+    return html;
+  }
+  html += `<div class="card">${tbl(['Member','Mobile','Email','Opening Savings','Closing Savings','Loan O/S (closing)','Overdue (closing)','Statement','Send via WhatsApp','Send via Email'],
+    v.mdata.filter(Boolean).map(d=>{
+      const m = d.member, text = mstMemberText(d);
+      const wa = waLink(m.mobile, text);
+      const mail = mailtoLink(m.email, (DB.profile.name||'SHG')+' — Monthly Statement — '+mstPeriodLabel(d.from,d.to)+' — '+m.name, text);
+      const overdue = mstR2(d.loans.reduce((a,l)=>a+l.inst.closeOverdue,0));
+      return [esc(m.name), esc(m.mobile||'—'), esc(m.email||'—'), rightCell(rupee(d.savings.open)), rightCell(rupee(d.savings.close)), rightCell(rupee(d.position.loanPrincipal)), rightCell(overdue>0.5?rupee(overdue):'—'),
+        `<button class="btn small secondary" onclick="mstOpenDoc('member','${esc(m.id)}')">View Statement</button> <button class="btn small secondary" onclick="mstOpenDoc('member','${esc(m.id)}',true)">Print Statement</button>`,
+        wa ? `<a class="btn small secondary" href="${wa}" target="_blank" rel="noopener" onclick="mstNoteShared()">WhatsApp</a>` : `<span class="hint">No mobile on file</span>`,
+        mail ? `<a class="btn small secondary" href="${mail}" onclick="mstNoteShared()">Email</a>` : `<span class="hint">No email on file</span>`];
+    }))}</div>`;
+  html += `<p class="hint no-print">WhatsApp/Email carry a short summary only. The printed statement is built separately from the ledger and is always the complete record.</p>`;
+  html += mstHistoryHTML();
+  return html;
+}
+
 // Single place that builds export rows for every module, using internal field names.
 // Both the plain Reports export and the LokOS-mapped export read from here, so the two
 // can never drift apart or show conflicting figures.
@@ -6120,10 +6781,13 @@ function viewMonthClosing(){
     <div class="row" style="margin-top:10px">
       <button class="btn" onclick="runMonthClose('${ym}', false)">Run Closing Checklist</button>
     </div></div>`;
-  html += `<div class="card"><h3>Closed Periods</h3>${DB.closedPeriods.length ? tbl(['Month','Grade at Closing',''],
+  html += `<div class="card"><h3>Closed Periods</h3>${DB.closedPeriods.length ? tbl(['Month','Grade at Closing','Monthly Statements',''],
     DB.closedPeriods.slice().sort().reverse().map(p=>{
       const h = DB.grading.history[p];
+      const b = mstMonthBounds(p); const sh = mstHistEntry(b.from,b.to);
+      const stText = sh ? (sh.sentAt?'Sent':(sh.sharedAt?'Shared':(sh.printedAt?'Printed':'Generated'))) : 'Ready';
       return [p, h ? (h.gradePending?'Pending':h.grade)+' ('+h.overall.toFixed(1)+'%)' : '—',
+        `${badge('Monthly Statements: '+stText, sh?'green':'amber')} <button class="btn small secondary" onclick="mstOpenFor('${p}')">${sh?'Open Statements':'Generate Monthly Statements'}</button>`,
         `<button class="btn small secondary" onclick="reopenPeriodFrom('closing','${p}')">Reopen</button>`];
     })) : `<div class="empty">No months closed yet.</div>`}</div>`;
   setTimeout(()=>runMonthClose(ym,false),0);
@@ -6153,7 +6817,7 @@ function runMonthClose(ym, allowOverride){
 function doCloseMonth(ym, override){
   const result = closeMonth(ym, override);
   if(!result.ok){ flash('error','Cannot close '+ym+' — critical checks failed. Resolve them or use the authorised override.'); render(); return; }
-  flash('ok', ym+' closed. Grade: '+(result.grade.gradePending?'Pending':result.grade.grade)+'.');
+  flash('ok', ym+' closed. Grade: '+(result.grade.gradePending?'Pending':result.grade.grade)+'. Monthly Statements: Ready — open Monthly Member Statements to generate them.');
   render();
 }
 function reopenPeriodFrom(fromRoute, ym){
@@ -7608,7 +8272,7 @@ function viewHelpFeatures(){
     ['Reducing-Balance Interest Only (New Loans/CIF)','New Loan and new CIF forms now offer only the Reducing-Balance interest method, matching standard SHG/bank practice. Older "Flat"-tagged loans from a restored backup still calculate correctly for backward compatibility.'],
     ['Duplicate-Entry Warnings','The Meeting screen and the Journal Voucher screen both warn (Post Anyway / Cancel) if an entry looks like it may already have been posted — same member, same amount, same/very-close date — catching an accidental double-entry before it is saved, without ever blocking a genuine repeat transaction.'],
     ['Bank Loan / Cash Credit Due-Date Reminders','Once a Term Loan or Cash Credit facility\'s next instalment/interest falls due, a red reminder banner — naming the facility, account number and days overdue — appears on every screen in the app, not just the Dashboard, until a Drawal/Repayment is actually posted against it.'],
-    ['Monthly Statements (Bulk WhatsApp/Email)','Monthly Statements generates every member\'s combined Savings + Loan statement at once, with ready-to-tap WhatsApp and Email links for each member, and a Dashboard reminder from the 1st of every month until marked sent.'],
+    ['Monthly Statements — Monthly Member Statements (Printable Record, Print All, WhatsApp/Email)','Monthly Member Statements (Records → Statements) is a printable monthly SHG record. Pick a Financial Year and Month (default: the previous completed month) and the app builds, strictly as at that month-end, each member\'s Savings statement, a separate section for every loan (principal and interest kept apart, with instalments due, arrears and next due date), the month\'s transactions, and the member\'s position at month-end. A Consolidated Monthly Statement for the whole SHG adds savings and loan summaries, CIF / Revolving Fund / Bank Term Loan / Cash Credit shown separately, Receipts & Payments, accounting control checks and a signature block for President, Secretary and Treasurer. Print All Members prints the cover, the consolidated statement, every member on a new A4 page, and a control summary — after first running validation (you may view errors or print anyway). WhatsApp/Email carry only a short summary. Statement History records Generated, Printed, Shared and Sent separately; only Mark as Sent marks sent. Nothing is entered twice and no figure is calculated separately from the books, so a closed month can be reproduced later even after new transactions are entered.'],
     ['Complete Sample Data','Backup & Restore offers a deterministic, fully-filled 15-member "Complete Sample Data" set (separate from the randomised "Demo Data") for training and demonstration. Download it as a JSON file and bring it into another copy of this app anytime via Import / Upload Additional Data (Merge).'],
     ['Average Group Corpus = (Opening + Closing) ÷ 2','Wherever Average Group Corpus feeds a calculation — NABARD Grading\'s Velocity of Lending and the Panchsutra Inter-loaning score — it is the true (Opening Corpus + Closing Corpus) ÷ 2 for the exact period selected, reconstructed from the ledger as it actually stood on those dates, not an approximation from today\'s live corpus.'],
     ['Ask AI — Find Every Difference/Mismatch','Ask AI can be asked in plain language to find every difference or mismatch across the SHG\'s data in one go (Trial Balance, meeting cash-counted-vs-entered differences, critical Data Quality issues) — see Ask AI in the AI SHG Manager.']
@@ -7749,6 +8413,12 @@ function aiAsk(qRaw){
   const base = {confidence:aiT('Data verified — calculated from this app\'s own stored records','डेटा सत्यापित — इस ऐप के अपने संग्रहीत रिकॉर्ड से गणना की गई')};
   if(!q) return Object.assign({answer:aiT('Please type a question.','कृपया एक प्रश्न लिखें।')}, base, {confidence:'—'});
   const has = (...words)=>words.some(w=>q.includes(w));
+  if(has('monthly statement','monthly member statement','consolidated monthly','print all members','print statement','मासिक विवरण','समेकित')) return Object.assign({}, base, {
+    answer: aiT('Monthly Member Statements (left menu → Statements) is the printable monthly record. Choose the Financial Year and Month, click Generate Monthly Statements, then View/Print each member or use Print All Members.','मासिक सदस्य विवरण (बाएँ मेनू → Statements) मुद्रण योग्य मासिक अभिलेख है। वित्तीय वर्ष और माह चुनें, Generate Monthly Statements दबाएँ, फिर हर सदस्य को देखें/प्रिंट करें या Print All Members उपयोग करें।'),
+    figures: aiT(['Figures are read strictly as at the month-end from the books — never today\'s balances.','Each member: savings, every loan (principal and interest separate), transactions, month-end position.','Consolidated statement: savings and loan summary, CIF/RF/Bank loans shown separately, Receipts & Payments, control checks, signatures.','Print All runs validation first; History records Generated / Printed / Shared / Sent separately.'],['आँकड़े माह-अंत की स्थिति के अनुसार बही से पढ़े जाते हैं — आज के शेष से कभी नहीं।','प्रत्येक सदस्य: बचत, हर ऋण (मूलधन और ब्याज अलग), लेन-देन, माह-अंत स्थिति।','समेकित विवरण: बचत एवं ऋण सारांश, सीआईएफ/आरएफ/बैंक ऋण अलग, प्राप्ति-भुगतान, नियंत्रण जाँच, हस्ताक्षर।','Print All पहले जाँच चलाता है; इतिहास में Generated / Printed / Shared / Sent अलग दर्ज होते हैं।']),
+    evidence:[aiT('From this app\'s Monthly Member Statements instructions','इस ऐप के मासिक सदस्य विवरण निर्देशों से')],
+    action: aiT('Open Monthly Member Statements.','मासिक सदस्य विवरण खोलें।'),
+    confidence: aiT('Instructions from this app\'s Help content — no figures are calculated','इस ऐप की सहायता सामग्री से निर्देश — कोई आँकड़ा गणना नहीं किया गया')});
   if(has('upload','import','migrate','migration','existing data','existing shg','already running','already in existence','old records','old data','excel','csv','template','अपलोड','आयात','मौजूदा डेटा','पुराना डेटा','पुराने रिकॉर्ड','एक्सेल') && has('data','shg','group','member','loan','saving','template','excel','csv','file','upload','डेटा','समूह','सदस्य','ऋण','बचत','फ़ाइल','अपलोड')) return Object.assign({}, base, {
     answer: aiT('To bring in an SHG that is already running, open Bulk Data Import (📥) in the left menu, download the templates (one Excel file or four CSVs) and follow these steps in order:','पहले से चल रहे एसएचजी का डेटा लाने के लिए बाएँ मेनू में Bulk Data Import (📥) खोलें, टेम्पलेट (एक Excel फ़ाइल या चार CSV) डाउनलोड करें और इन चरणों को क्रम से करें:'),
     figures: aiT(MIGRATION_STEPS_EN, MIGRATION_STEPS_HI),
@@ -8355,7 +9025,7 @@ const HELP_KB = [
   {kw:['flat interest','reducing balance','interest method'], a:'New Loan and new CIF forms now offer only Reducing-Balance interest (the standard method), so "Flat" is no longer a choice for new loans/CIF. Any older loan already carrying "Flat" from a restored backup still calculates and schedules correctly.'},
   {kw:['duplicate entry','duplicate warning','entered twice','posted twice'], a:'Both the Meeting screen and the Journal Voucher screen warn you (with "Post Anyway" / "Cancel") if an entry looks like it may already be posted — same member, same amount, same or very close date — so an accidental double-entry is caught before saving. A genuine repeat transaction is never blocked, only flagged for a second look.'},
   {kw:['due date','overdue reminder','cc due','bank loan due','term loan due'], a:'Once a Bank Loan (Term Loan) or Cash Credit facility\'s next instalment/interest falls due, a red reminder banner appears on EVERY screen (not just the Dashboard) naming the facility, account number and days overdue. It stays until a Drawal/Repayment is actually posted against that facility under Bank Loan to SHG.'},
-  {kw:['monthly statement','bulk statement','whatsapp statement','send statement'], a:'Monthly Statements (left menu) prepares every member\'s combined Savings + Loan statement at once, each with a ready-to-tap WhatsApp and Email link. The Dashboard reminds you from the 1st of every month until you mark that month\'s statements as sent.'},
+  {kw:['monthly statement','monthly member statement','bulk statement','whatsapp statement','send statement','print statement','print all members','consolidated statement','consolidated monthly'], a:'Monthly Member Statements (Records → Statements) is a printable monthly SHG record. Pick a Financial Year and Month (default: the previous completed month) and the app builds, strictly as at that month-end, each member\'s Savings statement, a separate section for every loan (principal and interest kept apart, with instalments due, arrears and next due date), the month\'s transactions, and the member\'s position at month-end. A Consolidated Monthly Statement for the whole SHG adds savings and loan summaries, CIF / Revolving Fund / Bank Term Loan / Cash Credit shown separately, Receipts & Payments, accounting control checks and a signature block for President, Secretary and Treasurer. Print All Members prints the cover, the consolidated statement, every member on a new A4 page, and a control summary — after first running validation (you may view errors or print anyway). WhatsApp/Email carry only a short summary. Statement History records Generated, Printed, Shared and Sent separately; only Mark as Sent marks sent. Nothing is entered twice and no figure is calculated separately from the books, so a closed month can be reproduced later even after new transactions are entered.'},
   {kw:['average corpus','group corpus','opening corpus','closing corpus'], a:'Average Group Corpus, wherever it is used (NABARD Grading\'s Velocity of Lending, Panchsutra\'s Inter-loaning score), is calculated as (Opening Corpus + Closing Corpus) ÷ 2 for the exact period being assessed — both figures are reconstructed from the ledger exactly as they stood on those dates, not approximated from today\'s corpus.'},
   {kw:['difference','mismatch','discrepancy','not tally'], a:'Ask AI (not this Help Assistant) can find every difference/mismatch in your data in one go — try asking it "are there any differences or mismatches in my data?" there. It checks the Trial Balance, every meeting\'s counted-vs-entered cash, and all critical Data Quality issues together.'},
   {kw:['lokos','upload','export data','csv'], a:'LokOS Readiness & Export shows a GREEN/AMBER/RED readiness status and lets you download validated CSV files (Members, Savings, Loans, Transactions). This app does not connect to any official API — it prepares the data for whichever mechanism your SRLM/DAY-NRLM officially authorises.'},
