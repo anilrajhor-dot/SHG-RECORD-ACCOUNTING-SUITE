@@ -492,6 +492,14 @@ function migrateDB(){
   const fresh = freshDB();
   Object.keys(fresh).forEach(key=>{ if(DB[key]===undefined) DB[key] = fresh[key]; });
 
+  // Repair: older Demo Data created its CIF record without an id / status / terms and its receipt
+  // voucher without a cifId, so the CIF screen showed "undefined" and tranche-wise figures were wrong.
+  (DB.cif||[]).forEach(c=>{
+    if(c.id) return;
+    c.id = nextId('CIF'); c.interestMethod = c.interestMethod||'reducing'; c.frequency = c.frequency||'Monthly'; c.status = c.status||'Active';
+    const t = (DB.transactions||[]).find(x=>x.type==='CIF Receipt' && !x.cifId && x.date===c.date && x.amount===c.amount);
+    if(t) t.cifId = c.id;
+  });
   if(!DB.grading) DB.grading={ruleVersion:'2026.1',history:{},nabardHistory:[]};
   if(!DB.grading.nabardHistory) DB.grading.nabardHistory = [];
   if(!DB.mcp) DB.mcp = {history:[]};
@@ -836,8 +844,8 @@ function generateLoanSchedule(loanId, asOfDate){
   // selected date (e.g. at a later meeting already entered ahead of a backdated one being reviewed
   // now) must never reduce the dues/outstanding shown for an earlier date. Without this filter a
   // historical schedule would be silently contaminated by future postings.
-  const repayTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.date<=asOfDate && t.credit==='MEMBER_LOANS').sort((a,b)=>a.date<b.date?-1:1);
-  const interestTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && t.date<=asOfDate && t.credit==='INTEREST_INCOME').sort((a,b)=>a.date<b.date?-1:1);
+  const repayTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && !t.reversalOf && t.date<=asOfDate && t.credit==='MEMBER_LOANS').sort((a,b)=>a.date<b.date?-1:1);
+  const interestTx = DB.transactions.filter(t=>t.loanId===loanId && !t.reversed && !t.reversalOf && t.date<=asOfDate && t.credit==='INTEREST_INCOME').sort((a,b)=>a.date<b.date?-1:1);
   let principalPool = repayTx.reduce((s,t)=>s+t.amount,0);
   let interestPool = interestTx.reduce((s,t)=>s+t.amount,0);
   let runningOutstanding = loan.principal;
@@ -1167,7 +1175,7 @@ const NAV = [
 // allowLegacyUPI) — so nothing is ever hidden that a user might still need to see/reconcile/move out.
 function hasLegacyUPIData(){
   if(Math.abs(accountBalance('UPI'))>0.5) return true;
-  return DB.transactions.some(t=>!t.reversed && (t.debit==='UPI'||t.credit==='UPI'));
+  return DB.transactions.some(t=>!t.reversed && !t.reversalOf && (t.debit==='UPI'||t.credit==='UPI'));
 }
 function buildNav(){
   const ul = document.getElementById('navlist');
@@ -1307,7 +1315,7 @@ function viewDashboard(){
   const loanMemberIds = Array.from(new Set(activeLoans.map(l=>l.memberId)));
   const multiLoanMemberIds = loanMemberIds.filter(mid=>activeLoans.filter(l=>l.memberId===mid).length>1);
   const cifOut = DB.cif.reduce((s,c)=>s+(c.amount||0),0) - 0;
-  const monthTx = DB.transactions.filter(t=>monthKey(t.date)===monthKey(todayStr()) && !t.reversed);
+  const monthTx = DB.transactions.filter(t=>monthKey(t.date)===monthKey(todayStr()) && !t.reversed && !t.reversalOf);
   const collection = monthTx.filter(t=>['CASH','BANK'].includes(t.debit)).reduce((s,t)=>s+t.amount,0);
   const iAndE = incomeExpenditure(fyStart(), todayStr());
 
@@ -1820,7 +1828,7 @@ function computeMeetingFinancialSnapshot(asOfDate){
   const cutoff = addDaysStr(asOfDate, -45);
   const notSavingRecently = members.filter(m=>{
     const lastSavingsDateUpToMeeting = DB.transactions
-      .filter(t=>!t.reversed && t.memberId===m.id && t.type==='Savings' && t.date<=asOfDate)
+      .filter(t=>!t.reversed && !t.reversalOf && t.memberId===m.id && t.type==='Savings' && t.date<=asOfDate)
       .map(t=>t.date).sort().pop();
     return !lastSavingsDateUpToMeeting || lastSavingsDateUpToMeeting < cutoff;
   });
@@ -2109,7 +2117,7 @@ function showMemberReview(mid){
   const instDue = dues.reduce((s,d)=>s+d.totalDue,0);
   // Only transactions up to the selected Meeting Date — reviewing a backdated meeting must never
   // show repayment activity that happened later (even if it has since been posted into the books).
-  const history = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.date<=date && (t.type==='Loan Repayment'||t.type==='Interest Received'||t.type==='Loan Foreclosure'))
+  const history = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.memberId===m.id && t.date<=date && (t.type==='Loan Repayment'||t.type==='Interest Received'||t.type==='Loan Foreclosure'))
     .sort((a,b)=>a.date<b.date?1:-1).slice(0,5);
   const pendingIssues = (DB.actionPoints||[]).filter(a=>a.status!=='Completed' && (a.responsible||'').trim().toLowerCase()===m.name.trim().toLowerCase());
   el.innerHTML = `<div class="grid cols4">
@@ -2692,22 +2700,22 @@ function detectMeetingDuplicates(date, memberEntries, newLoan, expense){
   }
   const amtMatches = (t, amount) => Math.abs(t.amount-amount)<0.005;
   memberEntries.forEach(r=>{
-    if(r.sav>0 && DB.transactions.some(t=>!t.reversed && t.memberId===r.m.id && t.date===date && t.type==='Savings' && amtMatches(t,r.sav)))
+    if(r.sav>0 && DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.memberId===r.m.id && t.date===date && t.type==='Savings' && amtMatches(t,r.sav)))
       warnings.push(r.m.name+': a Savings entry of '+rupee(r.sav)+' on '+fmtDate(date)+' already exists.');
-    if(r.fine>0 && DB.transactions.some(t=>!t.reversed && t.memberId===r.m.id && t.date===date && t.type==='Fine' && amtMatches(t,r.fine)))
+    if(r.fine>0 && DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.memberId===r.m.id && t.date===date && t.type==='Fine' && amtMatches(t,r.fine)))
       warnings.push(r.m.name+': a Fine entry of '+rupee(r.fine)+' on '+fmtDate(date)+' already exists.');
-    if(r.wd>0 && DB.transactions.some(t=>!t.reversed && t.memberId===r.m.id && t.date===date && t.type==='Savings Withdrawal' && amtMatches(t,r.wd)))
+    if(r.wd>0 && DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.memberId===r.m.id && t.date===date && t.type==='Savings Withdrawal' && amtMatches(t,r.wd)))
       warnings.push(r.m.name+': a Savings Withdrawal of '+rupee(r.wd)+' on '+fmtDate(date)+' already exists.');
     r.loanRows.forEach(lr=>{
-      if(lr.rp>0 && DB.transactions.some(t=>!t.reversed && t.loanId===lr.loan.id && t.date===date && t.credit==='MEMBER_LOANS' && amtMatches(t,lr.rp)))
+      if(lr.rp>0 && DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.loanId===lr.loan.id && t.date===date && t.credit==='MEMBER_LOANS' && amtMatches(t,lr.rp)))
         warnings.push(r.m.name+' — loan '+lr.loan.id+': a principal repayment of '+rupee(lr.rp)+' on '+fmtDate(date)+' already exists.');
-      if(lr.ri>0 && DB.transactions.some(t=>!t.reversed && t.loanId===lr.loan.id && t.date===date && t.credit==='INTEREST_INCOME' && amtMatches(t,lr.ri)))
+      if(lr.ri>0 && DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.loanId===lr.loan.id && t.date===date && t.credit==='INTEREST_INCOME' && amtMatches(t,lr.ri)))
         warnings.push(r.m.name+' — loan '+lr.loan.id+': an interest payment of '+rupee(lr.ri)+' on '+fmtDate(date)+' already exists.');
     });
   });
   if(newLoan && DB.loans.some(l=>l.memberId===newLoan.memberId && l.disbursementDate===date && Math.abs(l.principal-newLoan.amount)<0.005))
     warnings.push(memberName(newLoan.memberId)+': a new loan of '+rupee(newLoan.amount)+' disbursed on '+fmtDate(date)+' already exists.');
-  if(expense && DB.transactions.some(t=>!t.reversed && t.date===date && t.debit==='EXP_'+expense.cat && Math.abs(t.amount-expense.amount)<0.005))
+  if(expense && DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.date===date && t.debit==='EXP_'+expense.cat && Math.abs(t.amount-expense.amount)<0.005))
     warnings.push('An expense of '+rupee(expense.amount)+' in category '+expense.cat+' on '+fmtDate(date)+' already exists.');
   return warnings;
 }
@@ -3560,8 +3568,8 @@ function generateCIFSchedule(cifId, asOfDate){
   // generateLoanSchedule()'s member-loan calculation exactly, so the same fix applies here too.
   const periodsPerYear = freq==='Weekly' ? 52 : (freq==='Fortnightly' ? 26 : 12);
   const totalFlatInterest = Math.round(c.amount*(c.rate||0)/100 * (n/periodsPerYear)*100)/100;
-  const repayTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && t.debit==='CIF').sort((a,b)=>a.date<b.date?-1:1);
-  const interestTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && t.debit==='INTEREST_EXPENSE').sort((a,b)=>a.date<b.date?-1:1);
+  const repayTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && !t.reversalOf && t.debit==='CIF').sort((a,b)=>a.date<b.date?-1:1);
+  const interestTx = DB.transactions.filter(t=>t.cifId===cifId && !t.reversed && !t.reversalOf && t.debit==='INTEREST_EXPENSE').sort((a,b)=>a.date<b.date?-1:1);
   let principalPool = repayTx.reduce((s,t)=>s+t.amount,0);
   let interestPool = interestTx.reduce((s,t)=>s+t.amount,0);
   let runningOutstanding = c.amount;
@@ -3859,7 +3867,7 @@ function bankLoanAcct(type){ return type==='CC' ? 'BANK_CC' : 'BANK_TL'; }
 function bankLoanUtilised(bankLoanId){
   const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return 0;
   const acct = bankLoanAcct(loan.type);
-  return DB.transactions.filter(t=>!t.reversed && t.bankLoanId===bankLoanId && t.credit===acct).reduce((s,t)=>s+t.amount,0);
+  return DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.bankLoanId===bankLoanId && t.credit===acct).reduce((s,t)=>s+t.amount,0);
 }
 function bankLoanOutstanding(bankLoanId){
   const loan = DB.bankLoans.find(b=>b.id===bankLoanId); if(!loan) return 0;
@@ -3959,7 +3967,7 @@ function computeBankLoanInterestSlabwise(bankLoanId, from, to){
   // liability, a debit decreases it, same sign convention as accountBalance() — means the slab-wise
   // interest calculation can never silently disagree with the facility's own Outstanding Payable
   // (bankLoanOutstanding()), however the movement was actually posted.
-  const events = DB.transactions.filter(t=>!t.reversed && t.bankLoanId===bankLoanId && t.date>=from && t.date<=to &&
+  const events = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.bankLoanId===bankLoanId && t.date>=from && t.date<=to &&
       (t.debit===acct || t.credit===acct))
     .sort((a,b)=>a.date<b.date?-1:(a.date>b.date?1:0));
   const segments = [];
@@ -4399,7 +4407,7 @@ function saveManualTxn(ev){
     // payment on the same day for the same amount is entirely possible — it just stops and asks
     // for confirmation first, the same pattern already used in the Meeting wizard's review screen.
     const amt = parseFloat(data.amount)||0;
-    const dupTxn = DB.transactions.find(t=>!t.reversed && t.date===data.date && t.debit===data.debit && t.credit===data.credit
+    const dupTxn = DB.transactions.find(t=>!t.reversed && !t.reversalOf && t.date===data.date && t.debit===data.debit && t.credit===data.credit
       && Math.abs(t.amount-amt)<0.5 && (t.memberId||'')===(data.memberId||'') && (t.loanId||'')===(data.loanId||''));
     if(dupTxn){
       PENDING_JV_DATA = data;
@@ -4531,7 +4539,7 @@ function viewStatements(){
 
   // --- Receipts & Payments Account ---
   let receipts=0, payments=0;
-  DB.transactions.filter(t=>t.date>=from && t.date<=to && !t.reversed).forEach(t=>{
+  DB.transactions.filter(t=>t.date>=from && t.date<=to && !t.reversed && !t.reversalOf).forEach(t=>{
     if(['CASH','BANK'].includes(t.debit) && !['CASH','BANK'].includes(t.credit)) receipts += t.amount;
     if(['CASH','BANK'].includes(t.credit) && !['CASH','BANK'].includes(t.debit)) payments += t.amount;
   });
@@ -4829,21 +4837,21 @@ function runDataQuality(){
     }
     // A principal or interest repayment posted with no Loan ID at all cannot be attributed to
     // any specific loan's sub-ledger — this breaks loan-wise accounting and is always critical.
-    if(!t.reversed && !t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')){
+    if(!t.reversed && !t.reversalOf && !t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')){
       issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no Loan ID — it cannot be attributed to a specific loan.', fix:'Reverse '+t.voucherNo+' via Journal Voucher → Reverse and re-post the repayment from Members Loan → Collect Repayment, which always attaches the correct Loan ID.'});
     }
-    if(!t.reversed && !t.cifId && (t.type==='CIF Repayment'||t.type==='CIF Interest')){
+    if(!t.reversed && !t.reversalOf && !t.cifId && (t.type==='CIF Repayment'||t.type==='CIF Interest')){
       issues.push({sev:'red', text:'Transaction '+t.voucherNo+' is a '+t.type+' with no CIF ID — it cannot be attributed to a specific CIF tranche.', fix:'Reverse '+t.voucherNo+' via Journal Voucher → Reverse and re-post it from the CIF screen, which always attaches the correct CIF ID.'});
     }
   });
   // repayment posted against a loan that is now closed (the loan may have been closed after this posting)
-  DB.transactions.filter(t=>!t.reversed && t.loanId && t.credit==='MEMBER_LOANS').forEach(t=>{
+  DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.loanId && t.credit==='MEMBER_LOANS').forEach(t=>{
     const loan = DB.loans.find(l=>l.id===t.loanId);
     if(loan && loan.status==='Closed' && loanOutstanding(loan.id).principal<-0.5) issues.push({sev:'amber', text:'Loan '+t.loanId+' is closed but shows an overpaid/negative position — check repayment history.', fix:'Open the Loan Ledger for '+t.loanId+' and check whether a repayment was posted after closure, or twice — reverse the extra entry if so.'});
   });
   // possible duplicate transactions: same loan, date, type and amount posted more than once
   const txKeySeen = {};
-  DB.transactions.filter(t=>!t.reversed && t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')).forEach(t=>{
+  DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.loanId && (t.type==='Loan Repayment'||t.type==='Interest Received')).forEach(t=>{
     const key = t.loanId+'|'+t.date+'|'+t.type+'|'+t.amount;
     if(txKeySeen[key]) issues.push({sev:'amber', text:'Possible duplicate: loan '+t.loanId+' has two '+t.type+' entries of '+rupee(t.amount)+' on '+fmtDate(t.date)+'.', fix:'Open the Loan Ledger for '+t.loanId+' and check both entries dated '+fmtDate(t.date)+' — if one is a genuine duplicate, reverse it via Journal Voucher → Reverse.'});
     txKeySeen[key] = true;
@@ -5021,20 +5029,20 @@ function computePanchsutra(ym){
 
   // 2. Regular Savings — share of active members who saved at least once this month.
   const savers = new Set();
-  DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').forEach(t=>savers.add(t.memberId));
+  DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').forEach(t=>savers.add(t.memberId));
   const savings = Math.min(100, savers.size/totalMembers*100);
 
   // 3. Regular Inter-loaning — how actively the group's own corpus is being circulated as loans to
   // members this month (the same "velocity of lending" idea the official NABARD format scores;
   // 1.5x the average corpus lent out in a month is treated as full marks, same as that format).
-  const lent = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
+  const lent = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
   const avgCorpus = calculateAverageCorpus(from, to).average;
   const interLoaning = avgCorpus>0 ? Math.min(100, (lent/avgCorpus)/1.5*100) : (lent>0?100:0);
 
   // 4. Timely Repayment — principal actually recovered this month vs. principal that fell due.
   let demand = 0;
   DB.loans.forEach(l=>{ generateLoanSchedule(l.id, to).filter(s=>s.dueDate>=from && s.dueDate<=to).forEach(s=>{ demand += s.principalDue; }); });
-  const recovered = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0);
+  const recovered = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0);
   const repayment = demand>0.5 ? Math.min(100, recovered/demand*100) : 100;
 
   // 5. Updated Books of Accounts — this app's own Data Quality Check, the same red/amber/green
@@ -5205,7 +5213,7 @@ function autoAssessCCOps(ccLoan, from, to){
 
   const dueCalc = computeBankLoanInterestSlabwise(ccLoan.id, from, to);
   const totalDue = dueCalc.total;
-  const interestPayments = DB.transactions.filter(t=>!t.reversed && t.bankLoanId===ccLoan.id && t.type==='Bank Loan Interest' && t.date>=from)
+  const interestPayments = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.bankLoanId===ccLoan.id && t.type==='Bank Loan Interest' && t.date>=from)
     .sort((a,b)=>a.date<b.date?-1:1);
   const totalPaid = Math.round(interestPayments.reduce((s,t)=>s+t.amount,0)*100)/100;
   let interestServicing;
@@ -5237,7 +5245,7 @@ function computeNabardOfficialGrading(){
   const attendanceScore = Math.round(Math.min(cfg.attendanceMarks, (avgAttended/totalMembers)*cfg.attendanceMarks)*100)/100;
 
   // 2. Regularity of Savings
-  const savingsDeposited = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').reduce((s,t)=>s+t.amount,0);
+  const savingsDeposited = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').reduce((s,t)=>s+t.amount,0);
   const compulsory = parseFloat(DB.profile.compulsorySavingAmount)||0;
   const savingsRequired = Math.round(compulsory*meetingsRequired*totalMembers*100)/100;
   const savingsNA = savingsRequired<=0;
@@ -5247,7 +5255,7 @@ function computeNabardOfficialGrading(){
   // Average Group Corpus = (Opening Corpus + Closing Corpus) / 2 for the period selected above —
   // a real historical figure computed from the ledger itself (see calculateAverageCorpus()), not
   // an approximation using today's corpus regardless of which period was asked for.
-  const lent = DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
+  const lent = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.type==='Disbursement').reduce((s,t)=>s+t.amount,0);
   const corpusInfo = calculateAverageCorpus(from, to);
   const avgCorpus = corpusInfo.average;
   const velocity = avgCorpus>0 ? lent/avgCorpus : 0;
@@ -5258,7 +5266,7 @@ function computeNabardOfficialGrading(){
   let demand=0;
   DB.loans.forEach(l=>{ generateLoanSchedule(l.id, to).filter(s=>s.dueDate>=from && s.dueDate<=to).forEach(s=>{ demand += s.principalDue; }); });
   demand = Math.round(demand*100)/100;
-  const recovery = Math.round(DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0)*100)/100;
+  const recovery = Math.round(DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.credit==='MEMBER_LOANS').reduce((s,t)=>s+t.amount,0)*100)/100;
   const repaymentNA = demand<=0;
   const repaymentScore = repaymentNA ? cfg.repaymentMarks : Math.round(Math.min(cfg.repaymentMarks, (recovery/demand)*cfg.repaymentMarks)*100)/100;
 
@@ -5287,7 +5295,7 @@ function computeNabardOfficialGrading(){
     const ccLoan = DB.bankLoans.find(b=>b.type==='CC');
     let txnCount = null;
     if(ccLoan){
-      txnCount = DB.transactions.filter(t=>!t.reversed && t.bankLoanId===ccLoan.id && t.date>=from && t.date<=to).length;
+      txnCount = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.bankLoanId===ccLoan.id && t.date>=from && t.date<=to).length;
     }
     const txnScore = txnCount==null ? null : (txnCount>=12?cfg.ccOps.transactionsMarks:(txnCount>=6?Math.round(cfg.ccOps.transactionsMarks*0.6):0));
     const interestTierMap = {within1:cfg.ccOps.interestServicingMarks, within2:Math.round(cfg.ccOps.interestServicingMarks*0.6), after2:0};
@@ -6968,7 +6976,7 @@ function registerAttendanceRows(from,to){
   });
 }
 function registerSavingsRows(from,to){
-  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS')
+  return DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS')
     .sort((a,b)=>a.date<b.date?-1:1)
     .map(t=>[fmtDate(t.date), t.voucherNo, esc(memberName(t.memberId)), rightCell(rupee(t.amount)), esc(t.narration||'')]);
 }
@@ -6978,13 +6986,13 @@ function registerLoanRows(from,to){
       l.interestRate+'%', rightCell(rupee(loanOutstanding(l.id).principal)), badge(l.status, l.status==='Closed'?'grey':'green')]);
 }
 function registerRepaymentRows(from,to){
-  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && (t.type==='Loan Repayment'||t.type==='Interest Received'))
+  return DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && (t.type==='Loan Repayment'||t.type==='Interest Received'))
     .sort((a,b)=>a.date<b.date?-1:1)
     .map(t=>[fmtDate(t.date), t.voucherNo, esc(memberName(t.memberId)), t.loanId||'—', t.type==='Loan Repayment'?rightCell(rupee(t.amount)):'',
       t.type==='Interest Received'?rightCell(rupee(t.amount)):'', esc(t.narration||'')]);
 }
 function registerInterestRows(from,to){
-  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && (t.credit==='INTEREST_INCOME'||t.credit==='BANK_INTEREST'||t.debit==='EXP_Interest Paid'))
+  return DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && (t.credit==='INTEREST_INCOME'||t.credit==='BANK_INTEREST'||t.debit==='EXP_Interest Paid'))
     .sort((a,b)=>a.date<b.date?-1:1)
     .map(t=>[fmtDate(t.date), t.voucherNo, t.credit==='INTEREST_INCOME'?'Interest Received — Internal Lending':(t.credit==='BANK_INTEREST'?'Interest Earned — Bank Deposits':'Interest Paid'),
       t.memberId?esc(memberName(t.memberId)):'—', rightCell(rupee(t.amount)), esc(t.narration||'')]);
@@ -7049,7 +7057,7 @@ function registerMinutesRows(from,to){
 // a receipt nor a payment in this sense, so it's excluded here exactly as the existing Financial
 // Statements screen already does for its own Receipts & Payments summary. --
 function registerReceiptsPaymentsRows(from,to){
-  return DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to &&
+  return DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to &&
       ((FUND_ACCOUNTS.includes(t.debit) && !FUND_ACCOUNTS.includes(t.credit)) || (FUND_ACCOUNTS.includes(t.credit) && !FUND_ACCOUNTS.includes(t.debit))))
     .sort((a,b)=>a.date<b.date?-1:1)
     .map(t=>{
@@ -7059,7 +7067,7 @@ function registerReceiptsPaymentsRows(from,to){
 }
 function registerReceiptsPaymentsTotals(from,to){
   let receipts=0, payments=0;
-  DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to).forEach(t=>{
+  DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to).forEach(t=>{
     if(FUND_ACCOUNTS.includes(t.debit) && !FUND_ACCOUNTS.includes(t.credit)) receipts += t.amount;
     if(FUND_ACCOUNTS.includes(t.credit) && !FUND_ACCOUNTS.includes(t.debit)) payments += t.amount;
   });
@@ -7286,7 +7294,7 @@ function viewRegisters(){
         shareBefore.push('Savings Balance: '+rupee(memberSavingsBalance(m.id)), 'Loan Outstanding (All Loans): '+rupee(memberLoanOutstanding(m.id)));
         bodyHtml += `<div class="grid cols2 no-print">${stat('Savings Balance', rupee(memberSavingsBalance(m.id)))}${stat('Loan Outstanding (All Loans)', rupee(memberLoanOutstanding(m.id)))}</div>`;
       }
-      const txns = DB.transactions.filter(t=>!t.reversed && t.memberId===m.id && t.date>=from && t.date<=to).sort((a,b)=>a.date<b.date?-1:1);
+      const txns = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.memberId===m.id && t.date>=from && t.date<=to).sort((a,b)=>a.date<b.date?-1:1);
       shareHeaders = ['Date','Voucher','Type','Loan ID','Debit','Credit','Amount','Narration'];
       shareRows = txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rupee(t.amount),t.narration]);
       bodyHtml += txns.length ? tbl(shareHeaders, txns.map(t=>[fmtDate(t.date),t.voucherNo,t.type,t.loanId||'—',accountLabel(t.debit),accountLabel(t.credit),rightCell(rupee(t.amount)),esc(t.narration)]))
@@ -7420,7 +7428,7 @@ function shareMemberLoanStatement(){ shareText((DB.profile.name||'SHG')+' — Lo
 // Statement screen above and by the bulk Monthly Statements screen below, so the exact same
 // text a member sees on screen is what actually gets shared, in either place.
 function memberStatementTxnGroups(memberId){
-  const allTxns = DB.transactions.filter(t=>t.memberId===memberId && !t.reversed).sort((a,b)=>a.date<b.date?-1:1);
+  const allTxns = DB.transactions.filter(t=>t.memberId===memberId && !t.reversed && !t.reversalOf).sort((a,b)=>a.date<b.date?-1:1);
   const savingsTxns = allTxns.filter(t=>t.debit==='MEMBER_SAVINGS'||t.credit==='MEMBER_SAVINGS');
   const loanTxns = allTxns.filter(t=>t.loanId || t.debit==='MEMBER_LOANS' || t.credit==='MEMBER_LOANS');
   return {allTxns, savingsTxns, loanTxns};
@@ -7513,7 +7521,7 @@ function computeStatementExtract(){
     filterFn = t=>t.debit===head||t.credit===head;
     normalDebit = (accountType(head)==='asset'||accountType(head)==='expense');
   }
-  const allTxns = DB.transactions.filter(t=>!t.reversed && filterFn(t)).sort((a,b)=>a.date<b.date?-1:(a.date>b.date?1:0));
+  const allTxns = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && filterFn(t)).sort((a,b)=>a.date<b.date?-1:(a.date>b.date?1:0));
   const before = allTxns.filter(t=>t.date<u.from);
   const within = allTxns.filter(t=>t.date>=u.from && t.date<=u.to);
   let opening = 0;
@@ -7794,7 +7802,7 @@ function bulkImportOpeningSavingsFile(){
       else if(date>todayStr()) errors.push('AsOnDate cannot be in the future');
       if(f.m){
         if(seen[f.m.id]) errors.push('Member appears more than once in this file'); seen[f.m.id]=true;
-        if(DB.transactions.some(t=>!t.reversed && t.type==='Opening Savings' && t.memberId===f.m.id)) errors.push('Opening savings already imported for this member');
+        if(DB.transactions.some(t=>!t.reversed && !t.reversalOf && t.type==='Opening Savings' && t.memberId===f.m.id)) errors.push('Opening savings already imported for this member');
       }
       return { memberId:f.m?f.m.id:'', memberName:o.MemberName||'', amount, date, errors };
     });
@@ -8504,13 +8512,13 @@ function aiAsk(qRaw){
     observation: c.tb.diff!==0 ? aiT('A mismatch usually points to a corrupted backup restore or a manually edited data file rather than normal data entry.','बेमेल आमतौर पर खराब बैकअप पुनर्स्थापना या मैन्युअल रूप से संपादित डेटा फ़ाइल की ओर इशारा करता है, सामान्य डेटा प्रविष्टि की ओर नहीं।') : undefined,
     action: c.tb.diff!==0 ? aiT('Open Data Quality Check for the specific record(s) involved, or restore your last known-good backup.','संबंधित रिकॉर्ड(ों) के लिए डेटा गुणवत्ता जाँच खोलें, या अपना अंतिम सही बैकअप पुनर्स्थापित करें।') : undefined});
   if(has('transactions above','बड़े लेनदेन') || (has('transaction','लेनदेन') && has('10,000','10000','above','large','से अधिक'))) {
-    const big = DB.transactions.filter(t=>!t.reversed && t.amount>10000).sort((a,b)=>b.amount-a.amount).slice(0,15);
+    const big = DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.amount>10000).sort((a,b)=>b.amount-a.amount).slice(0,15);
     return Object.assign({}, base, {answer: big.length? aiT(big.length+' transaction(s) above ₹10,000 found.', '₹10,000 से अधिक के '+big.length+' लेनदेन मिले।') : aiT('No transaction above ₹10,000 was found.','₹10,000 से अधिक का कोई लेनदेन नहीं मिला।'),
       figures: big.map(t=>fmtDate(t.date)+' — '+t.type+': '+rupee(t.amount)+' ('+t.voucherNo+')')});
   }
   if(has('not paid','have not paid','who has not paid','जमा नहीं','जिन्होंने जमा नहीं') && has('month','this month','माह','इस माह')) {
     const from = c.ym+'-01', to = todayStr();
-    const paidIds = new Set(DB.transactions.filter(t=>!t.reversed && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').map(t=>t.memberId));
+    const paidIds = new Set(DB.transactions.filter(t=>!t.reversed && !t.reversalOf && t.date>=from && t.date<=to && t.credit==='MEMBER_SAVINGS').map(t=>t.memberId));
     const notPaid = activeMembers().filter(m=>!paidIds.has(m.id));
     return Object.assign({}, base, {answer: notPaid.length? aiT(notPaid.length+' active member(s) have not made a savings entry this month ('+c.ym+').', c.ym+' में '+notPaid.length+' सक्रिय सदस्य(ओं) ने अभी तक बचत प्रविष्टि नहीं की है।') : aiT('Every active member has made a savings entry this month.','हर सक्रिय सदस्य ने इस माह बचत प्रविष्टि कर दी है।'),
       figures: notPaid.map(m=>m.name)});
@@ -8797,7 +8805,7 @@ function viewAIDailyReview(){
     ${stat(aiT('Cash Position','नकद स्थिति'), rupee(c.cash))}${stat(aiT('Bank Position','बैंक स्थिति'), rupee(c.bank))}${stat(aiT('UPI Position','यूपीआई स्थिति'), rupee(c.upi))}
     ${stat(aiT('Trial Balance','तलपट'), c.tb.diff===0?aiT('Matched','मेल खाया'):aiT('Mismatch ','बेमेल ')+rupee(Math.abs(c.tb.diff)), c.tb.diff!==0)}
   </div>`);
-  const recentTxns = DB.transactions.filter(t=>!t.reversed).slice(-10).reverse();
+  const recentTxns = DB.transactions.filter(t=>!t.reversed && !t.reversalOf).slice(-10).reverse();
   html += aiCard(aiT('Recent Activity (last 10 postings)','हाल की गतिविधि (अंतिम 10 प्रविष्टियाँ)'), recentTxns.length ? tbl([aiT('Date','दिनांक'),aiT('Type','प्रकार'),aiT('Amount','राशि')], recentTxns.map(t=>[fmtDate(t.date), t.type, rightCell(rupee(t.amount))])) : `<p class="hint">${aiT('No transactions recorded yet.','अभी तक कोई लेनदेन दर्ज नहीं हुआ।')}</p>`);
   html += aiCard(aiT('Loans','ऋण'), `<div class="grid cols4">
     ${stat(aiT('Active Loans','सक्रिय ऋण'), c.activeLoans.length)}${stat(aiT('Total Outstanding','कुल बकाया'), rupee(c.totalLoanOutstanding))}
@@ -9210,7 +9218,7 @@ function seedDemoDataCore(){
       // separate "Complete Sample Data" generator always had one). Posted in the very first month,
       // same as a real SHG's RF typically arrives early in its life.
       if(i===0){ try{ postTxn({date:dateStr,type:'Revolving Fund Receipt',debit:'BANK',credit:'REVOLVING_FUND',amount:20000,narration:'DEMO Revolving Fund received from VO/CLF'}); DB.revolvingFund.push({date:dateStr,source:'Demo VO/CLF',amount:20000,rate:0,period:60,bank:'BANK',demo:true}); }catch(e){} }
-      if(i===1){ try{ postTxn({date:dateStr,type:'CIF Receipt',debit:'BANK',credit:'CIF',amount:150000,narration:'DEMO CIF received from VO/CLF'}); DB.cif.push({date:dateStr,source:'Demo VO/CLF',amount:150000,rate:9,period:36,bank:'BANK',demo:true});}catch(e){} }
+      if(i===1){ try{ const demoCifId = nextId('CIF'); postTxn({date:dateStr,type:'CIF Receipt',debit:'BANK',credit:'CIF',amount:150000,cifId:demoCifId,narration:'DEMO CIF received from VO/CLF ('+demoCifId+')'}); DB.cif.push({id:demoCifId,date:dateStr,source:'Demo VO/CLF',amount:150000,rate:9,period:36,interestMethod:'reducing',frequency:'Monthly',bank:'BANK',status:'Active',demo:true});}catch(e){} }
       if(i===2 && demoCC){ try{ postTxn({date:dateStr,type:'Bank Loan Drawal',debit:'BANK',credit:'BANK_CC',amount:40000,bankLoanId:demoCC.id,narration:'DEMO CC drawal'}); }catch(e){} }
       if(i>0 && i%3===0){ try{ postTxn({date:dateStr,type:'Bank Interest Credited',debit:'BANK',credit:'BANK_INTEREST',amount:300+Math.round(Math.random()*500),narration:'DEMO quarterly bank interest credited'}); }catch(e){} }
       if(i===5){ try{ postTxn({date:dateStr,type:'Donation',debit:'CASH',credit:'DONATION_INCOME',amount:5000,narration:'DEMO donation received'}); }catch(e){} }
