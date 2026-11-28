@@ -108,6 +108,7 @@ input[type=text],input[type=number],input[type=date],input[type=tel],select,text
 }
 input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;}
 .field{margin-bottom:11px;}
+.fhint{font-size:11.5px;line-height:1.35;margin-top:3px}.fhint-tip{color:#5b6b7a}.fhint-warn{display:block;color:#b45309;font-weight:600}.fhint-warn:empty{display:none}@media(max-width:700px){.tutgrid{grid-template-columns:1fr!important}}@media print{.fhint{display:none}}
 .row{display:flex;gap:10px;flex-wrap:wrap;}
 .row>.field{flex:1;min-width:150px;}
 .hint{font-size:11.5px;color:var(--muted);margin-top:3px;}
@@ -278,6 +279,7 @@ const ROLES = ['SHG Admin','Bookkeeper','President/Secretary','Vitta Sakhi/Bank 
    badges — are translated. Member names, narrations, and other data the user types
    in are never touched, so nothing entered in the app gets silently rewritten. */
 const TRANSLATIONS = {
+  'Video Tutorials':'वीडियो ट्यूटोरियल','Bank Loan to SHG':'समूह को बैंक ऋण','Corpus':'कॉर्पस (कोष)',
   // Nav groups
   'Overview':'अवलोकन','Field Operations':'फील्ड कार्य','Accounting':'लेखांकन',
   'Quality & Compliance':'गुणवत्ता एवं अनुपालन','Records':'अभिलेख','System':'सिस्टम',
@@ -1164,6 +1166,7 @@ const NAV = [
   {id:'backup', label:'Backup & Restore', icon:'⇅'},
   {id:'settings', label:'Settings', icon:'⚙'},
   {id:'help', label:'Help & Training', icon:'?'},
+  {id:'tutorials', label:'Video Tutorials', icon:'🎬'},
   {id:'helpai', label:'Help Assistant', icon:'✦'}
 ];
 // "UPI" is offered as an entry mode on every entry screen (via paymentModeOptionsHTML()), but
@@ -1208,7 +1211,7 @@ function render(){
       reconciliation: viewReconciliation, dataquality: viewDataQuality, healthcheck: viewHealthCheck, grading: viewGrading,
       lokos: viewLokos, mcp: viewMCP, bankapp: viewBankLoanApplication, bankloan: viewBankLoanToSHG, closing: viewMonthClosing, audit: viewAudit, reports: viewReports, registers: viewRegisters, memberstatement: viewMemberStatement, monthlystatements: viewMonthlyStatements, consolidatedstatement: viewConsolidatedStatement, statementextract: viewStatementExtract,
       bulkimport: viewBulkImport,
-      backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI,
+      backup: viewBackup, settings: viewSettings, help: viewHelp, helpai: viewHelpAI, tutorials: viewTutorials,
       aimanager: viewAIManager, aiask: viewAIAsk, aidaily: viewAIDailyReview, aidq: viewAIDataQuality,
       airecovery: viewAILoanRecovery, aimonthend: viewAIMonthEnd, aigrading: viewAIGrading,
       aibusiness: viewAIBusiness, aireports: viewAIReports, aitraining: viewAITraining
@@ -1257,6 +1260,7 @@ function render(){
     }
   }
   c.innerHTML = html;
+  applyFieldHints(c);
   translatePage();
 }
 function closeModal(){ document.getElementById('modalRoot').innerHTML=''; document.body.classList.remove('modal-open'); }
@@ -1268,6 +1272,7 @@ function closeModal(){ document.getElementById('modalRoot').innerHTML=''; docume
 function openModal(html, persistent){
   const overlayClick = persistent ? '' : ' onclick="if(event.target===this)closeModal()"';
   document.getElementById('modalRoot').innerHTML = `<div class="overlay"${overlayClick}><div class="modal">${html}</div></div>`;
+  applyFieldHints(document.getElementById('modalRoot'));
   translateNode(document.getElementById('modalRoot'));
   // Marks <body> so print CSS can show ONLY the open document (Appropriation Statement, Loan
   // Schedule, MCP, etc.) and hide the screen sitting behind it — printing a modal used to also
@@ -1277,23 +1282,26 @@ function openModal(html, persistent){
 }
 
 /* ---------------- Language (English / Hindi) ---------------- */
+const TRANSLATIONS_PA = {"Bank Loan to SHG":"ਸਮੂਹ ਨੂੰ ਬੈਂਕ ਕਰਜ਼ਾ","Corpus":"ਕਾਰਪਸ (ਕੋਸ਼)","AI SHG Manager":"ਏ.ਆਈ. ਸਮੂਹ ਪ੍ਰਬੰਧਕ","Overview": "ਸੰਖੇਪ ਜਾਣਕਾਰੀ", "Field Operations": "ਖੇਤਰੀ ਕੰਮ", "Accounting": "ਲੇਖਾ-ਜੋਖਾ", "Quality & Compliance": "ਗੁਣਵੱਤਾ ਤੇ ਪਾਲਣਾ", "Records": "ਰਿਕਾਰਡ", "System": "ਸਿਸਟਮ", "Statements": "ਵਿਵਰਣ", "Monthly Member Statements": "ਮਾਸਿਕ ਮੈਂਬਰ ਵਿਵਰਣ", "Consolidated Monthly Statement": "ਇਕੱਠਾ ਮਾਸਿਕ ਵਿਵਰਣ", "Month-wise Savings & Loan Statement – Printable SHG Record": "ਮਹੀਨੇ-ਵਾਰ ਬੱਚਤ ਤੇ ਕਰਜ਼ਾ ਵਿਵਰਣ – ਛਾਪਣਯੋਗ ਸਮੂਹ ਰਿਕਾਰਡ", "Generate Monthly Statements": "ਮਾਸਿਕ ਵਿਵਰਣ ਤਿਆਰ ਕਰੋ", "Print All Members – Monthly Statements": "ਸਾਰੇ ਮੈਂਬਰਾਂ ਦੇ ਮਾਸਿਕ ਵਿਵਰਣ ਛਾਪੋ", "View Statement": "ਵਿਵਰਣ ਵੇਖੋ", "Print Statement": "ਵਿਵਰਣ ਛਾਪੋ", "Statement History": "ਵਿਵਰਣ ਦਾ ਇਤਿਹਾਸ", "Financial Year": "ਵਿੱਤੀ ਸਾਲ", "Month": "ਮਹੀਨਾ", "From Date": "ਸ਼ੁਰੂ ਦੀ ਮਿਤੀ", "To Date": "ਅੰਤਿਮ ਮਿਤੀ", "View Consolidated": "ਇਕੱਠਾ ਵਿਵਰਣ ਵੇਖੋ", "Print Consolidated": "ਇਕੱਠਾ ਵਿਵਰਣ ਛਾਪੋ", "Mark This Month as Sent": "ਇਸ ਮਹੀਨੇ ਨੂੰ ਭੇਜਿਆ ਹੋਇਆ ਦਰਜ ਕਰੋ", "Open / Regenerate": "ਖੋਲ੍ਹੋ / ਦੁਬਾਰਾ ਤਿਆਰ ਕਰੋ", "Opening Savings": "ਸ਼ੁਰੂਆਤੀ ਬੱਚਤ", "Closing Savings": "ਅੰਤਿਮ ਬੱਚਤ", "Loan O/S (closing)": "ਕਰਜ਼ਾ ਬਕਾਇਆ (ਅੰਤਿਮ)", "Overdue (closing)": "ਬਕਾਇਆ ਕਿਸ਼ਤਾਂ (ਅੰਤਿਮ)", "Statement": "ਵਿਵਰਣ", "Dashboard": "ਡੈਸ਼ਬੋਰਡ", "SHG Profile": "ਸਮੂਹ ਦਾ ਪ੍ਰੋਫਾਈਲ", "Members": "ਮੈਂਬਰ", "Meetings": "ਮੀਟਿੰਗਾਂ", "Savings": "ਬੱਚਤ", "Loans": "ਕਰਜ਼ੇ", "CIF": "ਸੀ.ਆਈ.ਐਫ਼.", "Transactions / Vouchers": "ਲੈਣ-ਦੇਣ / ਵਾਊਚਰ", "Cash Book": "ਨਕਦ ਵਹੀ", "Bank Book": "ਬੈਂਕ ਵਹੀ", "General Ledger": "ਆਮ ਖਾਤਾ ਵਹੀ", "Trial Balance": "ਤਲਪਟ (ਟ੍ਰਾਇਲ ਬੈਲੈਂਸ)", "Financial Statements": "ਵਿੱਤੀ ਵਿਵਰਣ", "Bank Reconciliation": "ਬੈਂਕ ਮਿਲਾਨ", "Data Quality Check": "ਡੇਟਾ ਗੁਣਵੱਤਾ ਜਾਂਚ", "Health Check": "ਸਿਹਤ ਜਾਂਚ", "SHG Grading": "ਸਮੂਹ ਗ੍ਰੇਡਿੰਗ", "LokOS Data Readiness & Export": "ਲੋਕਓਐਸ ਡੇਟਾ ਤਿਆਰੀ ਤੇ ਨਿਰਯਾਤ", "Audit Trail": "ਆਡਿਟ ਟ੍ਰੇਲ", "Reports": "ਰਿਪੋਰਟਾਂ", "Member Statement": "ਮੈਂਬਰ ਵਿਵਰਣ", "Backup & Restore": "ਬੈਕਅੱਪ ਤੇ ਬਹਾਲੀ", "Settings": "ਸੈਟਿੰਗਾਂ", "Help & Training": "ਸਹਾਇਤਾ ਤੇ ਸਿਖਲਾਈ", "Help Assistant": "ਸਹਾਇਕ", "Member Register": "ਮੈਂਬਰ ਰਜਿਸਟਰ", "SHG Meetings": "ਸਮੂਹ ਮੀਟਿੰਗਾਂ", "Savings Register": "ਬੱਚਤ ਰਜਿਸਟਰ", "Member Loans": "ਮੈਂਬਰ ਕਰਜ਼ੇ", "CIF Management": "ਸੀ.ਆਈ.ਐਫ਼. ਪ੍ਰਬੰਧ", "About This Application": "ਇਸ ਐਪ ਬਾਰੇ", "Get Started": "ਸ਼ੁਰੂ ਕਰੋ", "Recent Transactions": "ਤਾਜ਼ਾ ਲੈਣ-ਦੇਣ", "New Journal Voucher": "ਨਵਾਂ ਜਰਨਲ ਵਾਊਚਰ", "New Loan": "ਨਵਾਂ ਕਰਜ਼ਾ", "Record CIF Received": "ਸੀ.ਆਈ.ਐਫ਼. ਪ੍ਰਾਪਤੀ ਦਰਜ ਕਰੋ", "Bank Accounts": "ਬੈਂਕ ਖਾਤੇ", "Add Bank Account": "ਬੈਂਕ ਖਾਤਾ ਜੋੜੋ", "Opening Balances": "ਸ਼ੁਰੂਆਤੀ ਬਕਾਏ", "Expense Categories": "ਖਰਚ ਦੀਆਂ ਸ਼੍ਰੇਣੀਆਂ", "Monthly / Annual Closing": "ਮਾਸਿਕ / ਸਾਲਾਨਾ ਬੰਦ", "Grading Framework Version": "ਗ੍ਰੇਡਿੰਗ ਢਾਂਚੇ ਦਾ ਸੰਸਕਰਣ", "Current User": "ਮੌਜੂਦਾ ਵਰਤੋਂਕਾਰ", "Reset Application": "ਐਪ ਰੀਸੈੱਟ ਕਰੋ", "Restore from Backup": "ਬੈਕਅੱਪ ਤੋਂ ਬਹਾਲ ਕਰੋ", "Export Full Backup": "ਪੂਰਾ ਬੈਕਅੱਪ ਕੱਢੋ", "Backup Status": "ਬੈਕਅੱਪ ਦੀ ਸਥਿਤੀ", "Demo Data": "ਡੈਮੋ ਡੇਟਾ", "Device & Browser": "ਡਿਵਾਈਸ ਤੇ ਬ੍ਰਾਊਜ਼ਰ", "Data Quality Detail": "ਡੇਟਾ ਗੁਣਵੱਤਾ ਵੇਰਵਾ", "Data Quality Snapshot": "ਡੇਟਾ ਗੁਣਵੱਤਾ ਝਲਕ", "Sample Demo Data": "ਨਮੂਨਾ ਡੈਮੋ ਡੇਟਾ", "Conduct Meeting": "ਮੀਟਿੰਗ ਕਰੋ", "Record a Standalone Savings / Withdrawal Entry": "ਵੱਖਰੀ ਬੱਚਤ / ਨਿਕਾਸੀ ਐਂਟਰੀ ਦਰਜ ਕਰੋ", "Reconciliation vs Local Accounting Records": "ਸਥਾਨਕ ਲੇਖਾ ਰਿਕਾਰਡ ਨਾਲ ਮਿਲਾਨ", "Income & Expenditure Account": "ਆਮਦਨ ਤੇ ਖਰਚ ਖਾਤਾ", "Monthly Grading History": "ਮਹੀਨੇ-ਵਾਰ ਗ੍ਰੇਡਿੰਗ ਇਤਿਹਾਸ", "Try asking about…": "ਇਹ ਪੁੱਛ ਕੇ ਵੇਖੋ…", "Conversation": "ਗੱਲਬਾਤ", "Save": "ਸੰਭਾਲੋ", "Add": "ਜੋੜੋ", "Edit": "ਸੋਧੋ", "Cancel": "ਰੱਦ ਕਰੋ", "Remove": "ਹਟਾਓ", "Reverse": "ਉਲਟਾਓ", "Reopen": "ਮੁੜ ਖੋਲ੍ਹੋ", "Reconcile": "ਮਿਲਾਨ ਕਰੋ", "Ask": "ਪੁੱਛੋ", "Save Profile": "ਪ੍ਰੋਫਾਈਲ ਸੰਭਾਲੋ", "Save Member": "ਮੈਂਬਰ ਸੰਭਾਲੋ", "Post Meeting": "ਮੀਟਿੰਗ ਪੋਸਟ ਕਰੋ", "Post Voucher": "ਵਾਊਚਰ ਪੋਸਟ ਕਰੋ", "Post Entry": "ਐਂਟਰੀ ਪੋਸਟ ਕਰੋ", "Post CIF Receipt": "ਸੀ.ਆਈ.ਐਫ਼. ਪ੍ਰਾਪਤੀ ਪੋਸਟ ਕਰੋ", "Disburse Loan": "ਕਰਜ਼ਾ ਵੰਡੋ", "Mark Closed": "ਬੰਦ ਦਰਜ ਕਰੋ", "Close Period": "ਮਿਆਦ ਬੰਦ ਕਰੋ", "Set Up SHG Profile": "ਸਮੂਹ ਪ੍ਰੋਫਾਈਲ ਬਣਾਓ", "Add Members": "ਮੈਂਬਰ ਜੋੜੋ", "Load Sample Demo Data": "ਨਮੂਨਾ ਡੈਮੋ ਡੇਟਾ ਲੋਡ ਕਰੋ", "Clear Demo Data": "ਡੈਮੋ ਡੇਟਾ ਹਟਾਓ", "Take Backup Now": "ਹੁਣੇ ਬੈਕਅੱਪ ਲਓ", "Download Backup (.json)": "ਬੈਕਅੱਪ ਡਾਊਨਲੋਡ ਕਰੋ (.json)", "Restore from File": "ਫ਼ਾਈਲ ਤੋਂ ਬਹਾਲ ਕਰੋ", "Erase All Data": "ਸਾਰਾ ਡੇਟਾ ਮਿਟਾਓ", "Export Members CSV": "ਮੈਂਬਰਾਂ ਦੀ CSV ਕੱਢੋ", "Export Savings CSV": "ਬੱਚਤ ਦੀ CSV ਕੱਢੋ", "Export Loans CSV": "ਕਰਜ਼ਿਆਂ ਦੀ CSV ਕੱਢੋ", "Export Transactions CSV": "ਲੈਣ-ਦੇਣ ਦੀ CSV ਕੱਢੋ", "Date": "ਮਿਤੀ", "Amount ₹": "ਰਕਮ ₹", "Amount ₹ *": "ਰਕਮ ₹ *", "Name": "ਨਾਮ", "Name *": "ਨਾਮ *", "Member": "ਮੈਂਬਰ", "Member (optional)": "ਮੈਂਬਰ (ਚੋਣਵਾਂ)", "Member *": "ਮੈਂਬਰ *", "Mobile": "ਮੋਬਾਈਲ", "Village": "ਪਿੰਡ", "Status": "ਸਥਿਤੀ", "Narration": "ਵੇਰਵਾ", "Type": "ਕਿਸਮ", "Purpose": "ਮਕਸਦ", "Occupation": "ਕਿੱਤਾ", "Nominee": "ਨਾਮਜ਼ਦ", "President": "ਪ੍ਰਧਾਨ", "Secretary": "ਸਕੱਤਰ", "Treasurer / Bookkeeper": "ਖ਼ਜ਼ਾਨਚੀ / ਹਿਸਾਬ-ਕਿਤਾਬ ਰੱਖਣ ਵਾਲਾ", "Contact Details": "ਸੰਪਰਕ ਵੇਰਵਾ", "State": "ਰਾਜ", "District": "ਜ਼ਿਲ੍ਹਾ", "Block": "ਬਲਾਕ", "Gram Panchayat": "ਗ੍ਰਾਮ ਪੰਚਾਇਤ", "VO / CLF": "ਗ੍ਰਾਮ ਸੰਗਠਨ / ਕਲੱਸਟਰ ਫੈਡਰੇਸ਼ਨ", "Formation Date": "ਸਥਾਪਨਾ ਦੀ ਮਿਤੀ", "Meeting Day": "ਮੀਟਿੰਗ ਦਾ ਦਿਨ", "Meeting Frequency": "ਮੀਟਿੰਗ ਦੀ ਗਿਣਤੀ", "SHG ID": "ਸਮੂਹ ਆਈ.ਡੀ.", "SHG Name *": "ਸਮੂਹ ਦਾ ਨਾਮ *", "Financial Year Start (MM-DD)": "ਵਿੱਤੀ ਸਾਲ ਦੀ ਸ਼ੁਰੂਆਤ (ਮਹੀਨਾ-ਦਿਨ)", "Bank Name": "ਬੈਂਕ ਦਾ ਨਾਮ", "Branch": "ਸ਼ਾਖਾ", "Account Number": "ਖਾਤਾ ਨੰਬਰ", "IFSC": "ਆਈ.ਐਫ਼.ਐਸ.ਸੀ.", "Date of Joining": "ਸ਼ਾਮਲ ਹੋਣ ਦੀ ਮਿਤੀ", "Bank Account No.": "ਬੈਂਕ ਖਾਤਾ ਨੰ.", "Meeting Date *": "ਮੀਟਿੰਗ ਦੀ ਮਿਤੀ *", "Collect In": "ਇਸ ਵਿੱਚ ਇਕੱਠਾ ਕਰੋ", "Cash / Bank": "ਨਕਦ / ਬੈਂਕ", "Cash / Bank Out": "ਨਕਦ / ਬੈਂਕ ਤੋਂ ਅਦਾਇਗੀ", "Category": "ਸ਼੍ਰੇਣੀ", "Sanction Date": "ਮਨਜ਼ੂਰੀ ਦੀ ਮਿਤੀ", "Disbursement Date": "ਵੰਡ ਦੀ ਮਿਤੀ", "Principal ₹": "ਮੂਲ ਰਕਮ ₹", "Principal ₹ *": "ਮੂਲ ਰਕਮ ₹ *", "Interest Rate % p.a.": "ਵਿਆਜ ਦਰ % ਸਾਲਾਨਾ", "Instalments": "ਕਿਸ਼ਤਾਂ", "Source": "ਸਰੋਤ", "Received Into": "ਇਸ ਵਿੱਚ ਪ੍ਰਾਪਤ", "Repayment Period (months)": "ਮੁੜ-ਅਦਾਇਗੀ ਦੀ ਮਿਆਦ (ਮਹੀਨੇ)", "Debit Account *": "ਡੈਬਿਟ ਖਾਤਾ *", "Credit Account *": "ਕ੍ਰੈਡਿਟ ਖਾਤਾ *", "Select Account": "ਖਾਤਾ ਚੁਣੋ", "Select Member": "ਮੈਂਬਰ ਚੁਣੋ", "Role": "ਭੂਮਿਕਾ", "Version Label": "ਸੰਸਕਰਣ ਲੇਬਲ", "Opening Cash ₹": "ਸ਼ੁਰੂਆਤੀ ਨਕਦ ₹", "Opening Bank ₹": "ਸ਼ੁਰੂਆਤੀ ਬੈਂਕ ₹", "As on Date": "ਇਸ ਮਿਤੀ ਤੱਕ", "Close Month": "ਮਹੀਨਾ ਬੰਦ ਕਰੋ", "Reopen Month": "ਮਹੀਨਾ ਮੁੜ ਖੋਲ੍ਹੋ", "Bank Statement Balance ₹": "ਬੈਂਕ ਸਟੇਟਮੈਂਟ ਦਾ ਬਕਾਇਆ ₹", "Unpresented Cheques (−) ₹": "ਅਣ-ਭੁਗਤਾਨੇ ਚੈੱਕ (−) ₹", "Deposits in Transit (+) ₹": "ਰਸਤੇ ਵਿੱਚ ਜਮ੍ਹਾਂ (+) ₹", "Bank Charges Not Recorded (−) ₹": "ਦਰਜ ਨਾ ਹੋਏ ਬੈਂਕ ਖਰਚੇ (−) ₹", "Interest Credited Not Recorded (+) ₹": "ਦਰਜ ਨਾ ਹੋਇਆ ਜਮ੍ਹਾਂ ਹੋਇਆ ਵਿਆਜ (+) ₹", "Ask a question about using this app": "ਇਸ ਐਪ ਦੀ ਵਰਤੋਂ ਬਾਰੇ ਸਵਾਲ ਪੁੱਛੋ", "Account Head": "ਖਾਤਾ ਸਿਰਲੇਖ", "Account No.": "ਖਾਤਾ ਨੰ.", "Action": "ਕਾਰਵਾਈ", "Amount": "ਰਕਮ", "Attendance": "ਹਾਜ਼ਰੀ", "Balance": "ਬਕਾਇਆ", "Bank": "ਬੈਂਕ", "Check": "ਜਾਂਚ", "Closing Balance": "ਅੰਤਿਮ ਬਕਾਇਆ", "Credit": "ਕ੍ਰੈਡਿਟ", "Debit": "ਡੈਬਿਟ", "Details": "ਵੇਰਵੇ", "Expenses": "ਖਰਚੇ", "Father/Husband": "ਪਿਤਾ/ਪਤੀ", "Framework Version": "ਢਾਂਚੇ ਦਾ ਸੰਸਕਰਣ", "Grade": "ਗ੍ਰੇਡ", "Head": "ਸਿਰਲੇਖ", "ID": "ਆਈ.ਡੀ.", "Item": "ਮੱਦ", "Loan ID": "ਕਰਜ਼ਾ ਆਈ.ਡੀ.", "Loan O/S": "ਕਰਜ਼ਾ ਬਕਾਇਆ", "New Loans": "ਨਵੇਂ ਕਰਜ਼ੇ", "Next Due": "ਅਗਲੀ ਕਿਸ਼ਤ", "O/S Principal": "ਬਕਾਇਆ ਮੂਲ ਰਕਮ", "Particulars": "ਵੇਰਵਾ", "Payments (Cr)": "ਅਦਾਇਗੀਆਂ (ਕ੍ਰੈਡਿਟ)", "Period (months)": "ਮਿਆਦ (ਮਹੀਨੇ)", "Principal": "ਮੂਲ ਰਕਮ", "Rate %": "ਦਰ %", "Receipts (Dr)": "ਪ੍ਰਾਪਤੀਆਂ (ਡੈਬਿਟ)", "Repayment": "ਮੁੜ-ਅਦਾਇਗੀ", "Result": "ਨਤੀਜਾ", "SHG Accounting Records": "ਸਮੂਹ ਦੇ ਲੇਖਾ ਰਿਕਾਰਡ", "Savings Bal.": "ਬੱਚਤ ਬਕਾਇਆ", "Score": "ਅੰਕ", "Total Saved": "ਕੁੱਲ ਬੱਚਤ", "User": "ਵਰਤੋਂਕਾਰ", "Voucher": "ਵਾਊਚਰ", "When": "ਕਦੋਂ", "Withdrawn": "ਨਿਕਾਸੀ", "Active": "ਚਾਲੂ", "Inactive": "ਗ਼ੈਰ-ਸਰਗਰਮ", "Exited": "ਬਾਹਰ ਹੋਇਆ", "Closed": "ਬੰਦ", "Overdue": "ਮਿਆਦ ਲੰਘੀ", "Posted": "ਪੋਸਟ ਹੋਇਆ", "Reversed": "ਉਲਟਾਇਆ ਗਿਆ", "Reversal": "ਉਲਟਾਅ", "Ready": "ਤਿਆਰ", "Error": "ਗ਼ਲਤੀ", "Attention Required": "ਧਿਆਨ ਦੀ ਲੋੜ", "Healthy": "ਠੀਕ", "Needs Attention": "ਧਿਆਨ ਦੀ ਲੋੜ ਹੈ", "Attention Recommended": "ਧਿਆਨ ਦੇਣ ਦੀ ਸਿਫ਼ਾਰਸ਼", "Never": "ਕਦੇ ਨਹੀਂ", "Yes": "ਹਾਂ", "No": "ਨਹੀਂ", "Online": "ਆਨਲਾਈਨ", "Weekly": "ਹਫ਼ਤਾਵਾਰੀ", "Fortnightly": "ਪੰਦਰਵਾੜਾ", "Monthly": "ਮਹੀਨਾਵਾਰ", "Monday": "ਸੋਮਵਾਰ", "Tuesday": "ਮੰਗਲਵਾਰ", "Wednesday": "ਬੁੱਧਵਾਰ", "Thursday": "ਵੀਰਵਾਰ", "Friday": "ਸ਼ੁੱਕਰਵਾਰ", "Saturday": "ਸ਼ਨੀਵਾਰ", "Sunday": "ਐਤਵਾਰ", "Cash": "ਨਕਦ", "Unnamed SHG": "ਬਿਨਾਂ ਨਾਮ ਦਾ ਸਮੂਹ", "Deposit to Bank": "ਬੈਂਕ ਵਿੱਚ ਜਮ੍ਹਾਂ", "Due Now": "ਹੁਣ ਦੇਣਯੋਗ", "Row Total": "ਕਤਾਰ ਦਾ ਕੁੱਲ", "Present": "ਹਾਜ਼ਰ", "Total Savings": "ਕੁੱਲ ਬੱਚਤ", "Total Principal + Interest": "ਕੁੱਲ ਮੂਲ + ਵਿਆਜ", "Total Fines": "ਕੁੱਲ ਜੁਰਮਾਨੇ", "Total Received": "ਕੁੱਲ ਪ੍ਰਾਪਤ", "Principal Due": "ਦੇਣਯੋਗ ਮੂਲ ਰਕਮ", "Interest Due": "ਦੇਣਯੋਗ ਵਿਆਜ", "Arrears": "ਬਕਾਇਆ ਰਕਮ", "Total Due": "ਕੁੱਲ ਦੇਣਯੋਗ", "Use in Grid": "ਗ੍ਰਿੱਡ ਵਿੱਚ ਵਰਤੋ", "Post Deposit": "ਜਮ੍ਹਾਂ ਪੋਸਟ ਕਰੋ", "Bank Account": "ਬੈਂਕ ਖਾਤਾ", "Deposit / Reference No.": "ਜਮ੍ਹਾਂ / ਹਵਾਲਾ ਨੰ.", "Remarks": "ਟਿੱਪਣੀਆਂ", "Deposit Date": "ਜਮ੍ਹਾਂ ਦੀ ਮਿਤੀ", "Confirm & Close": "ਪੁਸ਼ਟੀ ਕਰੋ ਤੇ ਬੰਦ ਕਰੋ", "Run Closing Checklist": "ਬੰਦ ਕਰਨ ਦੀ ਜਾਂਚ ਚਲਾਓ", "Meeting Summary": "ਮੀਟਿੰਗ ਦਾ ਸਾਰ", "Back to Edit": "ਸੋਧ ਤੇ ਵਾਪਸ ਜਾਓ", "Review & Post Meeting": "ਮੀਟਿੰਗ ਦੀ ਸਮੀਖਿਆ ਕਰੋ ਤੇ ਪੋਸਟ ਕਰੋ", "Deposit Meeting Collection into Bank (optional)": "ਮੀਟਿੰਗ ਦੀ ਉਗਰਾਹੀ ਬੈਂਕ ਵਿੱਚ ਜਮ੍ਹਾਂ ਕਰੋ (ਚੋਣਵਾਂ)", "New Loans Disbursed": "ਵੰਡੇ ਗਏ ਨਵੇਂ ਕਰਜ਼ੇ", "Cash Collection": "ਨਕਦ ਉਗਰਾਹੀ", "Bank Collection": "ਬੈਂਕ ਉਗਰਾਹੀ", "Proposed Bank Deposit": "ਪ੍ਰਸਤਾਵਿਤ ਬੈਂਕ ਜਮ੍ਹਾਂ", "Net Cash Remaining": "ਬਾਕੀ ਸ਼ੁੱਧ ਨਕਦ", "Members Present": "ਹਾਜ਼ਰ ਮੈਂਬਰ", "Total Collection": "ਕੁੱਲ ਉਗਰਾਹੀ", "Net Collection (after new loans & expenses)": "ਸ਼ੁੱਧ ਉਗਰਾਹੀ (ਨਵੇਂ ਕਰਜ਼ਿਆਂ ਤੇ ਖਰਚਿਆਂ ਤੋਂ ਬਾਅਦ)", "Principal Paid": "ਅਦਾ ਕੀਤੀ ਮੂਲ ਰਕਮ", "Interest Paid": "ਅਦਾ ਕੀਤਾ ਵਿਆਜ", "Balance Due": "ਬਕਾਇਆ ਰਕਮ", "Eligible for Closure": "ਬੰਦ ਕਰਨ ਯੋਗ", "Total Principal": "ਕੁੱਲ ਮੂਲ ਰਕਮ", "Total Interest": "ਕੁੱਲ ਵਿਆਜ", "Members with Repayment Due": "ਅਦਾਇਗੀ ਵਾਲੇ ਮੈਂਬਰ", "New Loan Disbursed at this Meeting (optional)": "ਇਸ ਮੀਟਿੰਗ ਵਿੱਚ ਵੰਡਿਆ ਨਵਾਂ ਕਰਜ਼ਾ (ਚੋਣਵਾਂ)", "Meeting Expenses (optional)": "ਮੀਟਿੰਗ ਦੇ ਖਰਚੇ (ਚੋਣਵੇਂ)", "Share": "ਸਾਂਝਾ ਕਰੋ", "Bank Linkage": "ਬੈਂਕ ਲਿੰਕੇਜ", "Bank Loan Application (CCL / Term Loan)": "ਬੈਂਕ ਕਰਜ਼ਾ ਅਰਜ਼ੀ (ਸੀ.ਸੀ.ਐਲ. / ਮਿਆਦੀ ਕਰਜ਼ਾ)", "Current Corpus": "ਮੌਜੂਦਾ ਕੋਸ਼", "Total Corpus": "ਕੁੱਲ ਕੋਸ਼", "Notes to Accounts": "ਖਾਤਿਆਂ ਦੇ ਨੋਟ", "Dose-wise Eligibility (Configurable)": "ਡੋਜ਼-ਵਾਰ ਯੋਗਤਾ (ਸੰਰਚਨਾਯੋਗ)", "Draft Application": "ਅਰਜ਼ੀ ਦਾ ਖਰੜਾ", "Facility Type": "ਸਹੂਲਤ ਦੀ ਕਿਸਮ", "Dose / Cycle": "ਡੋਜ਼ / ਚੱਕਰ", "Amount Applied For": "ਮੰਗੀ ਗਈ ਰਕਮ", "Purpose / Micro Credit Plan Summary": "ਮਕਸਦ / ਸੂਖਮ ਕਰਜ਼ਾ ਯੋਜਨਾ ਦਾ ਸਾਰ", "Generate Draft Application": "ਅਰਜ਼ੀ ਦਾ ਖਰੜਾ ਬਣਾਓ", "Draft Letter": "ਖਰੜਾ ਪੱਤਰ", "Application Date": "ਅਰਜ਼ੀ ਦੀ ਮਿਤੀ", "Proposed Repayment Period (months, for Term Loan)": "ਪ੍ਰਸਤਾਵਿਤ ਮੁੜ-ਅਦਾਇਗੀ ਮਿਆਦ (ਮਹੀਨੇ, ਮਿਆਦੀ ਕਰਜ਼ੇ ਲਈ)", "Download (.txt)": "ਡਾਊਨਲੋਡ ਕਰੋ (.txt)", "Members Savings": "ਮੈਂਬਰਾਂ ਦੀ ਬੱਚਤ", "Members Loan": "ਮੈਂਬਰਾਂ ਦਾ ਕਰਜ਼ਾ", "Members Savings Register": "ਮੈਂਬਰਾਂ ਦਾ ਬੱਚਤ ਰਜਿਸਟਰ", "Members Loan Register": "ਮੈਂਬਰਾਂ ਦਾ ਕਰਜ਼ਾ ਰਜਿਸਟਰ", "UPI Account": "ਯੂ.ਪੀ.ਆਈ. ਖਾਤਾ", "UPI Balance": "ਯੂ.ਪੀ.ਆਈ. ਬਕਾਇਆ", "UPI Book": "ਯੂ.ਪੀ.ਆਈ. ਵਹੀ", "Cash / Bank / UPI": "ਨਕਦ / ਬੈਂਕ / ਯੂ.ਪੀ.ਆਈ.", "Transfer Between Cash / Bank / UPI": "ਨਕਦ / ਬੈਂਕ / ਯੂ.ਪੀ.ਆਈ. ਵਿਚਕਾਰ ਤਬਾਦਲਾ", "Transfer Funds": "ਰਕਮ ਤਬਦੀਲ ਕਰੋ", "Post Transfer": "ਤਬਾਦਲਾ ਪੋਸਟ ਕਰੋ", "Revolving Fund (RF)": "ਘੁੰਮਦਾ ਫੰਡ (ਆਰ.ਐਫ਼.)", "Record RF Received": "ਆਰ.ਐਫ਼. ਪ੍ਰਾਪਤੀ ਦਰਜ ਕਰੋ", "Post RF Receipt": "ਆਰ.ਐਫ਼. ਪ੍ਰਾਪਤੀ ਪੋਸਟ ਕਰੋ", "Bank Loan to SHG (TL / CC)": "ਸਮੂਹ ਨੂੰ ਬੈਂਕ ਕਰਜ਼ਾ (ਟੀ.ਐਲ. / ਸੀ.ਸੀ.)", "Record Sanction": "ਮਨਜ਼ੂਰੀ ਦਰਜ ਕਰੋ", "Sanctioned Amount": "ਮਨਜ਼ੂਰ ਰਕਮ", "Save Sanction": "ਮਨਜ਼ੂਰੀ ਸੰਭਾਲੋ", "Drawal": "ਨਿਕਾਸੀ", "Repay": "ਮੁੜ-ਅਦਾ ਕਰੋ", "Record Drawal / Utilisation": "ਨਿਕਾਸੀ / ਵਰਤੋਂ ਦਰਜ ਕਰੋ", "Post Drawal": "ਨਿਕਾਸੀ ਪੋਸਟ ਕਰੋ", "Record Repayment": "ਮੁੜ-ਅਦਾਇਗੀ ਦਰਜ ਕਰੋ", "Post Repayment": "ਮੁੜ-ਅਦਾਇਗੀ ਪੋਸਟ ਕਰੋ", "Transaction Nature": "ਲੈਣ-ਦੇਣ ਦੀ ਕਿਸਮ", "Expense / Purchase of Asset": "ਖਰਚਾ / ਜਾਇਦਾਦ ਦੀ ਖ਼ਰੀਦ", "Other Income Received": "ਹੋਰ ਆਮਦਨ ਪ੍ਰਾਪਤ", "Fund Transfer (Cash/Bank/UPI)": "ਰਕਮ ਤਬਾਦਲਾ (ਨਕਦ/ਬੈਂਕ/ਯੂ.ਪੀ.ਆਈ.)", "Other / Advanced (any account)": "ਹੋਰ / ਅਗਾਊਂ (ਕੋਈ ਵੀ ਖਾਤਾ)", "New Expense Head Name": "ਨਵੇਂ ਖਰਚੇ ਦੀ ਮੱਦ ਦਾ ਨਾਮ", "+ Add New Expense Head…": "+ ਨਵੀਂ ਖਰਚਾ ਮੱਦ ਜੋੜੋ…", "Loan-wise Repayment": "ਕਰਜ਼ੇ-ਵਾਰ ਮੁੜ-ਅਦਾਇਗੀ", "Fill Due Amounts": "ਦੇਣਯੋਗ ਰਕਮਾਂ ਭਰੋ", "Member Total": "ਮੈਂਬਰ ਦਾ ਕੁੱਲ", "Member Loan Summary": "ਮੈਂਬਰ ਕਰਜ਼ਾ ਸਾਰ", "Loan Register": "ਕਰਜ਼ਾ ਰਜਿਸਟਰ", "View Loans": "ਕਰਜ਼ੇ ਵੇਖੋ", "Active Loans": "ਚਾਲੂ ਕਰਜ਼ੇ", "Filter by Loan": "ਕਰਜ਼ੇ ਮੁਤਾਬਕ ਛਾਂਟੋ", "All Loans": "ਸਾਰੇ ਕਰਜ਼ੇ", "Member-wise": "ਮੈਂਬਰ-ਵਾਰ", "Loan-wise": "ਕਰਜ਼ਾ-ਵਾਰ", "Video Tutorials": "ਵੀਡੀਓ ਟਿਊਟੋਰੀਅਲ"};
 function languageToggleHTML(){
-  const lang = DB.settings.language||'en';
-  return `<button class="btn small ${lang==='en'?'':'secondary'}" style="padding:4px 10px" onclick="setLanguage('en')">EN</button> `+
-         `<button class="btn small ${lang==='hi'?'':'secondary'}" style="padding:4px 10px" onclick="setLanguage('hi')">हिं</button>`;
+  const lang = curLang();
+  const b=(c,t)=>`<button class="btn small ${lang===c?'':'secondary'}" style="padding:4px 10px" onclick="setLanguage('${c}')">${t}</button>`;
+  return b('en','EN')+' '+b('hi','हिं')+' '+b('pa','ਪੰ');
 }
 function setLanguage(lang){ DB.settings.language = lang; saveDB(); render(); }
+function langDict(){ const l=curLang(); return l==='hi' ? TRANSLATIONS : (l==='pa' ? TRANSLATIONS_PA : null); }
 function translatePage(){
-  if((DB.settings.language||'en')!=='hi') return;
+  if(!langDict()) return;
   translateNode(document.getElementById('sidebar'));
   translateNode(document.getElementById('topbar'));
   translateNode(document.getElementById('content'));
 }
 function translateNode(root){
-  if(!root || (DB.settings.language||'en')!=='hi') return;
+  const D = langDict();
+  if(!root || !D) return;
   root.querySelectorAll('[placeholder]').forEach(el=>{
     const key = (el.getAttribute('placeholder')||'').trim();
-    if(TRANSLATIONS[key]) el.setAttribute('placeholder', TRANSLATIONS[key]);
+    if(D[key]) el.setAttribute('placeholder', D[key]);
   });
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   const nodes = [];
@@ -1302,8 +1310,274 @@ function translateNode(root){
   nodes.forEach(node=>{
     const trimmed = node.nodeValue.trim();
     if(!trimmed) return;
-    if(TRANSLATIONS[trimmed]) node.nodeValue = node.nodeValue.replace(trimmed, TRANSLATIONS[trimmed]);
+    if(Object.prototype.hasOwnProperty.call(D,trimmed)) node.nodeValue = node.nodeValue.replace(trimmed, D[trimmed]);
   });
+}
+
+/* ============================================================ LANGUAGES (EN / हिं / ਪੰ), FIELD HINTS, VIDEO TUTORIALS
+   Presentation-only layer: nothing here reads or writes accounting data. Hints are injected under
+   form fields after render; the tutorial player only navigates and displays text. */
+function curLang(){ const l = DB.settings.language; return (l==='hi'||l==='pa') ? l : 'en'; }
+function T3(en, hi, pa){ const l = curLang(); return l==='hi' ? (hi||en) : (l==='pa' ? (pa||en) : en); }
+function pick3(arr){ return T3(arr[0], arr[1], arr[2]); }
+
+/* ---- Field hints: [English, Hindi, Punjabi]. Key = "formFunction.fieldName" (specific) or "fieldName" (generic). ---- */
+const FIELD_HINTS = {
+  'saveProfile.name':['Official SHG name as written on the bank passbook. Example: Saraswati Mahila SHG','बैंक पासबुक में लिखा समूह का आधिकारिक नाम। उदाहरण: सरस्वती महिला एसएचजी','ਬੈਂਕ ਪਾਸਬੁੱਕ ਵਿੱਚ ਲਿਖਿਆ ਸਮੂਹ ਦਾ ਅਧਿਕਾਰਤ ਨਾਮ। ਉਦਾਹਰਣ: ਸਰਸਵਤੀ ਮਹਿਲਾ ਸਮੂਹ'],
+  'saveProfile.shgId':['SHG code given by the VO/Block or shown in LokOS. Leave blank if not yet issued.','वीओ/ब्लॉक द्वारा दिया गया या लोकओएस में दिखने वाला कोड। न मिला हो तो खाली छोड़ें।','ਗ੍ਰਾਮ ਸੰਗਠਨ/ਬਲਾਕ ਵੱਲੋਂ ਦਿੱਤਾ ਜਾਂ ਲੋਕਓਐਸ ਵਿੱਚ ਦਿਸਦਾ ਕੋਡ। ਨਾ ਮਿਲਿਆ ਹੋਵੇ ਤਾਂ ਖਾਲੀ ਛੱਡੋ।'],
+  'saveProfile.state':['Example: Haryana','उदाहरण: हरियाणा','ਉਦਾਹਰਣ: ਹਰਿਆਣਾ'],
+  'saveProfile.district':['Example: Gurugram','उदाहरण: गुरुग्राम','ਉਦਾਹਰਣ: ਗੁਰੂਗ੍ਰਾਮ'],
+  'saveProfile.block':['Example: Sohna','उदाहरण: सोहना','ਉਦਾਹਰਣ: ਸੋਹਨਾ'],
+  'saveProfile.gp':['Gram Panchayat name. Example: Rampur','ग्राम पंचायत का नाम। उदाहरण: रामपुर','ਗ੍ਰਾਮ ਪੰਚਾਇਤ ਦਾ ਨਾਮ। ਉਦਾਹਰਣ: ਰਾਮਪੁਰ'],
+  'saveProfile.village':['Village where the group meets. Example: Rampur','जहाँ समूह बैठक करता है वह गाँव। उदाहरण: रामपुर','ਜਿੱਥੇ ਸਮੂਹ ਮੀਟਿੰਗ ਕਰਦਾ ਹੈ ਉਹ ਪਿੰਡ। ਉਦਾਹਰਣ: ਰਾਮਪੁਰ'],
+  'saveProfile.voClf':['Name of the Village Organisation / Cluster Federation your SHG belongs to.','आपका समूह जिस ग्राम संगठन / क्लस्टर फेडरेशन से जुड़ा है उसका नाम।','ਤੁਹਾਡਾ ਸਮੂਹ ਜਿਸ ਗ੍ਰਾਮ ਸੰਗਠਨ / ਕਲੱਸਟਰ ਫੈਡਰੇਸ਼ਨ ਨਾਲ ਜੁੜਿਆ ਹੈ ਉਸ ਦਾ ਨਾਮ।'],
+  'saveProfile.formationDate':['Date the group was formed (its first meeting) — not today\'s date.','समूह बनने (पहली बैठक) की तारीख — आज की तारीख नहीं।','ਸਮੂਹ ਬਣਨ (ਪਹਿਲੀ ਮੀਟਿੰਗ) ਦੀ ਮਿਤੀ — ਅੱਜ ਦੀ ਮਿਤੀ ਨਹੀਂ।'],
+  'saveProfile.meetingDay':['Day of the week when the group normally meets.','सप्ताह का वह दिन जब समूह सामान्यतः बैठक करता है।','ਹਫ਼ਤੇ ਦਾ ਉਹ ਦਿਨ ਜਦੋਂ ਸਮੂਹ ਆਮ ਤੌਰ ਤੇ ਮੀਟਿੰਗ ਕਰਦਾ ਹੈ।'],
+  'saveProfile.meetingFrequency':['How often you meet — Weekly, Fortnightly or Monthly. Grading uses this.','बैठक कितनी बार होती है — साप्ताहिक, पाक्षिक या मासिक। ग्रेडिंग इसी पर आधारित है।','ਮੀਟਿੰਗ ਕਿੰਨੀ ਵਾਰ ਹੁੰਦੀ ਹੈ — ਹਫ਼ਤਾਵਾਰੀ, ਪੰਦਰਵਾੜਾ ਜਾਂ ਮਹੀਨਾਵਾਰ। ਗ੍ਰੇਡਿੰਗ ਇਸ ਤੇ ਅਧਾਰਿਤ ਹੈ।'],
+  'saveProfile.compulsorySavingAmount':['Fixed amount each member saves at every meeting. Example: 100 or 200','हर बैठक में प्रत्येक सदस्य द्वारा जमा की जाने वाली तय राशि। उदाहरण: 100 या 200','ਹਰ ਮੀਟਿੰਗ ਵਿੱਚ ਹਰ ਮੈਂਬਰ ਵੱਲੋਂ ਜਮ੍ਹਾਂ ਕੀਤੀ ਜਾਣ ਵਾਲੀ ਤੈਅ ਰਕਮ। ਉਦਾਹਰਣ: 100 ਜਾਂ 200'],
+  'saveProfile.meetingsRequiredPerMonth':['Example: 4 for weekly meetings, 1 for monthly.','उदाहरण: साप्ताहिक के लिए 4, मासिक के लिए 1।','ਉਦਾਹਰਣ: ਹਫ਼ਤਾਵਾਰੀ ਲਈ 4, ਮਹੀਨਾਵਾਰ ਲਈ 1।'],
+  'saveProfile.president':['Full name of the President; printed on statements for signature.','अध्यक्ष का पूरा नाम; विवरणों पर हस्ताक्षर के लिए छपेगा।','ਪ੍ਰਧਾਨ ਦਾ ਪੂਰਾ ਨਾਮ; ਵਿਵਰਣਾਂ ਤੇ ਦਸਤਖ਼ਤ ਲਈ ਛਪੇਗਾ।'],
+  'saveProfile.secretary':['Full name of the Secretary; printed on statements for signature.','सचिव का पूरा नाम; विवरणों पर हस्ताक्षर के लिए छपेगा।','ਸਕੱਤਰ ਦਾ ਪੂਰਾ ਨਾਮ; ਵਿਵਰਣਾਂ ਤੇ ਦਸਤਖ਼ਤ ਲਈ ਛਪੇਗਾ।'],
+  'saveProfile.treasurer':['Full name of the Treasurer / bookkeeper; printed on statements for signature.','कोषाध्यक्ष / हिसाब रखने वाले का पूरा नाम; विवरणों पर छपेगा।','ਖ਼ਜ਼ਾਨਚੀ / ਹਿਸਾਬ ਰੱਖਣ ਵਾਲੇ ਦਾ ਪੂਰਾ ਨਾਮ; ਵਿਵਰਣਾਂ ਤੇ ਛਪੇਗਾ।'],
+  'saveProfile.contact':['10-digit mobile number of the group\'s contact person.','समूह के संपर्क व्यक्ति का 10 अंकों का मोबाइल नंबर।','ਸਮੂਹ ਦੇ ਸੰਪਰਕ ਵਿਅਕਤੀ ਦਾ 10 ਅੰਕਾਂ ਦਾ ਮੋਬਾਈਲ ਨੰਬਰ।'],
+  'saveProfile.financialYearStart':['Use 04-01 for the usual April–March financial year.','सामान्य अप्रैल–मार्च वित्त वर्ष के लिए 04-01 लिखें।','ਆਮ ਅਪ੍ਰੈਲ–ਮਾਰਚ ਵਿੱਤੀ ਸਾਲ ਲਈ 04-01 ਲਿਖੋ।'],
+  'addBank.bank':['Bank where the SHG account is held. Example: State Bank of India','जिस बैंक में समूह का खाता है। उदाहरण: भारतीय स्टेट बैंक','ਜਿਸ ਬੈਂਕ ਵਿੱਚ ਸਮੂਹ ਦਾ ਖਾਤਾ ਹੈ। ਉਦਾਹਰਣ: ਭਾਰਤੀ ਸਟੇਟ ਬੈਂਕ'],
+  'addBank.branch':['Branch name as in the passbook. Example: Rampur','पासबुक में लिखा शाखा का नाम। उदाहरण: रामपुर','ਪਾਸਬੁੱਕ ਵਿੱਚ ਲਿਖਿਆ ਸ਼ਾਖਾ ਦਾ ਨਾਮ। ਉਦਾਹਰਣ: ਰਾਮਪੁਰ'],
+  'addBank.accno':['SHG savings account number, digits only, exactly as in the passbook.','समूह के बचत खाते का नंबर, केवल अंक, पासबुक के अनुसार।','ਸਮੂਹ ਦੇ ਬੱਚਤ ਖਾਤੇ ਦਾ ਨੰਬਰ, ਸਿਰਫ਼ ਅੰਕ, ਪਾਸਬੁੱਕ ਅਨੁਸਾਰ।'],
+  'addBank.ifsc':['11 characters: 4 letters, then 0, then 6 letters/digits. Example: SBIN0001234','11 अक्षर: 4 अक्षर, फिर 0, फिर 6 अक्षर/अंक। उदाहरण: SBIN0001234','11 ਅੱਖਰ: 4 ਅੱਖਰ, ਫਿਰ 0, ਫਿਰ 6 ਅੱਖਰ/ਅੰਕ। ਉਦਾਹਰਣ: SBIN0001234'],
+  'saveMember.name':['Name as on Aadhaar / bank passbook. Example: Sunita Devi','आधार / बैंक पासबुक के अनुसार नाम। उदाहरण: सुनीता देवी','ਆਧਾਰ / ਬੈਂਕ ਪਾਸਬੁੱਕ ਅਨੁਸਾਰ ਨਾਮ। ਉਦਾਹਰਣ: ਸੁਨੀਤਾ ਦੇਵੀ'],
+  'saveMember.relation':['W/o (wife of), D/o (daughter of) or S/o — to match the next field.','W/o (पत्नी), D/o (पुत्री) या S/o — अगले खाने के अनुसार।','W/o (ਪਤਨੀ), D/o (ਧੀ) ਜਾਂ S/o — ਅਗਲੇ ਖਾਨੇ ਅਨੁਸਾਰ।'],
+  'saveMember.fatherHusband':['Father\'s name if unmarried, husband\'s name if married. Example: Ram Lal','अविवाहित हो तो पिता का, विवाहित हो तो पति का नाम। उदाहरण: राम लाल','ਅਣਵਿਆਹੀ ਹੋਵੇ ਤਾਂ ਪਿਤਾ ਦਾ, ਵਿਆਹੀ ਹੋਵੇ ਤਾਂ ਪਤੀ ਦਾ ਨਾਮ। ਉਦਾਹਰਣ: ਰਾਮ ਲਾਲ'],
+  'saveMember.mobile':['10-digit number starting with 6, 7, 8 or 9. Used for WhatsApp statements.','6, 7, 8 या 9 से शुरू होने वाला 10 अंकों का नंबर। व्हाट्सऐप विवरण के लिए।','6, 7, 8 ਜਾਂ 9 ਤੋਂ ਸ਼ੁਰੂ ਹੋਣ ਵਾਲਾ 10 ਅੰਕਾਂ ਦਾ ਨੰਬਰ। ਵਟਸਐਪ ਵਿਵਰਣ ਲਈ।'],
+  'saveMember.email':['Optional. Needed only to email statements.','वैकल्पिक। केवल ईमेल से विवरण भेजने के लिए।','ਚੋਣਵਾਂ। ਸਿਰਫ਼ ਈਮੇਲ ਰਾਹੀਂ ਵਿਵਰਣ ਭੇਜਣ ਲਈ।'],
+  'saveMember.doj':['Date she actually joined the SHG. For existing members use the old joining date, not today.','सदस्य के समूह में असल में जुड़ने की तारीख। पुराने सदस्यों के लिए पुरानी तारीख, आज की नहीं।','ਮੈਂਬਰ ਦੇ ਸਮੂਹ ਵਿੱਚ ਅਸਲ ਵਿੱਚ ਸ਼ਾਮਲ ਹੋਣ ਦੀ ਮਿਤੀ। ਪੁਰਾਣੇ ਮੈਂਬਰਾਂ ਲਈ ਪੁਰਾਣੀ ਮਿਤੀ, ਅੱਜ ਦੀ ਨਹੀਂ।'],
+  'saveMember.status':['Active members take part in meetings. Mark Exited only after her savings and loans are settled.','सक्रिय सदस्य बैठकों में भाग लेती हैं। बचत और ऋण निपटाने के बाद ही "बाहर" चुनें।','ਚਾਲੂ ਮੈਂਬਰ ਮੀਟਿੰਗਾਂ ਵਿੱਚ ਹਿੱਸਾ ਲੈਂਦੀਆਂ ਹਨ। ਬੱਚਤ ਤੇ ਕਰਜ਼ਾ ਨਿਪਟਾਉਣ ਮਗਰੋਂ ਹੀ "ਬਾਹਰ" ਚੁਣੋ।'],
+  'saveMember.occupation':['Main livelihood. Example: Agriculture, Dairy, Tailoring, Labour','मुख्य आजीविका। उदाहरण: खेती, डेयरी, सिलाई, मज़दूरी','ਮੁੱਖ ਰੋਜ਼ੀ-ਰੋਟੀ। ਉਦਾਹਰਣ: ਖੇਤੀ, ਡੇਅਰੀ, ਸਿਲਾਈ, ਮਜ਼ਦੂਰੀ'],
+  'saveMember.nominee':['Person who receives her savings if something happens to her.','जिसे सदस्य की अनुपस्थिति में बचत मिलेगी उसका नाम।','ਜਿਸ ਨੂੰ ਮੈਂਬਰ ਨਾਲ ਕੁਝ ਹੋ ਜਾਣ ਤੇ ਬੱਚਤ ਮਿਲੇਗੀ ਉਸ ਦਾ ਨਾਮ।'],
+  'saveMember.bankAccno':['Member\'s own bank account number (digits only) — needed for LokOS.','सदस्य का अपना बैंक खाता नंबर (केवल अंक) — लोकओएस के लिए ज़रूरी।','ਮੈਂਬਰ ਦਾ ਆਪਣਾ ਬੈਂਕ ਖਾਤਾ ਨੰਬਰ (ਸਿਰਫ਼ ਅੰਕ) — ਲੋਕਓਐਸ ਲਈ ਲੋੜੀਂਦਾ।'],
+  'saveMember.bankIfsc':['11 characters. Example: SBIN0001234','11 अक्षर। उदाहरण: SBIN0001234','11 ਅੱਖਰ। ਉਦਾਹਰਣ: SBIN0001234'],
+  'postMeeting.date':['Actual date the meeting was held. It cannot be a future date.','बैठक की वास्तविक तारीख। भविष्य की तारीख नहीं हो सकती।','ਮੀਟਿੰਗ ਦੀ ਅਸਲ ਮਿਤੀ। ਭਵਿੱਖ ਦੀ ਮਿਤੀ ਨਹੀਂ ਹੋ ਸਕਦੀ।'],
+  'postMeeting.place':['Where the meeting was held. Example: Panchayat Bhawan','बैठक कहाँ हुई। उदाहरण: पंचायत भवन','ਮੀਟਿੰਗ ਕਿੱਥੇ ਹੋਈ। ਉਦਾਹਰਣ: ਪੰਚਾਇਤ ਭਵਨ'],
+  'postMeeting.mode':['Cash if money was handed over in the meeting; Bank/UPI if it came directly to the bank account.','बैठक में नकद दिया तो "नकद"; सीधे बैंक खाते में आया तो बैंक/यूपीआई।','ਮੀਟਿੰਗ ਵਿੱਚ ਨਕਦ ਦਿੱਤਾ ਤਾਂ "ਨਕਦ"; ਸਿੱਧਾ ਬੈਂਕ ਖਾਤੇ ਵਿੱਚ ਆਇਆ ਤਾਂ ਬੈਂਕ/ਯੂ.ਪੀ.ਆਈ.'],
+  'postMeeting.newloan_amount':['Amount sanctioned in this meeting. It cannot be more than the cash/bank available on that date.','इस बैठक में स्वीकृत राशि। उस तारीख को उपलब्ध नकद/बैंक से अधिक नहीं हो सकती।','ਇਸ ਮੀਟਿੰਗ ਵਿੱਚ ਮਨਜ਼ੂਰ ਰਕਮ। ਉਸ ਮਿਤੀ ਨੂੰ ਉਪਲਬਧ ਨਕਦ/ਬੈਂਕ ਤੋਂ ਵੱਧ ਨਹੀਂ ਹੋ ਸਕਦੀ।'],
+  'postMeeting.newloan_rate':['Interest % per year decided by the group. Example: 12 means ₹1 per ₹100 per month.','समूह द्वारा तय सालाना ब्याज %। उदाहरण: 12 यानी ₹100 पर ₹1 प्रति माह।','ਸਮੂਹ ਵੱਲੋਂ ਤੈਅ ਸਾਲਾਨਾ ਵਿਆਜ %। ਉਦਾਹਰਣ: 12 ਮਤਲਬ ₹100 ਤੇ ₹1 ਪ੍ਰਤੀ ਮਹੀਨਾ।'],
+  'postMeeting.newloan_inst':['Number of monthly instalments. Example: 10','मासिक किस्तों की संख्या। उदाहरण: 10','ਮਹੀਨਾਵਾਰ ਕਿਸ਼ਤਾਂ ਦੀ ਗਿਣਤੀ। ਉਦਾਹਰਣ: 10'],
+  'postMeeting.exp_amount':['Meeting expense actually paid. Example: 150 for tea and stationery.','बैठक पर वास्तव में किया गया खर्च। उदाहरण: चाय व स्टेशनरी के 150।','ਮੀਟਿੰਗ ਤੇ ਅਸਲ ਵਿੱਚ ਕੀਤਾ ਖਰਚਾ। ਉਦਾਹਰਣ: ਚਾਹ ਤੇ ਸਟੇਸ਼ਨਰੀ ਦੇ 150।'],
+  'postMeeting.exp_narration':['What the money was spent on. Example: Register and pens','पैसा किस काम पर खर्च हुआ। उदाहरण: रजिस्टर और पेन','ਪੈਸਾ ਕਿਸ ਕੰਮ ਤੇ ਖਰਚ ਹੋਇਆ। ਉਦਾਹਰਣ: ਰਜਿਸਟਰ ਤੇ ਪੈੱਨ'],
+  'postMeeting.exp_approvedBy':['Name of the person who approved this expense.','जिसने यह खर्च मंज़ूर किया उसका नाम।','ਜਿਸ ਨੇ ਇਹ ਖਰਚਾ ਮਨਜ਼ੂਰ ਕੀਤਾ ਉਸ ਦਾ ਨਾਮ।'],
+  'postMeeting.depositAmount':['Cash taken to the bank after the meeting. It cannot exceed the cash in hand.','बैठक के बाद बैंक में जमा किया गया नकद। हाथ में नकद से अधिक नहीं हो सकता।','ਮੀਟਿੰਗ ਮਗਰੋਂ ਬੈਂਕ ਵਿੱਚ ਜਮ੍ਹਾਂ ਕੀਤਾ ਨਕਦ। ਹੱਥ ਵਿੱਚ ਨਕਦ ਤੋਂ ਵੱਧ ਨਹੀਂ ਹੋ ਸਕਦਾ।'],
+  'postMeeting.depositDate':['Date the money was actually deposited — on or after the meeting date.','पैसे वास्तव में जमा करने की तारीख — बैठक की तारीख या उसके बाद।','ਪੈਸੇ ਅਸਲ ਵਿੱਚ ਜਮ੍ਹਾਂ ਕਰਨ ਦੀ ਮਿਤੀ — ਮੀਟਿੰਗ ਦੀ ਮਿਤੀ ਜਾਂ ਉਸ ਤੋਂ ਬਾਅਦ।'],
+  'postMeeting.depositRef':['Pay-in slip number or UPI reference.','पे-इन स्लिप नंबर या यूपीआई संदर्भ।','ਪੇ-ਇਨ ਸਲਿੱਪ ਨੰਬਰ ਜਾਂ ਯੂ.ਪੀ.ਆਈ. ਹਵਾਲਾ।'],
+  'postMeeting.actualReceived':['Count the cash physically. If it differs from the total shown, enter the real amount and give the reason.','नकद गिनकर लिखें। दिखाए कुल से अलग हो तो असली राशि लिखें और कारण बताएँ।','ਨਕਦ ਗਿਣ ਕੇ ਲਿਖੋ। ਦਿਖਾਏ ਕੁੱਲ ਤੋਂ ਵੱਖਰਾ ਹੋਵੇ ਤਾਂ ਅਸਲ ਰਕਮ ਲਿਖੋ ਤੇ ਕਾਰਨ ਦੱਸੋ।'],
+  'postMeeting.adjustmentReason':['Why the counted cash differs. Example: Rs 10 short, change not available','गिना नकद अलग क्यों है। उदाहरण: ₹10 कम, खुले पैसे नहीं थे','ਗਿਣਿਆ ਨਕਦ ਵੱਖਰਾ ਕਿਉਂ ਹੈ। ਉਦਾਹਰਣ: ₹10 ਘੱਟ, ਖੁੱਲ੍ਹੇ ਪੈਸੇ ਨਹੀਂ ਸਨ'],
+  'postMeeting.nextMeetingDate':['Date of the next meeting; shown in the meeting record.','अगली बैठक की तारीख; बैठक रिकॉर्ड में दिखेगी।','ਅਗਲੀ ਮੀਟਿੰਗ ਦੀ ਮਿਤੀ; ਮੀਟਿੰਗ ਰਿਕਾਰਡ ਵਿੱਚ ਦਿਖੇਗੀ।'],
+  'postSavingsEntry.memberId':['Member whose savings you are changing.','जिस सदस्य की बचत बदल रहे हैं।','ਜਿਸ ਮੈਂਬਰ ਦੀ ਬੱਚਤ ਬਦਲ ਰਹੇ ਹੋ।'],
+  'postSavingsEntry.dir':['Deposit adds to savings; Withdrawal reduces it.','जमा से बचत बढ़ती है; निकासी से घटती है।','ਜਮ੍ਹਾਂ ਨਾਲ ਬੱਚਤ ਵਧਦੀ ਹੈ; ਨਿਕਾਸੀ ਨਾਲ ਘਟਦੀ ਹੈ।'],
+  'postSavingsEntry.amount':['Whole rupees. A withdrawal cannot be more than the member\'s savings balance.','पूरे रुपये। निकासी सदस्य की बचत शेष से अधिक नहीं हो सकती।','ਪੂਰੇ ਰੁਪਏ। ਨਿਕਾਸੀ ਮੈਂਬਰ ਦੇ ਬੱਚਤ ਬਕਾਏ ਤੋਂ ਵੱਧ ਨਹੀਂ ਹੋ ਸਕਦੀ।'],
+  'saveLoan.memberId':['Member taking the loan.','ऋण लेने वाली सदस्य।','ਕਰਜ਼ਾ ਲੈਣ ਵਾਲੀ ਮੈਂਬਰ।'],
+  'saveLoan.purpose':['What the loan is for. Example: Dairy, Tailoring, Kirana shop, Children\'s education','ऋण किस काम के लिए। उदाहरण: डेयरी, सिलाई, किराना दुकान, बच्चों की पढ़ाई','ਕਰਜ਼ਾ ਕਿਸ ਕੰਮ ਲਈ। ਉਦਾਹਰਣ: ਡੇਅਰੀ, ਸਿਲਾਈ, ਕਰਿਆਨਾ ਦੁਕਾਨ, ਬੱਚਿਆਂ ਦੀ ਪੜ੍ਹਾਈ'],
+  'saveLoan.sanctionDate':['Date the group approved the loan.','जिस दिन समूह ने ऋण मंज़ूर किया।','ਜਿਸ ਦਿਨ ਸਮੂਹ ਨੇ ਕਰਜ਼ਾ ਮਨਜ਼ੂਰ ਕੀਤਾ।'],
+  'saveLoan.disbursementDate':['Date the money was actually handed over. Interest counts from this date.','जिस दिन पैसा वास्तव में दिया। ब्याज इसी तारीख से गिना जाता है।','ਜਿਸ ਦਿਨ ਪੈਸਾ ਅਸਲ ਵਿੱਚ ਦਿੱਤਾ। ਵਿਆਜ ਇਸੇ ਮਿਤੀ ਤੋਂ ਗਿਣਿਆ ਜਾਂਦਾ ਹੈ।'],
+  'saveLoan.mode':['Cash or bank from which the loan is paid; it must have enough balance on that date.','जिस नकद/बैंक से ऋण दिया जा रहा है; उस तारीख को पर्याप्त शेष होना चाहिए।','ਜਿਸ ਨਕਦ/ਬੈਂਕ ਤੋਂ ਕਰਜ਼ਾ ਦਿੱਤਾ ਜਾ ਰਿਹਾ ਹੈ; ਉਸ ਮਿਤੀ ਨੂੰ ਲੋੜੀਂਦਾ ਬਕਾਇਆ ਹੋਣਾ ਚਾਹੀਦਾ ਹੈ।'],
+  'saveLoan.principal':['Loan amount in rupees. Example: 10000','ऋण राशि रुपये में। उदाहरण: 10000','ਕਰਜ਼ੇ ਦੀ ਰਕਮ ਰੁਪਇਆਂ ਵਿੱਚ। ਉਦਾਹਰਣ: 10000'],
+  'saveLoan.interestRate':['Interest % per year. Example: 12 means ₹1 per ₹100 per month.','सालाना ब्याज %। उदाहरण: 12 यानी ₹100 पर ₹1 प्रति माह।','ਸਾਲਾਨਾ ਵਿਆਜ %। ਉਦਾਹਰਣ: 12 ਮਤਲਬ ₹100 ਤੇ ₹1 ਪ੍ਰਤੀ ਮਹੀਨਾ।'],
+  'saveLoan.instalments':['Number of instalments to repay. Example: 10','चुकाने की किस्तों की संख्या। उदाहरण: 10','ਮੋੜਨ ਲਈ ਕਿਸ਼ਤਾਂ ਦੀ ਗਿਣਤੀ। ਉਦਾਹਰਣ: 10'],
+  'saveLoan.frequency':['How often an instalment falls due — Weekly, Fortnightly or Monthly.','किस्त कितने समय में देय है — साप्ताहिक, पाक्षिक या मासिक।','ਕਿਸ਼ਤ ਕਿੰਨੇ ਸਮੇਂ ਬਾਅਦ ਦੇਣੀ ਹੈ — ਹਫ਼ਤਾਵਾਰੀ, ਪੰਦਰਵਾੜਾ ਜਾਂ ਮਹੀਨਾਵਾਰ।'],
+  'saveLoan.interestMethod':['Reducing = interest on the remaining balance (usual for SHGs). Flat = interest on the full amount for the whole period.','घटते शेष = बचे हुए मूलधन पर ब्याज (समूहों में आम)। फ्लैट = पूरी राशि पर पूरी अवधि का ब्याज।','ਘਟਦਾ ਬਕਾਇਆ = ਬਾਕੀ ਮੂਲ ਰਕਮ ਤੇ ਵਿਆਜ (ਸਮੂਹਾਂ ਵਿੱਚ ਆਮ)। ਫਲੈਟ = ਪੂਰੀ ਰਕਮ ਤੇ ਪੂਰੀ ਮਿਆਦ ਦਾ ਵਿਆਜ।'],
+  'saveCIF.date':['Date the CIF amount reached the SHG bank account.','जिस दिन सीआईएफ राशि समूह के बैंक खाते में आई।','ਜਿਸ ਦਿਨ ਸੀ.ਆਈ.ਐਫ਼. ਰਕਮ ਸਮੂਹ ਦੇ ਬੈਂਕ ਖਾਤੇ ਵਿੱਚ ਆਈ।'],
+  'saveCIF.source':['Who gave it. Example: Rampur CLF / Village Organisation name','किसने दिया। उदाहरण: रामपुर सीएलएफ / ग्राम संगठन का नाम','ਕਿਸ ਨੇ ਦਿੱਤਾ। ਉਦਾਹਰਣ: ਰਾਮਪੁਰ ਸੀ.ਐਲ.ਐਫ਼. / ਗ੍ਰਾਮ ਸੰਗਠਨ ਦਾ ਨਾਮ'],
+  'saveCIF.amount':['Amount received, as per the sanction/transfer advice.','प्राप्त राशि, स्वीकृति/ट्रांसफर सूचना के अनुसार।','ਪ੍ਰਾਪਤ ਰਕਮ, ਮਨਜ਼ੂਰੀ/ਟ੍ਰਾਂਸਫਰ ਸੂਚਨਾ ਅਨੁਸਾਰ।'],
+  'saveCIF.rate':['Interest % per year as fixed by your VO/CLF in the sanction letter. Enter 0 if none.','वीओ/सीएलएफ के स्वीकृति पत्र के अनुसार सालाना ब्याज %। न हो तो 0।','ਗ੍ਰਾਮ ਸੰਗਠਨ/ਸੀ.ਐਲ.ਐਫ਼. ਦੇ ਮਨਜ਼ੂਰੀ ਪੱਤਰ ਅਨੁਸਾਰ ਸਾਲਾਨਾ ਵਿਆਜ %। ਨਾ ਹੋਵੇ ਤਾਂ 0।'],
+  'saveCIF.period':['Number of months to repay, as per the sanction letter.','चुकाने के महीनों की संख्या, स्वीकृति पत्र के अनुसार।','ਮੋੜਨ ਦੇ ਮਹੀਨਿਆਂ ਦੀ ਗਿਣਤੀ, ਮਨਜ਼ੂਰੀ ਪੱਤਰ ਅਨੁਸਾਰ।'],
+  'saveCIF.mode':['The account where the CIF was credited (normally the SHG bank account).','जिस खाते में सीआईएफ आया (आम तौर पर समूह का बैंक खाता)।','ਜਿਸ ਖਾਤੇ ਵਿੱਚ ਸੀ.ਆਈ.ਐਫ਼. ਆਇਆ (ਆਮ ਤੌਰ ਤੇ ਸਮੂਹ ਦਾ ਬੈਂਕ ਖਾਤਾ)।'],
+  'saveCIFRepayment.principal':['Principal part of this instalment. Enter principal and interest separately.','इस किस्त का मूलधन भाग। मूलधन और ब्याज अलग-अलग लिखें।','ਇਸ ਕਿਸ਼ਤ ਦਾ ਮੂਲ ਰਕਮ ਹਿੱਸਾ। ਮੂਲ ਰਕਮ ਤੇ ਵਿਆਜ ਵੱਖਰੇ ਲਿਖੋ।'],
+  'saveCIFRepayment.interest':['Interest part of this instalment (0 if none).','इस किस्त का ब्याज भाग (न हो तो 0)।','ਇਸ ਕਿਸ਼ਤ ਦਾ ਵਿਆਜ ਹਿੱਸਾ (ਨਾ ਹੋਵੇ ਤਾਂ 0)।'],
+  'saveRF.amount':['Revolving Fund received, as per the sanction/transfer advice.','प्राप्त रिवॉल्विंग फंड, स्वीकृति/ट्रांसफर सूचना के अनुसार।','ਪ੍ਰਾਪਤ ਘੁੰਮਦਾ ਫੰਡ, ਮਨਜ਼ੂਰੀ/ਟ੍ਰਾਂਸਫਰ ਸੂਚਨਾ ਅਨੁਸਾਰ।'],
+  'saveRF.rate':['Usually 0 because RF is a grant. Change only if your sanction says otherwise.','आम तौर पर 0, क्योंकि आरएफ अनुदान है। स्वीकृति में अलग लिखा हो तभी बदलें।','ਆਮ ਤੌਰ ਤੇ 0, ਕਿਉਂਕਿ ਆਰ.ਐਫ਼. ਗ੍ਰਾਂਟ ਹੈ। ਮਨਜ਼ੂਰੀ ਵਿੱਚ ਵੱਖਰਾ ਲਿਖਿਆ ਹੋਵੇ ਤਾਂ ਹੀ ਬਦਲੋ।'],
+  'saveBankLoanSanction.type':['TL = Term Loan (fixed instalments). CC = Cash Credit (limit you draw and repay).','TL = सावधि ऋण (तय किस्तें)। CC = कैश क्रेडिट (सीमा जिससे निकालें और लौटाएँ)।','TL = ਮਿਆਦੀ ਕਰਜ਼ਾ (ਤੈਅ ਕਿਸ਼ਤਾਂ)। CC = ਕੈਸ਼ ਕ੍ਰੈਡਿਟ (ਹੱਦ ਜਿਸ ਵਿੱਚੋਂ ਕਢਵਾਓ ਤੇ ਮੋੜੋ)।'],
+  'saveBankLoanSanction.sanctionedAmount':['Sanctioned limit/amount exactly as in the bank\'s sanction letter.','बैंक के स्वीकृति पत्र के अनुसार स्वीकृत सीमा/राशि।','ਬੈਂਕ ਦੇ ਮਨਜ਼ੂਰੀ ਪੱਤਰ ਅਨੁਸਾਰ ਮਨਜ਼ੂਰ ਹੱਦ/ਰਕਮ।'],
+  'saveBankLoanSanction.rate':['Interest % per year as per the sanction letter.','स्वीकृति पत्र के अनुसार सालाना ब्याज %।','ਮਨਜ਼ੂਰੀ ਪੱਤਰ ਅਨੁਸਾਰ ਸਾਲਾਨਾ ਵਿਆਜ %।'],
+  'saveBankLoanSanction.instalmentAmount':['EMI amount from the sanction letter (Term Loan only).','स्वीकृति पत्र की किस्त राशि (केवल सावधि ऋण)।','ਮਨਜ਼ੂਰੀ ਪੱਤਰ ਦੀ ਕਿਸ਼ਤ ਰਕਮ (ਸਿਰਫ਼ ਮਿਆਦੀ ਕਰਜ਼ਾ)।'],
+  'saveBankLoanDrawal.amount':['Amount drawn now. It cannot exceed the undrawn sanctioned limit.','अभी निकाली गई राशि। बिना निकाली स्वीकृत सीमा से अधिक नहीं हो सकती।','ਹੁਣ ਕੱਢੀ ਰਕਮ। ਬਿਨਾਂ ਕੱਢੀ ਮਨਜ਼ੂਰ ਹੱਦ ਤੋਂ ਵੱਧ ਨਹੀਂ ਹੋ ਸਕਦੀ।'],
+  'saveBankLoanRepayment.principal':['Principal paid to the bank, as per the bank statement.','बैंक को चुकाया मूलधन, बैंक विवरण के अनुसार।','ਬੈਂਕ ਨੂੰ ਮੋੜੀ ਮੂਲ ਰਕਮ, ਬੈਂਕ ਸਟੇਟਮੈਂਟ ਅਨੁਸਾਰ।'],
+  'saveBankLoanRepayment.interest':['Interest charged by the bank, as per the bank statement.','बैंक द्वारा लगाया ब्याज, बैंक विवरण के अनुसार।','ਬੈਂਕ ਵੱਲੋਂ ਲਗਾਇਆ ਵਿਆਜ, ਬੈਂਕ ਸਟੇਟਮੈਂਟ ਅਨੁਸਾਰ।'],
+  'saveManualTxn.amount':['Amount in rupees. Prefer the normal menus (Meetings, Loans, CIF) for regular entries.','रुपये में राशि। सामान्य प्रविष्टियों के लिए मीटिंग, ऋण, सीआईएफ मेनू का उपयोग करें।','ਰੁਪਇਆਂ ਵਿੱਚ ਰਕਮ। ਆਮ ਐਂਟਰੀਆਂ ਲਈ ਮੀਟਿੰਗ, ਕਰਜ਼ਾ, ਸੀ.ਆਈ.ਐਫ਼. ਮੇਨੂ ਵਰਤੋ।'],
+  'saveManualTxn.narration':['Say clearly why. Example: Paid for stationery for the meeting. Needed for audit.','साफ़ कारण लिखें। उदाहरण: बैठक की स्टेशनरी का भुगतान। ऑडिट के लिए ज़रूरी।','ਸਾਫ਼ ਕਾਰਨ ਲਿਖੋ। ਉਦਾਹਰਣ: ਮੀਟਿੰਗ ਦੀ ਸਟੇਸ਼ਨਰੀ ਦਾ ਭੁਗਤਾਨ। ਆਡਿਟ ਲਈ ਜ਼ਰੂਰੀ।'],
+  'saveOpening.openingCash':['Cash physically in hand on the opening date — count it.','शुरुआती तारीख को हाथ में असल नकद — गिनकर लिखें।','ਸ਼ੁਰੂਆਤੀ ਮਿਤੀ ਨੂੰ ਹੱਥ ਵਿੱਚ ਅਸਲ ਨਕਦ — ਗਿਣ ਕੇ ਲਿਖੋ।'],
+  'saveOpening.openingBank':['Bank balance on the opening date as shown in the passbook.','शुरुआती तारीख का बैंक शेष, पासबुक के अनुसार।','ਸ਼ੁਰੂਆਤੀ ਮਿਤੀ ਦਾ ਬੈਂਕ ਬਕਾਇਆ, ਪਾਸਬੁੱਕ ਅਨੁਸਾਰ।'],
+  'saveOpening.openingDate':['Cut-off date from which you start using the app (balances as at the end of the day before your first entry).','जिस तारीख से ऐप का उपयोग शुरू करना है (पहली प्रविष्टि से पिछले दिन के अंत की स्थिति)।','ਜਿਸ ਮਿਤੀ ਤੋਂ ਐਪ ਵਰਤਣੀ ਸ਼ੁਰੂ ਕਰਨੀ ਹੈ (ਪਹਿਲੀ ਐਂਟਰੀ ਤੋਂ ਪਿਛਲੇ ਦਿਨ ਦੇ ਅੰਤ ਦੀ ਸਥਿਤੀ)।'],
+  'saveBankInterest.amount':['Interest credited by the bank, as shown in the passbook.','बैंक द्वारा जमा किया ब्याज, पासबुक के अनुसार।','ਬੈਂਕ ਵੱਲੋਂ ਜਮ੍ਹਾਂ ਕੀਤਾ ਵਿਆਜ, ਪਾਸਬੁੱਕ ਅਨੁਸਾਰ।'],
+  'postDepositToBank.ref':['Pay-in slip number or UPI reference.','पे-इन स्लिप नंबर या यूपीआई संदर्भ।','ਪੇ-ਇਨ ਸਲਿੱਪ ਨੰਬਰ ਜਾਂ ਯੂ.ਪੀ.ਆਈ. ਹਵਾਲਾ।'],
+  'addExpCat.cat':['A new kind of expense. Example: Stationery, Refreshments, Travel','खर्च की नई मद। उदाहरण: स्टेशनरी, जलपान, यात्रा','ਖਰਚੇ ਦੀ ਨਵੀਂ ਮੱਦ। ਉਦਾਹਰਣ: ਸਟੇਸ਼ਨਰੀ, ਜਲ-ਪਾਣੀ, ਸਫ਼ਰ'],
+  'saveUserSettings.currentUserName':['Name of the person using the app now; recorded in the Audit Trail.','ऐप चलाने वाले का नाम; ऑडिट ट्रेल में दर्ज होगा।','ਐਪ ਚਲਾਉਣ ਵਾਲੇ ਦਾ ਨਾਮ; ਆਡਿਟ ਟ੍ਰੇਲ ਵਿੱਚ ਦਰਜ ਹੋਵੇਗਾ।'],
+  'generateLoanApplication.requestedAmount':['Amount you are asking the bank for. Keep it within your Micro Credit Plan.','बैंक से माँगी जा रही राशि। इसे अपने सूक्ष्म ऋण योजना के भीतर रखें।','ਬੈਂਕ ਤੋਂ ਮੰਗੀ ਜਾ ਰਹੀ ਰਕਮ। ਇਸ ਨੂੰ ਆਪਣੀ ਸੂਖਮ ਕਰਜ਼ਾ ਯੋਜਨਾ ਦੇ ਅੰਦਰ ਰੱਖੋ।'],
+  // generic fall-backs (used when a form has no specific hint for that field)
+  'date':['Date the event actually happened (not a future date).','जिस दिन घटना वास्तव में हुई (भविष्य की तारीख नहीं)।','ਜਿਸ ਦਿਨ ਘਟਨਾ ਅਸਲ ਵਿੱਚ ਹੋਈ (ਭਵਿੱਖ ਦੀ ਮਿਤੀ ਨਹੀਂ)।'],
+  'amount':['Amount in whole rupees. Check the zeros.','पूरे रुपये में राशि। शून्य ध्यान से जाँचें।','ਪੂਰੇ ਰੁਪਇਆਂ ਵਿੱਚ ਰਕਮ। ਸਿਫ਼ਰਾਂ ਧਿਆਨ ਨਾਲ ਜਾਂਚੋ।'],
+  'narration':['Short clear reason, for the Audit Trail.','संक्षिप्त स्पष्ट कारण, ऑडिट ट्रेल के लिए।','ਛੋਟਾ ਸਾਫ਼ ਕਾਰਨ, ਆਡਿਟ ਟ੍ਰੇਲ ਲਈ।'],
+  'mode':['Cash, Bank or UPI — where the money actually went in or out.','नकद, बैंक या यूपीआई — पैसा असल में कहाँ आया/गया।','ਨਕਦ, ਬੈਂਕ ਜਾਂ ਯੂ.ਪੀ.ਆਈ. — ਪੈਸਾ ਅਸਲ ਵਿੱਚ ਕਿੱਥੋਂ ਆਇਆ/ਗਿਆ।']
+};
+
+/* ---- Live "does this value look wrong?" checks. Return [en,hi,pa] or '' ---- */
+const FIELD_CHECKS = {
+  mobile: v=>{ v=(v||'').trim(); if(!v) return ''; return /^[6-9]\d{9}$/.test(v) ? '' : ['Mobile should be 10 digits starting with 6, 7, 8 or 9.','मोबाइल 10 अंकों का हो और 6, 7, 8 या 9 से शुरू हो।','ਮੋਬਾਈਲ 10 ਅੰਕਾਂ ਦਾ ਹੋਵੇ ਤੇ 6, 7, 8 ਜਾਂ 9 ਤੋਂ ਸ਼ੁਰੂ ਹੋਵੇ।']; },
+  contact: v=>FIELD_CHECKS.mobile(v),
+  email: v=>{ v=(v||'').trim(); if(!v) return ''; return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) ? '' : ['This does not look like an email address.','यह ईमेल पता सही नहीं लगता।','ਇਹ ਈਮੇਲ ਪਤਾ ਸਹੀ ਨਹੀਂ ਲੱਗਦਾ।']; },
+  ifsc: v=>{ v=(v||'').trim(); if(!v) return ''; return /^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(v) ? '' : ['IFSC is 11 characters: 4 letters, 0, then 6 letters/digits.','आईएफ़एससी 11 अक्षर: 4 अक्षर, 0, फिर 6 अक्षर/अंक।','ਆਈ.ਐਫ਼.ਐਸ.ਸੀ. 11 ਅੱਖਰ: 4 ਅੱਖਰ, 0, ਫਿਰ 6 ਅੱਖਰ/ਅੰਕ।']; },
+  bankIfsc: v=>FIELD_CHECKS.ifsc(v),
+  accno: v=>{ v=(v||'').trim(); if(!v) return ''; return /^\d{9,18}$/.test(v) ? '' : ['Account number is usually 9 to 18 digits, no spaces or letters.','खाता नंबर आम तौर पर 9 से 18 अंक, बिना स्पेस या अक्षर।','ਖਾਤਾ ਨੰਬਰ ਆਮ ਤੌਰ ਤੇ 9 ਤੋਂ 18 ਅੰਕ, ਬਿਨਾਂ ਖਾਲੀ ਥਾਂ ਜਾਂ ਅੱਖਰ।']; },
+  bankAccno: v=>FIELD_CHECKS.accno(v),
+  name: v=>{ v=(v||'').trim(); if(!v) return ''; if(/\d/.test(v)) return ['A name should not contain digits.','नाम में अंक नहीं होने चाहिए।','ਨਾਮ ਵਿੱਚ ਅੰਕ ਨਹੀਂ ਹੋਣੇ ਚਾਹੀਦੇ।']; return v.length<2 ? ['Name is too short.','नाम बहुत छोटा है।','ਨਾਮ ਬਹੁਤ ਛੋਟਾ ਹੈ।'] : ''; },
+  amount: v=>{ if(v===''||v==null) return ''; const n=parseFloat(v); if(!(n>0)) return ['Amount must be more than zero.','राशि शून्य से अधिक होनी चाहिए।','ਰਕਮ ਸਿਫ਼ਰ ਤੋਂ ਵੱਧ ਹੋਣੀ ਚਾਹੀਦੀ ਹੈ।']; return n>=1000000 ? ['This is a very large amount (₹10 lakh or more) — please check the zeros.','यह बहुत बड़ी राशि (₹10 लाख या अधिक) है — शून्य जाँच लें।','ਇਹ ਬਹੁਤ ਵੱਡੀ ਰਕਮ (₹10 ਲੱਖ ਜਾਂ ਵੱਧ) ਹੈ — ਸਿਫ਼ਰਾਂ ਜਾਂਚ ਲਓ।'] : ''; },
+  principal: v=>FIELD_CHECKS.amount(v),
+  newloan_amount: v=>FIELD_CHECKS.amount(v),
+  sanctionedAmount: v=>FIELD_CHECKS.amount(v),
+  openingCash: v=>{ const n=parseFloat(v); return (v!==''&&n<0) ? ['Cash cannot be negative.','नकद ऋणात्मक नहीं हो सकता।','ਨਕਦ ਰਿਣਾਤਮਕ ਨਹੀਂ ਹੋ ਸਕਦਾ।'] : ''; },
+  openingBank: v=>FIELD_CHECKS.openingCash(v),
+  interestRate: v=>{ if(v===''||v==null) return ''; const n=parseFloat(v); if(n<0) return ['Interest rate cannot be negative.','ब्याज दर ऋणात्मक नहीं हो सकती।','ਵਿਆਜ ਦਰ ਰਿਣਾਤਮਕ ਨਹੀਂ ਹੋ ਸਕਦੀ।']; if(n===0) return ['0% means interest-free. Is that intended?','0% यानी ब्याज-मुक्त। क्या यही चाहिए?','0% ਮਤਲਬ ਬਿਨਾਂ ਵਿਆਜ। ਕੀ ਇਹੀ ਚਾਹੀਦਾ ਹੈ?']; return n>36 ? ['Rate above 36% a year looks too high — did you type a monthly rate? (12% a year = 1% a month)','36% सालाना से ऊपर बहुत अधिक लगता है — कहीं मासिक दर तो नहीं लिखी? (12% सालाना = 1% मासिक)','36% ਸਾਲਾਨਾ ਤੋਂ ਉੱਪਰ ਬਹੁਤ ਵੱਧ ਲੱਗਦਾ ਹੈ — ਕਿਤੇ ਮਹੀਨਾਵਾਰ ਦਰ ਤਾਂ ਨਹੀਂ ਲਿਖੀ? (12% ਸਾਲਾਨਾ = 1% ਮਹੀਨਾ)'] : ''; },
+  rate: v=>FIELD_CHECKS.interestRate(v),
+  newloan_rate: v=>FIELD_CHECKS.interestRate(v),
+  instalments: v=>{ if(v===''||v==null) return ''; const n=parseInt(v); return (n>=1&&n<=120) ? '' : ['Instalments should be between 1 and 120.','किस्तें 1 से 120 के बीच होनी चाहिए।','ਕਿਸ਼ਤਾਂ 1 ਤੋਂ 120 ਵਿਚਕਾਰ ਹੋਣੀਆਂ ਚਾਹੀਦੀਆਂ ਹਨ।']; },
+  newloan_inst: v=>FIELD_CHECKS.instalments(v),
+  period: v=>FIELD_CHECKS.instalments(v),
+  tenureMonths: v=>FIELD_CHECKS.instalments(v),
+  compulsorySavingAmount: v=>{ if(v===''||v==null) return ''; return parseFloat(v)>0 ? '' : ['Compulsory saving should be more than zero.','अनिवार्य बचत शून्य से अधिक होनी चाहिए।','ਲਾਜ਼ਮੀ ਬੱਚਤ ਸਿਫ਼ਰ ਤੋਂ ਵੱਧ ਹੋਣੀ ਚਾਹੀਦੀ ਹੈ।']; }
+};
+const FUTURE_OK_FIELDS = ['nextDueDate','nextMeetingDate','fromDate','repayFrequency'];
+function fieldFutureCheck(name, v){
+  if(!v || FUTURE_OK_FIELDS.includes(name)) return '';
+  if(!/(^date$|Date$)/.test(name)) return '';
+  return (v > todayStr()) ? ['This is a future date. Enter the date the event actually happened.','यह भविष्य की तारीख है। घटना की वास्तविक तारीख लिखें।','ਇਹ ਭਵਿੱਖ ਦੀ ਮਿਤੀ ਹੈ। ਘਟਨਾ ਦੀ ਅਸਲ ਮਿਤੀ ਲਿਖੋ।'] : '';
+}
+function applyFieldHints(root){
+  try{
+    if(!root || !root.querySelectorAll) return;
+    root.querySelectorAll('form[onsubmit]').forEach(form=>{
+      const m = (form.getAttribute('onsubmit')||'').match(/return\s+([A-Za-z0-9_]+)\(/);
+      const fn = m ? m[1] : '';
+      form.querySelectorAll('input[name],select[name],textarea[name]').forEach(el=>{
+        const name = el.getAttribute('name');
+        if(!name || el.type==='hidden' || el.type==='checkbox' || el.type==='file') return;
+        if(el.nextElementSibling && el.nextElementSibling.classList && el.nextElementSibling.classList.contains('fhint')) return;
+        const h = FIELD_HINTS[fn+'.'+name] || FIELD_HINTS[name];
+        const hasCheck = FIELD_CHECKS[name] || /(^date$|Date$)/.test(name);
+        if(!h && !hasCheck) return;
+        const box = document.createElement('div'); box.className = 'fhint';
+        const tip = document.createElement('span'); tip.className = 'fhint-tip'; tip.textContent = h ? ('💡 '+pick3(h)) : '';
+        const warn = document.createElement('span'); warn.className = 'fhint-warn';
+        box.appendChild(tip); box.appendChild(warn);
+        el.insertAdjacentElement('afterend', box);
+        const run = ()=>{
+          const v = (el.value||'');
+          let w = FIELD_CHECKS[name] ? FIELD_CHECKS[name](v) : '';
+          if(!w) w = fieldFutureCheck(name, v);
+          warn.textContent = w ? ('⚠ '+pick3(w)) : '';
+        };
+        el.addEventListener('input', run); el.addEventListener('change', run); run();
+      });
+    });
+  }catch(e){}
+}
+
+/* ---- Video tutorials: guided lessons (EN/HI/PA) + slots for the user's own recorded videos ---- */
+const TUTORIALS = [
+ {id:'t1', route:'profile', icon:'◎', title:['1. Set up your SHG profile','1. समूह प्रोफ़ाइल भरें','1. ਸਮੂਹ ਪ੍ਰੋਫ਼ਾਈਲ ਭਰੋ'], steps:[
+  ['Open SHG Profile from the menu.','मेनू से "SHG प्रोफ़ाइल" खोलें।','ਮੇਨੂ ਵਿੱਚੋਂ "ਸਮੂਹ ਪ੍ਰੋਫ਼ਾਈਲ" ਖੋਲ੍ਹੋ।'],
+  ['Fill SHG name, village, block, district exactly as in the bank passbook.','समूह का नाम, गाँव, ब्लॉक, जिला बैंक पासबुक के अनुसार भरें।','ਸਮੂਹ ਦਾ ਨਾਮ, ਪਿੰਡ, ਬਲਾਕ, ਜ਼ਿਲ੍ਹਾ ਬੈਂਕ ਪਾਸਬੁੱਕ ਅਨੁਸਾਰ ਭਰੋ।'],
+  ['Enter meeting day, frequency and the fixed compulsory saving amount.','बैठक का दिन, आवृत्ति और तय अनिवार्य बचत राशि लिखें।','ਮੀਟਿੰਗ ਦਾ ਦਿਨ, ਗਿਣਤੀ ਅਤੇ ਤੈਅ ਲਾਜ਼ਮੀ ਬੱਚਤ ਰਕਮ ਲਿਖੋ।'],
+  ['Enter President, Secretary and Treasurer names — they print on statements.','अध्यक्ष, सचिव, कोषाध्यक्ष के नाम लिखें — ये विवरणों पर छपेंगे।','ਪ੍ਰਧਾਨ, ਸਕੱਤਰ, ਖ਼ਜ਼ਾਨਚੀ ਦੇ ਨਾਮ ਲਿਖੋ — ਇਹ ਵਿਵਰਣਾਂ ਤੇ ਛਪਣਗੇ।'],
+  ['Press Save. Read the grey tips under each field if unsure.','सेव दबाएँ। संदेह हो तो हर खाने के नीचे के सुझाव पढ़ें।','ਸੇਵ ਦਬਾਓ। ਸ਼ੱਕ ਹੋਵੇ ਤਾਂ ਹਰ ਖਾਨੇ ਹੇਠਲੇ ਸੁਝਾਅ ਪੜ੍ਹੋ।']]},
+ {id:'t2', route:'members', icon:'◈', title:['2. Add members','2. सदस्य जोड़ें','2. ਮੈਂਬਰ ਜੋੜੋ'], steps:[
+  ['Open Members and press Add Member.','"सदस्य" खोलें और "सदस्य जोड़ें" दबाएँ।','"ਮੈਂਬਰ" ਖੋਲ੍ਹੋ ਅਤੇ "ਮੈਂਬਰ ਜੋੜੋ" ਦਬਾਓ।'],
+  ['Type name, father/husband name and a 10-digit mobile number.','नाम, पिता/पति का नाम और 10 अंकों का मोबाइल नंबर लिखें।','ਨਾਮ, ਪਿਤਾ/ਪਤੀ ਦਾ ਨਾਮ ਅਤੇ 10 ਅੰਕਾਂ ਦਾ ਮੋਬਾਈਲ ਨੰਬਰ ਲਿਖੋ।'],
+  ['Enter the real joining date — for old members, the old date.','असल जुड़ने की तारीख लिखें — पुराने सदस्यों की पुरानी तारीख।','ਸ਼ਾਮਲ ਹੋਣ ਦੀ ਅਸਲ ਮਿਤੀ ਲਿਖੋ — ਪੁਰਾਣੇ ਮੈਂਬਰਾਂ ਦੀ ਪੁਰਾਣੀ ਮਿਤੀ।'],
+  ['Add bank account and IFSC if available (needed for LokOS).','उपलब्ध हो तो बैंक खाता और आईएफ़एससी जोड़ें (लोकओएस के लिए)।','ਹੋਵੇ ਤਾਂ ਬੈਂਕ ਖਾਤਾ ਅਤੇ ਆਈ.ਐਫ਼.ਐਸ.ਸੀ. ਜੋੜੋ (ਲੋਕਓਐਸ ਲਈ)।'],
+  ['Save. Repeat for each member.','सेव करें। हर सदस्य के लिए दोहराएँ।','ਸੇਵ ਕਰੋ। ਹਰ ਮੈਂਬਰ ਲਈ ਦੁਹਰਾਓ।']]},
+ {id:'t3', route:'bulkimport', icon:'⇪', title:['3. Bring in existing group data','3. पुराने समूह का डेटा लाएँ','3. ਪੁਰਾਣੇ ਸਮੂਹ ਦਾ ਡਾਟਾ ਲਿਆਓ'], steps:[
+  ['Open Bulk Import and download the templates.','"बल्क इम्पोर्ट" खोलें और टेम्पलेट डाउनलोड करें।','"ਬਲਕ ਇੰਪੋਰਟ" ਖੋਲ੍ਹੋ ਅਤੇ ਟੈਮਪਲੇਟ ਡਾਊਨਲੋਡ ਕਰੋ।'],
+  ['Fill opening savings per member and existing loans in Excel.','एक्सेल में हर सदस्य की शुरुआती बचत और मौजूदा ऋण भरें।','ਐਕਸਲ ਵਿੱਚ ਹਰ ਮੈਂਬਰ ਦੀ ਸ਼ੁਰੂਆਤੀ ਬੱਚਤ ਅਤੇ ਮੌਜੂਦਾ ਕਰਜ਼ੇ ਭਰੋ।'],
+  ['Upload the file, read the preview and fix any red rows.','फ़ाइल अपलोड करें, पूर्वावलोकन पढ़ें और लाल पंक्तियाँ ठीक करें।','ਫ਼ਾਈਲ ਅਪਲੋਡ ਕਰੋ, ਪੂਰਵ-ਦਰਸ਼ਨ ਪੜ੍ਹੋ ਅਤੇ ਲਾਲ ਕਤਾਰਾਂ ਠੀਕ ਕਰੋ।'],
+  ['Confirm the import. Check the Trial Balance afterwards.','इम्पोर्ट की पुष्टि करें। बाद में ट्रायल बैलेंस जाँचें।','ਇੰਪੋਰਟ ਦੀ ਪੁਸ਼ਟੀ ਕਰੋ। ਬਾਅਦ ਵਿੱਚ ਟ੍ਰਾਇਲ ਬੈਲੈਂਸ ਜਾਂਚੋ।']]},
+ {id:'t4', route:'meetings', icon:'◷', title:['4. Record a meeting','4. बैठक दर्ज करें','4. ਮੀਟਿੰਗ ਦਰਜ ਕਰੋ'], steps:[
+  ['Open Meetings. Set the real meeting date and place.','"बैठक" खोलें। असली तारीख और स्थान लिखें।','"ਮੀਟਿੰਗ" ਖੋਲ੍ਹੋ। ਅਸਲ ਮਿਤੀ ਅਤੇ ਸਥਾਨ ਲਿਖੋ।'],
+  ['Mark attendance; enter savings and loan repayments for each member.','उपस्थिति लगाएँ; हर सदस्य की बचत और ऋण वापसी लिखें।','ਹਾਜ਼ਰੀ ਲਗਾਓ; ਹਰ ਮੈਂਬਰ ਦੀ ਬੱਚਤ ਅਤੇ ਕਰਜ਼ਾ ਵਾਪਸੀ ਲਿਖੋ।'],
+  ['Add any new loan or expense decided in the meeting.','बैठक में तय नया ऋण या खर्च जोड़ें।','ਮੀਟਿੰਗ ਵਿੱਚ ਤੈਅ ਨਵਾਂ ਕਰਜ਼ਾ ਜਾਂ ਖਰਚਾ ਜੋੜੋ।'],
+  ['Review the summary, count the cash, then Post. Posting writes all accounting entries once.','सारांश देखें, नकद गिनें, फिर पोस्ट करें। पोस्ट से सारी लेखा प्रविष्टियाँ एक बार बन जाती हैं।','ਸਾਰ ਵੇਖੋ, ਨਕਦ ਗਿਣੋ, ਫਿਰ ਪੋਸਟ ਕਰੋ। ਪੋਸਟ ਨਾਲ ਸਾਰੀਆਂ ਲੇਖਾ ਐਂਟਰੀਆਂ ਇੱਕ ਵਾਰ ਬਣਦੀਆਂ ਹਨ।'],
+  ['If something is wrong, use Reverse — never delete.','कुछ गलत हो तो "रिवर्स" करें — कभी डिलीट नहीं।','ਕੁਝ ਗਲਤ ਹੋਵੇ ਤਾਂ "ਰਿਵਰਸ" ਕਰੋ — ਕਦੇ ਮਿਟਾਓ ਨਹੀਂ।']]},
+ {id:'t5', route:'loans', icon:'◐', title:['5. Give a member loan','5. सदस्य को ऋण दें','5. ਮੈਂਬਰ ਨੂੰ ਕਰਜ਼ਾ ਦਿਓ'], steps:[
+  ['Open Members Loan and press New Loan.','"सदस्य ऋण" खोलें और "नया ऋण" दबाएँ।','"ਮੈਂਬਰ ਕਰਜ਼ਾ" ਖੋਲ੍ਹੋ ਅਤੇ "ਨਵਾਂ ਕਰਜ਼ਾ" ਦਬਾਓ।'],
+  ['Choose the member, enter purpose, amount, yearly rate and instalments.','सदस्य चुनें; उद्देश्य, राशि, सालाना दर और किस्तें लिखें।','ਮੈਂਬਰ ਚੁਣੋ; ਮਕਸਦ, ਰਕਮ, ਸਾਲਾਨਾ ਦਰ ਅਤੇ ਕਿਸ਼ਤਾਂ ਲਿਖੋ।'],
+  ['Pick Reducing or Flat interest as decided by the group.','समूह के निर्णय अनुसार घटते शेष या फ्लैट ब्याज चुनें।','ਸਮੂਹ ਦੇ ਫ਼ੈਸਲੇ ਅਨੁਸਾਰ ਘਟਦਾ ਬਕਾਇਆ ਜਾਂ ਫਲੈਟ ਵਿਆਜ ਚੁਣੋ।'],
+  ['Save and open the schedule to see every instalment.','सेव करें और हर किस्त देखने के लिए शेड्यूल खोलें।','ਸੇਵ ਕਰੋ ਅਤੇ ਹਰ ਕਿਸ਼ਤ ਵੇਖਣ ਲਈ ਸ਼ਡਿਊਲ ਖੋਲ੍ਹੋ।']]},
+ {id:'t6', route:'cif', icon:'◑', title:['6. Record CIF / Revolving Fund','6. सीआईएफ / रिवॉल्विंग फंड दर्ज करें','6. ਸੀ.ਆਈ.ਐਫ਼. / ਘੁੰਮਦਾ ਫੰਡ ਦਰਜ ਕਰੋ'], steps:[
+  ['Open CIF (or Revolving Fund).','"सीआईएफ" (या "रिवॉल्विंग फंड") खोलें।','"ਸੀ.ਆਈ.ਐਫ਼." (ਜਾਂ "ਘੁੰਮਦਾ ਫੰਡ") ਖੋਲ੍ਹੋ।'],
+  ['Enter date received, source, amount, rate and period from the sanction letter.','प्राप्ति तिथि, स्रोत, राशि, दर और अवधि स्वीकृति पत्र से लिखें।','ਮਿਲਣ ਦੀ ਮਿਤੀ, ਸਰੋਤ, ਰਕਮ, ਦਰ ਅਤੇ ਮਿਆਦ ਮਨਜ਼ੂਰੀ ਪੱਤਰ ਤੋਂ ਲਿਖੋ।'],
+  ['Later record each repayment with principal and interest separately.','बाद में हर वापसी मूलधन और ब्याज अलग-अलग दर्ज करें।','ਬਾਅਦ ਵਿੱਚ ਹਰ ਵਾਪਸੀ ਮੂਲ ਰਕਮ ਤੇ ਵਿਆਜ ਵੱਖਰੇ ਦਰਜ ਕਰੋ।']]},
+ {id:'t7', route:'bankloan', icon:'🏛', title:['7. Bank loan to SHG','7. समूह को बैंक ऋण','7. ਸਮੂਹ ਨੂੰ ਬੈਂਕ ਕਰਜ਼ਾ'], steps:[
+  ['Open Bank Loan to SHG and add the sanction (TL or CC) from the bank letter.','"समूह को बैंक ऋण" खोलें और बैंक पत्र से स्वीकृति (टीएल/सीसी) जोड़ें।','"ਸਮੂਹ ਨੂੰ ਬੈਂਕ ਕਰਜ਼ਾ" ਖੋਲ੍ਹੋ ਅਤੇ ਬੈਂਕ ਪੱਤਰ ਤੋਂ ਮਨਜ਼ੂਰੀ (ਟੀ.ਐਲ./ਸੀ.ਸੀ.) ਜੋੜੋ।'],
+  ['Record each drawal when money arrives in the bank.','पैसा बैंक में आने पर हर निकासी दर्ज करें।','ਪੈਸਾ ਬੈਂਕ ਵਿੱਚ ਆਉਣ ਤੇ ਹਰ ਨਿਕਾਸੀ ਦਰਜ ਕਰੋ।'],
+  ['Record repayments from the bank statement, principal and interest separately.','बैंक विवरण से वापसी दर्ज करें — मूलधन व ब्याज अलग।','ਬੈਂਕ ਸਟੇਟਮੈਂਟ ਤੋਂ ਵਾਪਸੀ ਦਰਜ ਕਰੋ — ਮੂਲ ਰਕਮ ਤੇ ਵਿਆਜ ਵੱਖਰੇ।']]},
+ {id:'t8', route:'monthlystatements', icon:'▤', title:['8. Month-end and statements','8. माह-अंत और विवरण','8. ਮਹੀਨਾ-ਅੰਤ ਅਤੇ ਵਿਵਰਣ'], steps:[
+  ['Open Data Quality and fix any red items first.','पहले "डेटा गुणवत्ता" खोलकर लाल मदें ठीक करें।','ਪਹਿਲਾਂ "ਡਾਟਾ ਗੁਣਵੱਤਾ" ਖੋਲ੍ਹ ਕੇ ਲਾਲ ਮੱਦਾਂ ਠੀਕ ਕਰੋ।'],
+  ['Open Monthly Statements, choose the month, preview and Print All.','"मासिक विवरण" खोलें, माह चुनें, पूर्वावलोकन करें और "सब प्रिंट करें" दबाएँ।','"ਮਾਸਿਕ ਵਿਵਰਣ" ਖੋਲ੍ਹੋ, ਮਹੀਨਾ ਚੁਣੋ, ਪੂਰਵ-ਦਰਸ਼ਨ ਕਰੋ ਅਤੇ "ਸਭ ਪ੍ਰਿੰਟ ਕਰੋ" ਦਬਾਓ।'],
+  ['After handing them out, mark them Sent.','बाँटने के बाद "भेजा गया" चिह्नित करें।','ਵੰਡਣ ਮਗਰੋਂ "ਭੇਜਿਆ ਗਿਆ" ਨਿਸ਼ਾਨ ਲਗਾਓ।'],
+  ['Run Month Closing and take a Backup.','माह समापन करें और बैकअप लें।','ਮਹੀਨਾ ਸਮਾਪਤੀ ਕਰੋ ਅਤੇ ਬੈਕਅੱਪ ਲਓ।']]},
+ {id:'t9', route:'backup', icon:'⬇', title:['9. Backup and restore','9. बैकअप और रीस्टोर','9. ਬੈਕਅੱਪ ਅਤੇ ਰੀਸਟੋਰ'], steps:[
+  ['Open Backup. Press Download Backup after every meeting.','"बैकअप" खोलें। हर बैठक के बाद "बैकअप डाउनलोड" दबाएँ।','"ਬੈਕਅੱਪ" ਖੋਲ੍ਹੋ। ਹਰ ਮੀਟਿੰਗ ਮਗਰੋਂ "ਬੈਕਅੱਪ ਡਾਊਨਲੋਡ" ਦਬਾਓ।'],
+  ['Keep the file in WhatsApp saved messages / a pen-drive.','फ़ाइल व्हाट्सऐप सेव्ड मैसेज / पेन-ड्राइव में रखें।','ਫ਼ਾਈਲ ਵਟਸਐਪ ਸੇਵਡ ਮੈਸੇਜ / ਪੈੱਨ-ਡਰਾਈਵ ਵਿੱਚ ਰੱਖੋ।'],
+  ['On a new phone, open the app, use Restore and pick the file.','नए फ़ोन में ऐप खोलें, "रीस्टोर" से फ़ाइल चुनें।','ਨਵੇਂ ਫ਼ੋਨ ਵਿੱਚ ਐਪ ਖੋਲ੍ਹੋ, "ਰੀਸਟੋਰ" ਨਾਲ ਫ਼ਾਈਲ ਚੁਣੋ।']]}
+];
+let TUT_CUR = 't1';
+function tutVideoLinks(){ if(!DB.settings.videoLinks) DB.settings.videoLinks = {}; return DB.settings.videoLinks; }
+function tutVideoEmbed(url){
+  url = (url||'').trim(); if(!url) return '';
+  let m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,})/);
+  if(m) return `<iframe src="https://www.youtube.com/embed/${esc(m[1])}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:0;border-radius:8px"></iframe>`;
+  m = url.match(/drive\.google\.com\/file\/d\/([\w-]+)/);
+  if(m) return `<iframe src="https://drive.google.com/file/d/${esc(m[1])}/preview" allowfullscreen style="width:100%;aspect-ratio:16/9;border:0;border-radius:8px"></iframe>`;
+  if(/\.(mp4|webm|ogg)(\?|$)/i.test(url)) return `<video controls src="${esc(url)}" style="width:100%;border-radius:8px"></video>`;
+  return `<a class="btn small" target="_blank" rel="noopener" href="${esc(url)}">▶ Open video</a>`;
+}
+function tutSelect(id){ TUT_CUR = id; render(); }
+function tutSpeak(id){
+  try{
+    const t = TUTORIALS.find(x=>x.id===id); if(!t) return;
+    window.speechSynthesis.cancel();
+    const text = pick3(t.title)+'. '+t.steps.map((s,i)=>(i+1)+'. '+pick3(s)).join(' ');
+    const u = new SpeechSynthesisUtterance(text); u.lang = speechLang(); window.speechSynthesis.speak(u);
+  }catch(e){ flash('Voice is not available on this device.','error'); }
+}
+function tutStopSpeak(){ try{ window.speechSynthesis.cancel(); }catch(e){} }
+function tutSaveLink(id, lang, val){
+  const L = tutVideoLinks(); if(!L[id]) L[id] = {}; L[id][lang] = (val||'').trim();
+  logAudit('Video tutorial link', id+' ['+lang+'] '+(val?'set':'cleared'));
+  saveDB(); render();
+}
+function viewTutorials(){
+  const lang = curLang();
+  const t = TUTORIALS.find(x=>x.id===TUT_CUR) || TUTORIALS[0];
+  const links = tutVideoLinks();
+  const mine = links[t.id] || {};
+  const url = mine[lang] || mine.en || '';
+  const list = TUTORIALS.map(x=>`<button class="btn small ${x.id===t.id?'':'secondary'}" style="display:block;width:100%;text-align:left;margin-bottom:6px" onclick="tutSelect('${x.id}')">${esc(pick3(x.title))}${(links[x.id]&&(links[x.id].en||links[x.id].hi||links[x.id].pa))?' 🎬':''}</button>`).join('');
+  const steps = t.steps.map((s,i)=>`<li style="margin-bottom:8px"><b>${esc(pick3(s))}</b></li>`).join('');
+  const slots = [['en','English'],['hi','हिन्दी'],['pa','ਪੰਜਾਬੀ']].map(([k,n])=>
+    `<div class="field"><label>${n} video link</label><input value="${esc(mine[k]||'')}" placeholder="https://youtu.be/… or Google Drive / .mp4 link" onchange="tutSaveLink('${t.id}','${k}',this.value)"></div>`).join('');
+  return `<h2>${esc(T3('Video Tutorials — How to use and fill','वीडियो ट्यूटोरियल — कैसे उपयोग करें और भरें','ਵੀਡੀਓ ਟਿਊਟੋਰੀਅਲ — ਕਿਵੇਂ ਵਰਤਣਾ ਅਤੇ ਭਰਨਾ'))}</h2>
+  <div class="msg info">${esc(T3('Step-by-step guides work fully offline and can be read aloud. Your own recorded videos (YouTube, Google Drive or .mp4 links) can be added below for each language; playing them needs internet.','चरण-दर-चरण गाइड बिना इंटरनेट चलते हैं और बोलकर सुनाए जा सकते हैं। आपके अपने रिकॉर्ड किए वीडियो (यूट्यूब, गूगल ड्राइव या .mp4 लिंक) हर भाषा के लिए नीचे जोड़ सकते हैं; चलाने के लिए इंटरनेट चाहिए।','ਕਦਮ-ਦਰ-ਕਦਮ ਗਾਈਡ ਬਿਨਾਂ ਇੰਟਰਨੈੱਟ ਚੱਲਦੇ ਹਨ ਅਤੇ ਬੋਲ ਕੇ ਸੁਣਾਏ ਜਾ ਸਕਦੇ ਹਨ। ਤੁਹਾਡੇ ਆਪਣੇ ਰਿਕਾਰਡ ਕੀਤੇ ਵੀਡੀਓ (ਯੂਟਿਊਬ, ਗੂਗਲ ਡਰਾਈਵ ਜਾਂ .mp4 ਲਿੰਕ) ਹਰ ਭਾਸ਼ਾ ਲਈ ਹੇਠਾਂ ਜੋੜ ਸਕਦੇ ਹੋ; ਚਲਾਉਣ ਲਈ ਇੰਟਰਨੈੱਟ ਚਾਹੀਦਾ ਹੈ।'))}</div>
+  <div style="display:grid;grid-template-columns:minmax(180px,260px) 1fr;gap:16px;align-items:start" class="tutgrid">
+   <div class="card">${list}</div>
+   <div class="card">
+    <h3>${esc(pick3(t.title))}</h3>
+    ${url?('<div style="margin-bottom:12px">'+tutVideoEmbed(url)+'</div>'):''}
+    <ol style="padding-left:20px">${steps}</ol>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" onclick="go('${t.route}')">${esc(T3('Take me to this screen','इस स्क्रीन पर ले चलें','ਇਸ ਸਕ੍ਰੀਨ ਤੇ ਲੈ ਚੱਲੋ'))} →</button>
+      <button class="btn secondary" onclick="tutSpeak('${t.id}')">🔊 ${esc(T3('Read aloud','बोलकर सुनाएँ','ਬੋਲ ਕੇ ਸੁਣਾਓ'))}</button>
+      <button class="btn secondary" onclick="tutStopSpeak()">⏹ ${esc(T3('Stop','रोकें','ਰੋਕੋ'))}</button>
+    </div>
+    <details style="margin-top:14px"><summary><b>${esc(T3('Add my own recorded video links','अपने रिकॉर्ड किए वीडियो के लिंक जोड़ें','ਆਪਣੇ ਰਿਕਾਰਡ ਕੀਤੇ ਵੀਡੀਓ ਦੇ ਲਿੰਕ ਜੋੜੋ'))}</b></summary>${slots}</details>
+   </div></div>`;
 }
 
 /* ============================================================ DASHBOARD */
@@ -2604,7 +2878,7 @@ function updateAttendanceSummary(){
    a posted amount. Uses the browser's own Web Speech API; where a device/browser doesn't
    support it, the mic/replay buttons say so plainly instead of failing silently. */
 function speechSupported(){ return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
-function speechLang(){ return (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN'; }
+function speechLang(){ const l=DB.settings.language; return l==='hi' ? 'hi-IN' : (l==='pa' ? 'pa-IN' : 'en-IN'); }
 function renderAgendaList(){
   return MEETING_AGENDA.map((item,i)=>{
     const engTopic = (item.topic||'').split(' / ')[0].trim();
@@ -8326,7 +8600,7 @@ function viewHelp(){
    API key (Settings) is for a future external AI connection only and is never required.
    Bilingual: every AI-generated sentence is built through aiT(english, hindi) and follows the
    app's existing EN/हिं toggle (DB.settings.language) — the same one used for the rest of the UI. */
-function aiT(en, hi){ return (DB.settings.language==='hi') ? hi : en; }
+function aiT(en, hi, pa){ const l=DB.settings.language; return l==='hi' ? hi : ((l==='pa' && pa) ? pa : en); }
 function aiOverdueLoanRows(asOfDate){
   asOfDate = asOfDate || todayStr();
   const rows = [];
@@ -8750,7 +9024,7 @@ function aiVoiceStart(){
   try{
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
-    rec.lang = (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN';
+    rec.lang = speechLang();
     rec.onresult = function(ev){
       const text = ev.results[0][0].transcript;
       const inp = document.getElementById('aiAskInput');
@@ -8766,7 +9040,7 @@ function aiVoiceStart(){
 }
 function aiSpeak(text){
   if(!aiSpeechSynthAvailable() || !text) return;
-  try{ const u = new SpeechSynthesisUtterance(text); u.lang = (DB.settings.language==='hi') ? 'hi-IN' : 'en-IN'; window.speechSynthesis.speak(u); }catch(e){}
+  try{ const u = new SpeechSynthesisUtterance(text); u.lang = speechLang(); window.speechSynthesis.speak(u); }catch(e){}
 }
 
 /* ---------------- AI Data Quality Auditor (narrates the existing runDataQuality() findings) ---------------- */
